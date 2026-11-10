@@ -94,6 +94,8 @@ export type {
 	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
+	ExtensionViewUI,
 	ExtensionVirtualModel,
 	ExtensionWidgetOptions,
 	FindToolCallEvent,
@@ -142,6 +144,7 @@ export type {
 	ReadToolResultEvent,
 	// Commands
 	RegisteredCommand,
+	RegisteredPage,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,

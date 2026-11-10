@@ -165,6 +165,49 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
         customInstructions?.takeIf { it.isNotBlank() }?.let { put("customInstructions", it) }
     }
 
+    // Sessions and shell (a local engine accepts these; remote control refuses them)
+
+    /**
+     * `data.cancelled` is true when an extension cancelled it. A `remote_hello` with the new session follows. [cwd]: a
+     * project from [listProjects] (the background service only; default: the open session's folder).
+     */
+    suspend fun newSession(parentSession: String? = null, cwd: String? = null) = request("new_session", timeoutMs = 60_000) {
+        parentSession?.let { put("parentSession", it) }
+        cwd?.let { put("cwd", it) }
+    }
+
+    /** The background service's projects (`host.service`): [RemoteProject.listFrom] reads the answer. */
+    suspend fun listProjects() = request("list_projects")
+
+    /** The background service's sessions in [cwd] (default: the open session's folder): [RemoteSessionInfo.listFrom]. */
+    suspend fun listSessions(cwd: String? = null) = request("list_sessions") { cwd?.let { put("cwd", it) } }
+
+    suspend fun switchSession(sessionPath: String) = request("switch_session", timeoutMs = 60_000) { put("sessionPath", sessionPath) }
+
+    /** Fork from a user message ([getForkMessages] lists them); `data.text` is that message, for the composer. */
+    suspend fun fork(entryId: String) = request("fork", timeoutMs = 60_000) { put("entryId", entryId) }
+
+    suspend fun clone() = request("clone", timeoutMs = 60_000)
+
+    suspend fun getForkMessages() = request("get_fork_messages")
+
+    suspend fun getSessionStats() = request("get_session_stats")
+
+    suspend fun exportHtml(outputPath: String? = null) = request("export_html", timeoutMs = 120_000) {
+        outputPath?.let { put("outputPath", it) }
+    }
+
+    /**
+     * Run a shell command in the project (output also streams as `bash_execution_update`). Waits until it finishes or the
+     * engine stops; [abortBash] cancels it.
+     */
+    suspend fun bash(command: String, excludeFromContext: Boolean = false) = request("bash", timeoutMs = Long.MAX_VALUE) {
+        put("command", command)
+        if (excludeFromContext) put("excludeFromContext", true)
+    }
+
+    suspend fun abortBash() = request("abort_bash")
+
     // Extension UI
 
     fun respondValue(id: String, value: String): Boolean =
@@ -172,6 +215,34 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
 
     fun respondConfirm(id: String, confirmed: Boolean): Boolean =
         backend.send(buildJsonObject { put("type", "extension_ui_response"); put("id", id); put("confirmed", confirmed) })
+
+    /** Optional protocol parts this app implements (`set_client_features`): the mobile UI kit's "views". */
+    suspend fun setClientFeatures(features: List<String>) = request("set_client_features") {
+        put("features", JsonArray(features.map(::JsonPrimitive)))
+    }
+
+    /** The pages and Home tiles packages registered (docs/mobile-ui.md#package-pages-and-home-tiles). */
+    suspend fun getPages() = request("get_pages")
+
+    /** Builds the registered page or tile [key]; its view arrives as a `setView` before the response. */
+    suspend fun openPage(key: String) = request("open_page", timeoutMs = 60_000) { put("key", key) }
+
+    suspend fun closePage(key: String) = request("close_page") { put("key", key) }
+
+    /** A view's tap, committed field value (`change`) or form submit (docs/mobile-ui.md#events). No response. */
+    fun viewEvent(viewKey: String, nodeId: String, kind: String, value: JsonPrimitive? = null, values: JsonObject? = null): Boolean =
+        backend.send(buildJsonObject {
+            put("type", "extension_ui_event")
+            put("viewKey", viewKey)
+            put("nodeId", nodeId)
+            put("kind", kind)
+            value?.let { put("value", it) }
+            values?.let { put("values", it) }
+        })
+
+    /** Closes a sheet (`showView`) with the submitted form or pressed action [nodeId] and the sheet's field [values]. */
+    fun respondView(id: String, nodeId: String, values: JsonObject): Boolean =
+        backend.send(buildJsonObject { put("type", "extension_ui_response"); put("id", id); put("nodeId", nodeId); put("values", values) })
 
     fun respondCancel(id: String): Boolean =
         backend.send(buildJsonObject { put("type", "extension_ui_response"); put("id", id); put("cancelled", true) })

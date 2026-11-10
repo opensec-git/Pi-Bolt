@@ -93,7 +93,7 @@ import {
 	type ExtensionErrorListener,
 	type ExtensionMode,
 	ExtensionRunner,
-	type ExtensionUIContext,
+	type ExtensionUIHost,
 	type InputSource,
 	type MessageEndEvent,
 	type MessageStartEvent,
@@ -117,8 +117,10 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { registerLiveSession, unregisterLiveSession } from "./live-sessions.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
+import type { ViewChannel } from "./mobile-ui/host.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
@@ -341,8 +343,10 @@ export interface AgentSessionConfig {
 }
 
 export interface ExtensionBindings {
-	uiContext?: ExtensionUIContext;
+	uiContext?: ExtensionUIHost;
 	mode?: ExtensionMode;
+	/** The clients of the mode that render views (the mobile UI kit, docs/mobile-ui.md); text only without. */
+	viewChannel?: ViewChannel;
 	commandContextActions?: ExtensionCommandContextActions;
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
@@ -525,7 +529,8 @@ export class AgentSession {
 	private _excludedTools?: (name: string) => boolean;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
-	private _extensionUIContext?: ExtensionUIContext;
+	private _extensionUIContext?: ExtensionUIHost;
+	private _extensionViewChannel?: ViewChannel;
 	private _extensionMode: ExtensionMode = "print";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
@@ -593,6 +598,7 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 		if (this._usesDefaultTools) this._restoreToolsFromTranscript(this._defaultToolModifiers);
+		registerLiveSession(this);
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -1585,6 +1591,7 @@ export class AgentSession {
 			this._cacheWarmer.cancel();
 		}
 		cleanupSessionResources(this.sessionId);
+		unregisterLiveSession(this);
 	}
 
 	// =========================================================================
@@ -1682,6 +1689,11 @@ export class AgentSession {
 
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
+	}
+
+	/** Where the tool `name` comes from: Pi's own tools have the source "builtin". */
+	getToolSourceInfo(name: string): SourceInfo | undefined {
+		return this._toolDefinitions.get(name)?.sourceInfo;
 	}
 
 	/**
@@ -2290,7 +2302,8 @@ export class AgentSession {
 		let expandedText = currentText;
 		if (expandPromptTemplates) {
 			expandedText = this._expandSkillCommand(expandedText);
-			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+			// (Only text starting with "/" can name a template: other text does not load them.)
+			if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -2413,7 +2426,7 @@ export class AgentSession {
 		if (!processedInput) return "handled";
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
 		if (behavior === "steer") {
 			await this._queueSteer(expandedText, processedInput.images);
@@ -3553,6 +3566,9 @@ export class AgentSession {
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
 		}
+		if (bindings.viewChannel !== undefined) {
+			this._extensionViewChannel = bindings.viewChannel;
+		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;
 		}
@@ -3625,7 +3641,7 @@ export class AgentSession {
 	}
 
 	private _applyExtensionBindings(runner: ExtensionRunner): void {
-		runner.setUIContext(this._extensionUIContext, this._extensionMode);
+		runner.setUIContext(this._extensionUIContext, this._extensionMode, this._extensionViewChannel);
 		runner.bindCommandContext(this._extensionCommandContextActions);
 
 		this._extensionErrorUnsubscriber?.();

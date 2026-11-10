@@ -92,6 +92,14 @@ function shouldPollGitHead(repoDir: string): boolean {
 	return isWslEnvironment() && isWindowsMountedRepoPath(repoDir);
 }
 
+export type FooterDataProviderOptions = {
+	/**
+	 * Attach the git watchers only when `startGitWatcher()` is called, not in the constructor. Attaching them (`fs.watch` on
+	 * the directory holding HEAD) is most of the constructor's cost, and the branch shown first is read from HEAD directly.
+	 */
+	deferGitWatcher?: boolean;
+};
+
 /**
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Context usage on ctx.getContextUsage(), token stats on ctx.sessionManager.getEntries(), model info on ctx.model.
@@ -116,16 +124,36 @@ export class FooterDataProvider {
 	private refreshInFlight = false;
 	private refreshPending = false;
 	private disposed = false;
+	private gitWatcherEnabled: boolean;
+	// What the branch shown was read from while the watchers were deferred (refsState()): startGitWatcher() reads the
+	// branch again only when that changed, so an unchanged reftable repository runs no git at start.
+	private refsStateAtRead: string | undefined = undefined;
 
-	constructor(cwd: string) {
+	constructor(cwd: string, options: FooterDataProviderOptions = {}) {
 		this.cwd = cwd;
 		this.gitPaths = findGitPaths(cwd);
+		this.gitWatcherEnabled = !options.deferGitWatcher;
 		this.setupGitWatcher();
+	}
+
+	/**
+	 * Attach the git watchers a `deferGitWatcher` provider has not attached yet, and read the branch again if what it was
+	 * read from changed: a branch switch made before they attached is not reported by them. Does nothing once attached or
+	 * disposed.
+	 */
+	startGitWatcher(): void {
+		if (this.disposed || this.gitWatcherEnabled) return;
+		this.gitWatcherEnabled = true;
+		this.setupGitWatcher();
+		if (this.cachedBranch !== undefined && this.refsState() !== this.refsStateAtRead)
+			void this.refreshGitBranchAsync();
+		this.refsStateAtRead = undefined;
 	}
 
 	/** Current git branch, null if not in repo, "detached" if detached HEAD */
 	getGitBranch(): string | null {
 		if (this.cachedBranch === undefined) {
+			if (!this.gitWatcherEnabled) this.refsStateAtRead = this.refsState();
 			this.cachedBranch = this.resolveGitBranchSync();
 		}
 		return this.cachedBranch;
@@ -178,6 +206,7 @@ export class FooterDataProvider {
 		}
 		this.clearGitWatchers();
 		this.cachedBranch = undefined;
+		this.refsStateAtRead = undefined;
 		this.gitPaths = findGitPaths(cwd);
 		this.setupGitWatcher();
 		this.notifyBranchChange();
@@ -233,6 +262,25 @@ export class FooterDataProvider {
 				this.refreshPending = false;
 				this.scheduleRefresh();
 			}
+		}
+	}
+
+	/**
+	 * The files the branch is read from: HEAD, and in a reftable repository (HEAD names `refs/heads/.invalid`) also the
+	 * reftable's tables.list, which a branch switch rewrites. Undefined when they cannot be read.
+	 */
+	private refsState(): string | undefined {
+		if (!this.gitPaths) return undefined;
+		try {
+			const head = readFileSync(this.gitPaths.headPath, "utf8");
+			if (head.trim() !== "ref: refs/heads/.invalid") return head;
+			try {
+				return `${head}\0${readFileSync(join(this.gitPaths.commonGitDir, "reftable", "tables.list"), "utf8")}`;
+			} catch {
+				return `${head}\0`;
+			}
+		} catch {
+			return undefined;
 		}
 	}
 
@@ -306,7 +354,7 @@ export class FooterDataProvider {
 
 	private setupGitWatcher(): void {
 		this.clearGitWatchers();
-		if (!this.gitPaths) return;
+		if (!this.gitWatcherEnabled || !this.gitPaths) return;
 
 		const pollGitHead = shouldPollGitHead(this.gitPaths.repoDir);
 

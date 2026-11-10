@@ -53,6 +53,8 @@ class SessionReducerTest {
         assertFalse(s.isRunning)
         assertEquals(4, s.items.size)
         assertEquals("list files", (s.items[0] as UserItem).text)
+        // The message's own timestamp ties the row to its turn checkpoints.
+        assertEquals(2L, (s.items[0] as UserItem).timestamp)
         assertEquals("Use ls.", (s.items[1] as ThinkingItem).text)
         assertEquals("Listing.", (s.items[2] as AssistantTextItem).text)
         val tool = s.items[3] as ToolItem
@@ -80,6 +82,7 @@ class SessionReducerTest {
         )
         assertTrue(s.isRunning)
         assertEquals("now run the tests", (s.items.last() as UserItem).text)
+        assertEquals(10L, (s.items.last() as UserItem).timestamp)
         val thinking = s.streaming.single() as ThinkingItem
         assertEquals("Run npm test.", thinking.text)
         assertTrue(thinking.streaming)
@@ -235,4 +238,81 @@ class SessionReducerTest {
         assertEquals(listOf("ok"), state.streaming.filterIsInstance<AssistantTextItem>().map { it.text })
     }
 
+
+    @Test
+    fun userShellOutputStreamsIntoTheRunningShellStep() {
+        val running = ToolItem("shell:1", "shell:1", "bash", null, status = ToolStatus.Running)
+        val start = SessionState(hello = true, items = listOf(ToolItem("tool:a", "a", "bash", null, status = ToolStatus.Running), running))
+        val state = run(
+            start,
+            """{"type":"bash_execution_update","id":"a7","delta":"line 1\n"}""",
+            """{"type":"bash_execution_update","id":"a7","delta":"line 2\n"}""",
+        )
+        assertEquals("line 1\nline 2\n", (state.items[1] as ToolItem).output)
+        // The agent's own running tool is not touched.
+        assertEquals("", (state.items[0] as ToolItem).output)
+        // Without a running shell step the update is ignored.
+        val done = SessionState(items = listOf(running.copy(status = ToolStatus.Done)))
+        assertEquals(done, run(done, """{"type":"bash_execution_update","delta":"x"}"""))
+    }
+
+    @Test
+    fun compactionKeepsItsReasonWhileItRuns() {
+        val started = run(SessionState(hello = true), """{"type":"compaction_start","reason":"threshold"}""")
+        assertTrue(started.isCompacting)
+        assertEquals("threshold", started.compactionReason)
+        val ended = run(started, """{"type":"compaction_end","reason":"threshold","result":{"summary":"s","tokensBefore":150000,"estimatedTokensAfter":30000}}""")
+        assertFalse(ended.isCompacting)
+        assertNull(ended.compactionReason)
+    }
+
+    @Test
+    fun commandsKeepAnArgumentHintWhenTheHostSendsOne() {
+        val commands = SessionReducer.commandsFrom(
+            SessionReducer.parse("""{"commands":[{"name":"review","source":"prompt","argumentHint":"<pr>"},{"name":"todo","source":"extension","argumentHint":" "}]}"""),
+        )
+        assertEquals("<pr>", commands[0].argumentHint)
+        assertNull(commands[1].argumentHint)
+    }
+
+    @Test
+    fun longSessionSaysEarlierMessagesStayOnTheComputer() {
+        // remote_hello of a long session: only the newest messages, omittedMessages counts the rest.
+        val s = run(
+            SessionState(),
+            """{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{"isStreaming":false},"messages":[{"role":"assistant","content":[{"type":"text","text":"tail"}],"stopReason":"stop"}],"dialogs":[],"commands":[],"omittedMessages":412}""",
+        )
+        val notice = s.items.first() as NoticeItem
+        assertEquals(NoticeKind.Info, notice.kind)
+        assertTrue("412 older messages" in notice.text)
+        assertEquals("tail", (s.items[1] as AssistantTextItem).text)
+        // One huge message alone over the budget: the session is not shown as empty.
+        val empty = run(SessionState(), """{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{},"messages":[],"dialogs":[],"commands":[],"omittedMessages":1}""")
+        assertTrue("1 older message is" in (empty.items.single() as NoticeItem).text)
+        // Nothing left out: no notice.
+        assertTrue(run(SessionState(), hello).items.none { it is NoticeItem })
+    }
+
+    @Test
+    fun reconnectAfterTheRunEndedReportsTheMissedSettle() {
+        val running = run(SessionState(), """{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{"isStreaming":true,"sessionId":"s1"},"messages":[],"dialogs":[],"commands":[]}""")
+        assertTrue(running.isRunning)
+        // The link dropped; the turn ended and a dialog opened before the phone came back.
+        val back = SessionReducer.parse("""{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{"isStreaming":false,"sessionId":"s1"},"messages":[],"dialogs":[{"type":"extension_ui_request","id":"d1","method":"confirm","title":"Deploy?"}],"commands":[]}""")
+        val missed = SessionReducer.missedWhileAway(running, back)
+        assertEquals(listOf("agent_settled", "extension_ui_request"), missed.map { it.type })
+        assertEquals("d1", SessionReducer.dialogFrom(missed[1])?.id)
+        // A dialog already shown before the drop is not announced again.
+        val withDialog = SessionReducer.reduce(running, back)
+        assertTrue(SessionReducer.missedWhileAway(withDialog, back).isEmpty())
+    }
+
+    @Test
+    fun firstSnapshotOrAnotherSessionMissesNothing() {
+        val back = SessionReducer.parse("""{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{"isStreaming":false,"sessionId":"s2"},"messages":[],"dialogs":[{"id":"d1","method":"confirm","title":"Deploy?"}],"commands":[]}""")
+        assertTrue(SessionReducer.missedWhileAway(SessionState(), back).isEmpty())
+        val running = run(SessionState(), """{"type":"remote_hello","protocol":1,"host":{"name":"m"},"state":{"isStreaming":true,"sessionId":"s1"},"messages":[],"dialogs":[],"commands":[]}""")
+        // The computer switched to session s2 (/resume in the terminal): no run of s1 "finished".
+        assertTrue(SessionReducer.missedWhileAway(running, back).isEmpty())
+    }
 }

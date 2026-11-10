@@ -3,12 +3,13 @@
 import { readFile } from "node:fs/promises";
 import type { Static } from "typebox";
 import type { TLocalizedValidationError } from "typebox/error";
-import { Value } from "typebox/value";
 import { stripJsonComments } from "../utils/json.ts";
 import { getFileRevision, normalizePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import { checkModelsConfig } from "./config-checks.generated.ts";
 import { modelsConfigSchema } from "./model-config-schema.generated.ts";
 import type { buildModelsConfigSchemas } from "./model-config-schema.ts";
+import { loadTypeBoxValue } from "./typebox-lazy.ts";
 
 type ModelsConfigSchemas = ReturnType<typeof buildModelsConfigSchemas>;
 
@@ -84,11 +85,11 @@ export class ModelConfig {
 			);
 		}
 
-		// (Value checks against the schema as it is: Compile() would generate a checker as source code first, on every start.)
-		const ModelsConfigSchema = modelsConfigSchema();
-		if (!Value.Check(ModelsConfigSchema, parsed)) {
+		// (TypeBox's check, generated at build time: TypeBox itself is loaded only to explain an invalid file.)
+		if (!checkModelsConfig(parsed)) {
 			const errors =
-				Value.Errors(ModelsConfigSchema, parsed)
+				loadTypeBoxValue()
+					.Value.Errors(modelsConfigSchema(), parsed)
 					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
 					.join("\n") || "Unknown schema error";
 			return ModelConfig.loaded(

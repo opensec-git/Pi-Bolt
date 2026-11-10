@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { spawn } from "child_process";
 import path from "path";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { PIBOLT } from "../../pi-bolt.ts";
 import { createInterface } from "../../utils/readline.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
@@ -10,6 +10,7 @@ import { nativeFind } from "./native-search.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { findRenderers } from "./renderers/find.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { findSchema } from "./tool-schemas.generated.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead, truncationDetails } from "./truncate.ts";
 
 /** Relativize a find result against the search root and normalize it to posix separators. */
@@ -24,14 +25,6 @@ export function relativizeFindResultPath(
 	const posixPath = relativePath.split(pathModule.sep).join("/");
 	return hadTrailingSeparator && !posixPath.endsWith("/") ? `${posixPath}/` : posixPath;
 }
-
-const findSchema = Type.Object({
-	pattern: Type.String({
-		description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
-	}),
-	path: Type.Optional(Type.String({ description: "Directory to search in (default: current directory)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
-});
 
 export const findToolSystemPromptContribution = {
 	snippet: "Find files by glob pattern (respects .gitignore)",

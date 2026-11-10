@@ -1425,6 +1425,33 @@ describe("import.meta in the copies", () => {
 		assert.equal(rewriteCopy(source, FILE), source);
 	});
 
+	it("leaves a class's private names that match the rewritten ones: #require(), #import(), #__dirname", () => {
+		const source = [
+			"class Store {",
+			"	#__dirname() { return 1; }",
+			"	#require(id) { return id; }",
+			"	#import(id) { return id; }",
+			'	get(id) { return [this.#require(id), this?.#import(id), this. #__dirname(), this.#import("@mariozechner/pi-tui")]; }',
+			"}",
+		].join("\n");
+		assert.equal(rewriteCopy(source, FILE), source);
+	});
+
+	it("still rewrites require() and __dirname in a module whose class has private fields of those names", () => {
+		const REQUIRE = 'process.getBuiltinModule("node:module").createRequire("\\u002finstalled\\u002fext\\u002fsrc\\u002findex.ts")';
+		const source = [
+			"class Store { #require = (id) => id; #__dirname = 1; m() { this.#require = null; } }",
+			"const m = require(name), d = __dirname;",
+		].join("\n");
+		assert.equal(
+			rewriteCopy(source, FILE),
+			[
+				"class Store { #require = (id) => id; #__dirname = 1; m() { this.#require = null; } }",
+				`const m = ${REQUIRE}(name), d = "/installed/ext/src";`,
+			].join("\n"),
+		);
+	});
+
 	it("replaces inside a template literal's expressions, and tells a division from a regular expression", () => {
 		assert.equal(
 			rewriteCopy("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),

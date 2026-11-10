@@ -1,20 +1,24 @@
 #!/bin/sh
 # pi-bolt launcher (npm and bun packages). The first run installs the Pi-Bolt release that matches this package's version
 # into ~/.pi-bolt/npm with the bundled installer (the same as install.sh: progress, checksum, checks). Every run then
-# replaces this script with the native executable (exec), so the launcher costs no startup time.
+# replaces this script with the native executable (exec), so the launcher costs only its shell's start.
 set -eu
 
-VERSION=1.1.1
+VERSION=1.2.0
 HOME_DIR="${PIBOLT_HOME:-$HOME/.pi-bolt}"
 
-if [ "$(uname -s)" = Darwin ]; then PLATFORM=darwin; else PLATFORM=linux; fi
+# macOS has this folder, Linux (Android too) does not: a test the shell makes itself, so no uname starts at every run.
+if [ -d /System/Library/CoreServices ]; then PLATFORM=darwin; else PLATFORM=linux; fi
 VARIANT="${PIBOLT_VARIANT:-}"
 if [ -z "$VARIANT" ]; then
 	if [ "$PLATFORM" = darwin ]; then VARIANT=arm64
 	else
 		case "$(uname -m)" in
 		aarch64 | arm64) VARIANT=arm64 ;;
-		*) if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64; else VARIANT=x64-baseline; fi ;;
+		*)
+			# "-musl" on a musl-based Linux such as Alpine (its own builds, as install.sh names them).
+			musl=""; case "$(ldd --version 2>&1 || true)" in *musl*) musl=-musl ;; esac
+			if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$musl; else VARIANT=x64$musl-baseline; fi ;;
 		esac
 	fi
 fi
@@ -29,8 +33,9 @@ if [ ! -x "$DIR/pi" ]; then
 		sh "$here/../install.sh" 1>&2
 	printf '\n' >&2
 	# The versions installed before this one are not run again, except by sessions still running: those keep their folder (on
-	# macOS a session starts its programs through pi-spawn there). Without a list of processes, nothing is removed.
-	if running=$(ps -A -ww -o args= 2>/dev/null); then
+	# macOS a session starts its programs through pi-spawn there). Without a list of processes, nothing is removed. (BusyBox's
+	# ps, as on Alpine, has neither -A nor -ww, and lists every process with their whole command line as it is.)
+	if running=$(ps -A -ww -o args= 2>/dev/null || ps -o args 2>/dev/null); then
 		for old in "$HOME_DIR"/npm/*; do
 			case "${old##*/}" in "$VERSION") continue ;; [0-9]*.[0-9]*.[0-9]*) ;; *) continue ;; esac
 			case "$running" in *"$old/"*) ;; *) rm -rf "$old" 2>/dev/null || true ;; esac

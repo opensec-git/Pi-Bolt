@@ -9,18 +9,23 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentSession } from "../core/agent-session.ts";
+import type { ViewClientEvent, ViewRequest, ViewSheetAnswer, ViewShowRequest } from "../core/mobile-ui/host.ts";
+import { VIEWS_FEATURE } from "../core/mobile-ui/types.ts";
+import { SUBAGENT_STREAM_FEATURE, SubagentStreams, type SubagentStreamsOptions } from "../core/subagent-stream.ts";
 import { toJsonEvent } from "../modes/json-event.ts";
-import type {
-	RpcCommand,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
-	RpcSessionState,
-	RpcSlashCommand,
+import {
+	type RpcCommand,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
+	type RpcSessionState,
+	type RpcSlashCommand,
+	rpcPages,
 } from "../modes/rpc/rpc-types.ts";
 import { IkResponder, type KeyPair, type TransportKeys } from "./noise.ts";
 import {
 	CloseCode,
+	ENDPOINTS_MESSAGE,
 	encodePairingUri,
 	encryptMessage,
 	MessageAssembler,
@@ -29,6 +34,7 @@ import {
 	WEBSOCKET_PATH,
 	WEBSOCKET_SUBPROTOCOL,
 } from "./protocol.ts";
+import { REVIEW_COMMANDS, runReviewCommand } from "./review.ts";
 import { type PairedDevice, type RemoteControlStore, toBase64Url } from "./store.ts";
 
 /**
@@ -75,15 +81,20 @@ const REMOTE_COMMANDS = new Set<RpcCommand["type"]>([
 	"get_commands",
 	"get_last_assistant_text",
 	"set_session_name",
+	"get_pages",
+	"open_page",
+	"close_page",
 ]);
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/** A dialog as sent to phones, without the id and type the server adds. */
-export type RemoteDialogRequest = DistributiveOmit<
-	Extract<RpcExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }>,
-	"id" | "type"
->;
+/** A dialog as sent to phones, without the id and type the server adds: a dialog method or a sheet (`showView`). */
+export type RemoteDialogRequest =
+	| DistributiveOmit<
+			Extract<RpcExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }>,
+			"id" | "type"
+	  >
+	| ViewShowRequest;
 
 export interface RemoteClientInfo {
 	id: string;
@@ -97,9 +108,30 @@ export type RemoteControlEvent =
 	| { type: "client_disconnected"; client: RemoteClientInfo }
 	| { type: "handshake_rejected"; address: string; reason: string };
 
+/** Commands only the background service runs (`list_projects`, `new_session`, ...), past the RPC commands above. */
+export interface RemoteServiceCommands {
+	readonly types: ReadonlySet<string>;
+	/** Resolves with the response's data; a throw is a failed response with its message. */
+	run(command: { type: string; [key: string]: unknown }): Promise<object>;
+}
+
 export interface RemoteControlServerOptions {
 	store: RemoteControlStore;
-	getSession: () => AgentSession;
+	/** The session phones see; undefined while the background service has none open. */
+	getSession: () => AgentSession | undefined;
+	/**
+	 * Opens a session when a phone connects and there is none (the background service). It calls [sessionChanged] once
+	 * the session is open, which sends `remote_hello`.
+	 */
+	openSession?: () => Promise<void>;
+	serviceCommands?: RemoteServiceCommands;
+	/**
+	 * `remoteControl.readSecretFiles`: `rc_read_file` and `rc_git_diff` may show files that look like secrets (review.ts).
+	 * Read on every request, so a settings change applies at once.
+	 */
+	readSecretFiles?: () => boolean;
+	/** More fields of `remote_hello.host` (the service adds `service: true`). */
+	hostInfo?: Record<string, unknown>;
 	hostName: string;
 	version: string;
 	/** 0 (default) picks a free port. */
@@ -111,6 +143,8 @@ export interface RemoteControlServerOptions {
 	helloBudgetBytes?: number;
 	/** Deadline for a client's first frame and for its `remote_ready`; default 3 s (tests shorten it). */
 	firstFrameTimeoutMs?: number;
+	/** Limits and timings of `subagent_subscribe` streams (tests shrink them). */
+	subagentStreams?: Pick<SubagentStreamsOptions, "limits" | "pollMs" | "eventBatchMs">;
 	onEvent?: (event: RemoteControlEvent) => void;
 }
 
@@ -119,7 +153,7 @@ interface OpenDialog {
 	resolve: (response: RpcExtensionUIResponse | undefined) => void;
 }
 
-interface Pairing {
+export interface Pairing {
 	secret: Buffer;
 	expiresAt: number;
 	used: boolean;
@@ -142,11 +176,18 @@ class RemoteConnection {
 	private alive = true;
 	/** Set once the client proved it holds the session keys (`remote_ready`). */
 	device: PairedDevice | undefined;
-	/** The client after handshake message 1, until it confirms. */
-	private candidate: { publicKey: Buffer; name: string; paired: boolean } | undefined;
+	/**
+	 * The client after handshake message 1, until it confirms. `pairing` is the secret it offered; it is spent only
+	 * when this client confirms.
+	 */
+	private candidate: { publicKey: Buffer; name: string; pairing: Pairing | undefined } | undefined;
 	readonly socket: WebSocket;
 	readonly address: string;
 	private readonly server: RemoteControlServer;
+	/** Subagent runs this phone follows (`subagent_subscribe`), made on the first. */
+	private subagentStreams: SubagentStreams | undefined;
+	/** Optional protocol parts this phone implements (`set_client_features`), such as "views". */
+	features: ReadonlySet<string> = new Set();
 
 	constructor(socket: WebSocket, address: string, server: RemoteControlServer) {
 		this.socket = socket;
@@ -170,7 +211,7 @@ class RemoteConnection {
 	/** Confirmed and still connected: only such connections get messages and run commands. */
 	get isOpen(): boolean {
 		return (
-			!this.revoked &&
+			!this.dropped &&
 			this.device !== undefined &&
 			this.keys !== undefined &&
 			this.socket.readyState === this.socket.OPEN
@@ -182,16 +223,17 @@ class RemoteConnection {
 		return this.device?.publicKey ?? (this.candidate ? toBase64Url(this.candidate.publicKey) : undefined);
 	}
 
-	/** Set by [revoke]: nothing more from this connection runs, even before its socket is gone. */
-	revoked = false;
+	/** Set by [drop]: nothing more from this connection runs, even before its socket is gone. */
+	dropped = false;
 
 	/**
-	 * The device was revoked: stop handling its messages now, tell it why (4403), and drop the socket after a second
-	 * if the peer does not finish the close handshake.
+	 * Stops handling its messages now, closes with `code` (4403: the device was revoked; [CloseCode.Replaced]: the same
+	 * device connected again), and drops the socket after a second if the peer does not finish the close handshake,
+	 * as a socket on a network the phone left never does.
 	 */
-	revoke(): void {
-		this.revoked = true;
-		this.close(CloseCode.NotAuthorized);
+	drop(code: number, reason?: string): void {
+		this.dropped = true;
+		this.close(code, reason);
 		setTimeout(() => this.socket.terminate(), 1_000).unref?.();
 	}
 
@@ -212,9 +254,19 @@ class RemoteConnection {
 		return true;
 	}
 
-	close(code: number): void {
+	close(code: number, reason?: string): void {
 		clearTimeout(this.handshakeTimer);
-		this.socket.close(code);
+		this.socket.close(code, reason);
+	}
+
+	streams(): SubagentStreams {
+		this.subagentStreams ??= this.server.newSubagentStreams((message) => this.send(message));
+		return this.subagentStreams;
+	}
+
+	/** Stops following subagents: the phone left, or the session it showed was replaced. */
+	stopStreams(): void {
+		this.subagentStreams?.clear();
 	}
 
 	send(message: unknown): void {
@@ -257,7 +309,7 @@ class RemoteConnection {
 	 * `remote_hello` and runs commands only after this proof.
 	 */
 	private confirm(message: unknown): void {
-		if (this.revoked) return;
+		if (this.dropped) return;
 		const candidate = this.candidate;
 		if (
 			!candidate ||
@@ -269,15 +321,22 @@ class RemoteConnection {
 			this.close(CloseCode.BadMessage);
 			return;
 		}
-		// Revoked while confirming.
-		if (!candidate.paired && !this.server.store.findDevice(candidate.publicKey)) {
+		// Spends the secret and stores the device in one step. It fails when another phone paired with the secret first
+		// or a new QR code replaced it; this same device winning on another connection still gets in, as known.
+		const paired = candidate.pairing
+			? this.server.pairDevice(candidate.pairing, candidate.publicKey, candidate.name)
+			: undefined;
+		const device = paired ?? this.server.store.findDevice(candidate.publicKey);
+		// Revoked while confirming, or the secret is gone.
+		if (!device) {
+			if (candidate.pairing) this.server.recordFailure(this.address, "pairing secret already used");
 			this.close(CloseCode.NotAuthorized);
 			return;
 		}
 		clearTimeout(this.handshakeTimer);
-		this.device = this.server.store.upsertDevice(candidate.publicKey, candidate.name);
+		this.device = paired ?? this.server.store.upsertDevice(candidate.publicKey, candidate.name);
 		this.candidate = undefined;
-		this.server.connectionOpened(this, candidate.paired);
+		void this.server.connectionOpened(this, paired !== undefined);
 	}
 
 	private handshake(frame: Buffer): void {
@@ -308,12 +367,13 @@ class RemoteConnection {
 			this.close(CloseCode.NotAuthorized);
 			return;
 		}
-		this.candidate = { publicKey: remoteStaticKey, name, paired: authorization === "paired" };
+		const pairing = authorization === "known" ? undefined : authorization;
+		this.candidate = { publicKey: remoteStaticKey, name, pairing };
 		const reply = Buffer.from(
 			JSON.stringify({
 				host: this.server.hostName,
 				version: this.server.version,
-				paired: authorization === "paired",
+				paired: pairing !== undefined,
 			}),
 			"utf8",
 		);
@@ -344,6 +404,7 @@ export class RemoteControlServer {
 	private unsubscribe: (() => void) | undefined;
 	private pingTimer: ReturnType<typeof setInterval> | undefined;
 	private boundPort = 0;
+	private endpointList: string[] = [];
 
 	constructor(options: RemoteControlServerOptions) {
 		this.options = options;
@@ -418,13 +479,17 @@ export class RemoteControlServer {
 		return this.boundPort;
 	}
 
-	async stop(): Promise<void> {
+	/** Disconnects every phone with `closeCode` (1001: remote control stops) and closes the listener. */
+	async stop(closeCode: number = CloseCode.GoingAway): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		if (this.pingTimer) clearInterval(this.pingTimer);
 		for (const dialog of this.dialogs.values()) dialog.resolve(undefined);
 		this.dialogs.clear();
-		for (const connection of this.connections) connection.close(CloseCode.GoingAway);
+		for (const connection of this.connections) {
+			connection.stopStreams();
+			connection.close(closeCode);
+		}
 		this.connections.clear();
 		this.wss?.close();
 		const httpServer = this.httpServer;
@@ -458,24 +523,48 @@ export class RemoteControlServer {
 		});
 	}
 
-	/** "known" for a paired device, "paired" when the secret pairs it now, undefined to refuse. */
-	authorize(publicKey: Buffer, secret: string | undefined): "known" | "paired" | undefined {
+	/**
+	 * At handshake message 1: "known" for a paired device, the pairing whose secret it offered, undefined to refuse.
+	 * Checking the secret does not spend it: a client that times out before `remote_ready` (a slow network, a permission
+	 * prompt) can retry with the same QR code. [pairDevice] spends it.
+	 */
+	authorize(publicKey: Buffer, secret: string | undefined): "known" | Pairing | undefined {
 		if (this.store.findDevice(publicKey)) return "known";
 		const pairing = this.pairing;
 		if (!secret || !pairing || pairing.used || pairing.expiresAt <= Date.now()) return undefined;
 		const offered = Buffer.from(secret, "base64url");
 		if (offered.length !== pairing.secret.length || !timingSafeEqual(offered, pairing.secret)) return undefined;
+		return pairing;
+	}
+
+	/**
+	 * At `remote_ready`: stores the device and spends `pairing`, unless another client spent it first, a new QR code
+	 * replaced it, or it expired. Synchronous, so two clients confirming with one secret cannot both pair.
+	 */
+	pairDevice(pairing: Pairing, publicKey: Buffer, name: string): PairedDevice | undefined {
+		if (pairing !== this.pairing || pairing.used || pairing.expiresAt <= Date.now()) return undefined;
+		const device = this.store.upsertDevice(publicKey, name);
 		pairing.used = true;
-		return "paired";
+		return device;
 	}
 
 	/** Disconnects and forgets a device. */
 	revoke(publicKey: string): boolean {
 		const removed = this.store.removeDevice(publicKey);
 		for (const connection of this.connections) {
-			if (connection.publicKey === publicKey) connection.revoke();
+			if (connection.publicKey === publicKey) connection.drop(CloseCode.NotAuthorized);
 		}
 		return removed;
+	}
+
+	/** Disconnects phones no longer in the pairing store (revoked by another process, such as a terminal's Pi). */
+	dropRevoked(): void {
+		for (const connection of this.connections) {
+			const key = connection.device?.publicKey;
+			if (key && !connection.dropped && !this.store.findDevice(Buffer.from(key, "base64url"))) {
+				connection.drop(CloseCode.NotAuthorized);
+			}
+		}
 	}
 
 	recordFailure(address: string, reason: string): void {
@@ -503,13 +592,53 @@ export class RemoteControlServer {
 		return address;
 	}
 
-	connectionOpened(connection: RemoteConnection, paired: boolean): void {
-		connection.send(this.hello());
+	async connectionOpened(connection: RemoteConnection, paired: boolean): Promise<void> {
+		// A phone that changed networks (Wi-Fi off, now through the tunnel) left its old socket behind: nothing closed it,
+		// so it would stay listed and get every event until the keepalive noticed. The phone only uses its newest
+		// connection, and this one proved the device's key.
+		const key = connection.device?.publicKey;
+		for (const other of this.connections) {
+			if (other !== connection && !other.dropped && other.device?.publicKey === key) {
+				other.drop(CloseCode.Replaced, "Replaced by a newer connection from this device");
+			}
+		}
+		const session = this.options.getSession();
+		if (session) connection.send(this.hello(session));
 		const client = connection.info();
 		if (client) this.options.onEvent?.({ type: "client_connected", client, paired });
+		if (!session && this.options.openSession) {
+			try {
+				await this.options.openSession();
+			} catch (error) {
+				connection.send({
+					type: "extension_ui_request",
+					id: randomUUID(),
+					method: "notify",
+					message: `No session could be opened: ${asError(error)}`,
+					notifyType: "error",
+				});
+			}
+		}
+		if (this.endpointList.length > 0) connection.send(this.endpointsMessage());
+	}
+
+	/**
+	 * The addresses phones should use from now on, in preference order. Connected phones get them now when they changed,
+	 * and every phone gets them when it connects (`remote_endpoints`).
+	 */
+	setEndpoints(endpoints: string[]): void {
+		if (endpoints.length === this.endpointList.length && endpoints.every((e, i) => e === this.endpointList[i]))
+			return;
+		this.endpointList = [...endpoints];
+		if (endpoints.length > 0) this.broadcast(this.endpointsMessage());
+	}
+
+	private endpointsMessage(): object {
+		return { type: ENDPOINTS_MESSAGE, endpoints: this.endpointList };
 	}
 
 	connectionClosed(connection: RemoteConnection): void {
+		connection.stopStreams();
 		const wasOpen = this.connections.delete(connection) && connection.device !== undefined;
 		const client = connection.info();
 		if (wasOpen && client) this.options.onEvent?.({ type: "client_disconnected", client });
@@ -521,14 +650,18 @@ export class RemoteControlServer {
 
 	private subscribe(): void {
 		this.unsubscribe?.();
-		this.unsubscribe = this.options.getSession().subscribe((event) => this.broadcast(toJsonEvent(event)));
+		this.unsubscribe = this.options.getSession()?.subscribe((event) => this.broadcast(toJsonEvent(event)));
 	}
 
 	/** Call after the terminal switched to another session: phones get the new session's snapshot. */
 	sessionChanged(): void {
 		if (!this.running) return;
+		// The phones get the new session and subscribe again to what they show of it.
+		for (const connection of this.connections) connection.stopStreams();
 		this.subscribe();
-		for (const connection of this.connections) if (connection.isOpen) connection.send(this.hello());
+		const session = this.options.getSession();
+		if (!session) return;
+		for (const connection of this.connections) if (connection.isOpen) connection.send(this.hello(session));
 	}
 
 	private sessionState(session: AgentSession): RpcSessionState {
@@ -577,19 +710,28 @@ export class RemoteControlServer {
 		];
 	}
 
-	private hello(): object {
-		const session = this.options.getSession();
+	private hello(session: AgentSession): object {
 		const streamingMessage = session.isStreaming ? session.agent.state.streamingMessage : undefined;
 		const hello = {
 			type: "remote_hello",
 			protocol: PROTOCOL_VERSION,
-			host: { name: this.hostName, version: this.version, cwd: session.sessionManager.getCwd() },
+			host: {
+				name: this.hostName,
+				version: this.version,
+				cwd: session.sessionManager.getCwd(),
+				// The read-only review commands (`rc_git_*`, `rc_list_dir`, `rc_read_file`): older hosts send no `review`.
+				review: true,
+				...this.options.hostInfo,
+			},
 			state: this.sessionState(session),
 			messages: [] as unknown[],
 			...(streamingMessage ? { streamingMessage } : {}),
 			dialogs: [...this.dialogs.values()].map((dialog) => dialog.request),
 			commands: this.commands(session),
 			omittedMessages: 0,
+			features: [SUBAGENT_STREAM_FEATURE, VIEWS_FEATURE],
+			// The mobile UI kit's views of the session now (docs/mobile-ui.md); clients without it ignore them.
+			views: session.extensionRunner.viewSnapshot(),
 		};
 		// Newest messages first, while they fit; a client would refuse the whole snapshot otherwise.
 		let budget = (this.options.helloBudgetBytes ?? HELLO_BUDGET_BYTES) - Buffer.byteLength(JSON.stringify(hello));
@@ -629,15 +771,54 @@ export class RemoteControlServer {
 		});
 	}
 
+	/** Streams of one phone's subagent views, reading the session phones see now. */
+	newSubagentStreams(send: (message: object) => void): SubagentStreams {
+		return new SubagentStreams({
+			getSession: () => this.options.getSession(),
+			send,
+			...this.options.subagentStreams,
+		});
+	}
+
 	notify(message: string, notifyType?: "info" | "warning" | "error"): void {
 		this.broadcast({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType });
+	}
+
+	/** A sheet (`showView`) on the phones, as a dialog: the first phone's answer, or undefined once `signal` aborts. */
+	async requestViewSheet(request: ViewShowRequest, signal?: AbortSignal): Promise<ViewSheetAnswer | undefined> {
+		const response = await this.requestDialog(request, signal);
+		return response && ("nodeId" in response || "cancelled" in response) ? response : undefined;
+	}
+
+	/** An open sheet changed: phones that connect from now on get it as it is now, in `remote_hello.dialogs`. */
+	updateViewSheet(viewKey: string, view: unknown, rev: number): void {
+		for (const dialog of this.dialogs.values()) {
+			const request = dialog.request as { method?: string; viewKey?: string; view?: unknown; rev?: number };
+			if (request.method === "showView" && request.viewKey === viewKey) {
+				request.view = view;
+				request.rev = rev;
+			}
+		}
+	}
+
+	/** A connected phone renders views (it declared "views"). */
+	hasViewClients(): boolean {
+		return [...this.connections].some((connection) => connection.isOpen && connection.features.has(VIEWS_FEATURE));
+	}
+
+	/** A view change, to the phones that render views. */
+	sendView(request: ViewRequest): void {
+		const message = { type: "extension_ui_request", id: randomUUID(), ...request };
+		for (const connection of this.connections) {
+			if (connection.isOpen && connection.features.has(VIEWS_FEATURE)) connection.send(message);
+		}
 	}
 
 	async handleClientMessage(connection: RemoteConnection, message: unknown): Promise<void> {
 		// A revoked device (here, or by another Pi on this machine editing devices.json) runs nothing more.
 		const device = connection.device;
 		if (!connection.isOpen || !device || !this.store.findDevice(Buffer.from(device.publicKey, "base64url"))) {
-			if (connection.device && !connection.revoked) connection.revoke();
+			if (connection.device && !connection.dropped) connection.drop(CloseCode.NotAuthorized);
 			return;
 		}
 		if (typeof message !== "object" || message === null || typeof (message as { type?: unknown }).type !== "string") {
@@ -655,7 +836,59 @@ export class RemoteControlServer {
 			}
 			return;
 		}
+		if (typed.type === "extension_ui_event") {
+			this.options.getSession()?.extensionRunner.handleViewEvent(message as ViewClientEvent);
+			return;
+		}
 		const id = typeof typed.id === "string" ? typed.id : undefined;
+		if (typed.type === "set_client_features") {
+			const requested = (message as { features?: unknown }).features;
+			const accepted = Array.isArray(requested) && requested.includes(VIEWS_FEATURE) ? [VIEWS_FEATURE] : [];
+			const enabled = accepted.length > 0 && !connection.features.has(VIEWS_FEATURE);
+			connection.features = new Set(accepted);
+			connection.send({ id, type: "response", command: typed.type, success: true, data: { features: accepted } });
+			// Changes since its remote_hello skipped this phone: it gets every view as it is now.
+			if (enabled) {
+				for (const view of this.options.getSession()?.extensionRunner.viewSnapshot() ?? []) {
+					connection.send({ type: "extension_ui_request", id: randomUUID(), ...view, method: "setView" });
+				}
+			}
+			return;
+		}
+		if (typed.type === "subagent_subscribe" || typed.type === "subagent_unsubscribe") {
+			const runId = (message as { runId?: unknown }).runId;
+			try {
+				if (typed.type === "subagent_subscribe") connection.streams().subscribe(runId);
+				else connection.streams().unsubscribe(runId);
+				connection.send({ id, type: "response", command: typed.type, success: true });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
+		const service = this.options.serviceCommands;
+		if (service?.types.has(typed.type)) {
+			try {
+				const data = await service.run(message as { type: string });
+				connection.send({ id, type: "response", command: typed.type, success: true, data });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
+		if (REVIEW_COMMANDS.has(typed.type)) {
+			const session = this.options.getSession();
+			try {
+				if (!session) throw new Error("No session is open yet");
+				const data = await runReviewCommand(session.sessionManager.getCwd(), message as { type: string }, {
+					readSecretFiles: this.options.readSecretFiles?.() === true,
+				});
+				connection.send({ id, type: "response", command: typed.type, success: true, data });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
 		if (!REMOTE_COMMANDS.has(typed.type as RpcCommand["type"])) {
 			connection.send({
 				id,
@@ -663,6 +896,16 @@ export class RemoteControlServer {
 				command: typed.type,
 				success: false,
 				error: "Not available over remote control",
+			});
+			return;
+		}
+		if (typed.type === "open_page" && !connection.features.has(VIEWS_FEATURE)) {
+			connection.send({
+				id,
+				type: "response",
+				command: typed.type,
+				success: false,
+				error: 'Send set_client_features with "views" first',
 			});
 			return;
 		}
@@ -680,6 +923,9 @@ export class RemoteControlServer {
 	): Promise<RpcResponse | undefined> {
 		const session = this.options.getSession();
 		const id = command.id;
+		if (!session) {
+			return { id, type: "response", command: command.type, success: false, error: "No session is open yet" };
+		}
 		const ok = (data?: object | null): RpcResponse =>
 			(data === undefined
 				? { id, type: "response", command: command.type, success: true }
@@ -761,6 +1007,14 @@ export class RemoteControlServer {
 				session.setSessionName(name);
 				return ok();
 			}
+			case "get_pages":
+				return ok({ pages: rpcPages(session.extensionRunner.getRegisteredPages()) });
+			case "open_page":
+				await session.extensionRunner.openPage(command.key);
+				return ok({ viewKey: command.key });
+			case "close_page":
+				await session.extensionRunner.closePage(command.key);
+				return ok();
 			default:
 				return fail("Not available over remote control");
 		}

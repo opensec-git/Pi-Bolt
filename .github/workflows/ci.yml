@@ -26,6 +26,11 @@ on:
   pull_request:
     branches: [pi-bolt]
   workflow_dispatch:
+    inputs:
+      musl_runtime_run:
+        description: "A runtime workflow run whose linux-x64-musl runtime the musl job uses (default: the latest release's)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -374,6 +379,101 @@ jobs:
         run: |
           & tests\runtime\run.ps1
           exit $LASTEXITCODE
+
+  # Linux x86-64 with musl (Alpine 3.23), in a container on the Ubuntu runner (GitHub's actions need glibc: they run outside it):
+  # the release's three musl builds made and packaged as the release workflow does, each tested as unpacked from its archive,
+  # pi-bolt compile with their kit, the engine and runtime tests, and install.sh on a bare Alpine (BusyBox, no coreutils) from
+  # those archives. With the latest release's musl runtime (none before the first release with one: then it is skipped), or a
+  # runtime workflow run's (musl_runtime_run). Based on the patch set by @nthrow in #280.
+  pi-bolt-musl:
+    name: Pi-Bolt on Linux x86-64 (musl)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read # (To download a runtime workflow run's artifact.)
+    env:
+      ALPINE: alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.musl_runtime_run != ''
+        with:
+          name: runtime-linux-x64-musl
+          path: .work/rt
+          run-id: ${{ inputs.musl_runtime_run }}
+          github-token: ${{ github.token }}
+      - name: Runtime
+        id: runtime
+        run: |
+          name=pi-bolt-runtime-linux-x64-musl.tar.gz
+          if [ ! -f ".work/rt/$name" ]; then
+            if ! curl -fsIL -o /dev/null "https://github.com/opensec-git/Pi-Bolt/releases/latest/download/$name"; then
+              echo "::notice title=No runtime::The latest release has no musl runtime: Pi-Bolt's musl checks are skipped."
+              echo "available=false" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # (Checked against the release's signed checksums, as scripts/fetch-runtime.sh does.)
+            mkdir -p .work/rt && for file in "$name" SHA256SUMS SHA256SUMS.sig; do
+              curl -fsSL --retry 3 -o ".work/rt/$file" "https://github.com/opensec-git/Pi-Bolt/releases/latest/download/$file"
+            done
+            openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in .work/rt/SHA256SUMS -sigfile .work/rt/SHA256SUMS.sig
+            (cd .work/rt && grep " $name\$" SHA256SUMS | sha256sum -c --strict -)
+          fi
+          tar -C .work/rt -xzf ".work/rt/$name"
+          mkdir -p .work/runtime
+          install -m 755 .work/rt/pi-bolt-runtime-linux-x64-musl/bun .work/runtime/bun
+          cp .work/rt/pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP .work/runtime/RUNTIME_STAMP
+          rm -rf .work/rt
+          echo "available=true" >>"$GITHUB_OUTPUT"
+      - name: Build, package and test, in Alpine
+        if: steps.runtime.outputs.available == 'true'
+        run: |
+          # (A test of what the engine in this commit does is skipped while the runtime is an older engine, as on glibc.)
+          [ "$(scripts/runtime-stamp.sh musl)" = "$(cat .work/runtime/RUNTIME_STAMP)" ] || export PIBOLT_RUNTIME_OLDER=1
+          docker run --rm -e CI -e PIBOLT_RUNTIME_OLDER -v "$PWD:$PWD" -w "$PWD" "$ALPINE" sh -ec "$(cat <<'EOF'
+          scripts/alpine-tools.sh
+          export PATH="$HOME/.bun/bin:$PATH"
+          version=$(cat VERSION)
+          scripts/prepare-pi.sh
+          scripts/package-release.sh
+          mkdir -p .work/unpacked
+          for archive in "dist/$version/pi-bolt-linux-x64-musl"*.tar.xz; do
+            tar -C .work/unpacked -xf "$archive"
+            dir=.work/unpacked/$(basename "$archive" .tar.xz)
+            "$dir/pi" --version | tee /dev/stderr | grep -q "Pi-Bolt $version"
+            tests/pi/run.sh "$PWD/$dir/pi"
+          done
+          python3 tests/pi/compile.py .work/unpacked/pi-bolt-linux-x64-musl/pi "dist/$version/pi-bolt-kit-linux-x64-musl.tar.gz" .work/runtime/bun
+          tests/aot/run.sh
+          tests/runtime/run.sh
+          chmod -R a+rX dist
+          EOF
+          )"
+      - name: install.sh on a bare Alpine
+        if: steps.runtime.outputs.available == 'true'
+        run: |
+          # The archives just made, from a mirror (PIBOLT_DOWNLOAD_BASE), unsigned: served as a release from before releases were
+          # signed (0.5.99, as tests/installer/run.sh does), which installs with PIBOLT_UNVERIFIED set to its SHA256SUMS'.
+          version=$(cat VERSION)
+          mkdir -p .work/mirror && cp "dist/$version"/pi-bolt-linux-x64-musl*.tar.* .work/mirror/
+          { echo "# pi-bolt 0.5.99"; tail -n +2 "dist/$version/SHA256SUMS"; } >.work/mirror/SHA256SUMS
+          sums=$(sha256sum .work/mirror/SHA256SUMS | cut -c1-64)
+          (cd .work/mirror && exec python3 -m http.server 8765 >/dev/null 2>&1) &
+          docker run --rm --network host -v "$PWD/install.sh:/install.sh:ro" -e "SUMS=$sums" -e "VERSION=$version" "$ALPINE" sh -ec '
+            apk add --no-cache --no-progress curl libstdc++ >/dev/null
+            for variant in "" x64-musl-baseline x64-musl-jit; do
+              env HOME=/root/t PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 PIBOLT_YES=1 PIBOLT_VERSION=bolt-v0.5.99 \
+                PIBOLT_DOWNLOAD_BASE=http://127.0.0.1:8765 PIBOLT_UNVERIFIED="$SUMS" PIBOLT_VARIANT="$variant" sh /install.sh </dev/null
+              /root/t/.local/bin/pi-bolt --version | tee /dev/stderr | grep -q "Pi-Bolt $VERSION"
+              # (Intl with ICU in the executable: no ICU package is installed here.)
+              BUN_BE_BUN=1 /root/t/.local/bin/pi-bolt -e "console.log(new Intl.DateTimeFormat(\"de-DE\", { month: \"long\" }).format(new Date(2026, 2, 1)))" | grep -qx "März"
+              rm -rf /root/t
+            done'
 
   installer:
     name: Installer on ${{ matrix.name }}

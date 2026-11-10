@@ -1,6 +1,9 @@
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
+import { stream as streamAzure } from "../src/api/azure-openai-responses.ts";
 import { stream as streamGoogle } from "../src/api/google-generative-ai.ts";
+import { stream as streamCodex } from "../src/api/openai-codex-responses.ts";
 import { stream as streamCompletions } from "../src/api/openai-completions.ts";
 import { stream as streamResponses } from "../src/api/openai-responses.ts";
 import type {
@@ -211,6 +214,58 @@ const ADAPTERS: Adapter[] = [
 	},
 ];
 
+/** A ChatGPT token Codex accepts: its account id is read from the payload. */
+const CODEX_TOKEN = `aaa.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "acc" } })).toString("base64")}.bbb`;
+
+/** Codex over SSE (a zstd-compressed body). Not a sender in the other adapters' conversations, which stay as they were. */
+const CODEX_ADAPTER: Adapter = {
+	name: "openai-codex-responses",
+	models: [
+		model("openai-codex-responses", "gpt-c", "openai-codex", { reasoning: true }),
+		model("openai-codex-responses", "gpt-c", "openai-codex", { reasoning: true, input: ["text"] }),
+		model("openai-codex-responses", "gpt-d", "openai-codex", {
+			reasoning: true,
+			compat: { supportsMidConvoSystemMessages: true, supportsAdditionalTools: true },
+		}),
+		model("openai-codex-responses", "gpt-c", "openai-codex", { compat: { supportsToolSearch: true } }),
+		model("openai-codex-responses", "gpt-c", "opencode", { compat: { supportsStrictMode: false } }),
+	] as Model<Api>[],
+	send: (m, context, o) =>
+		streamCodex(m as Model<"openai-codex-responses">, context, {
+			...common(o),
+			apiKey: CODEX_TOKEN,
+			transport: "sse",
+			reasoningEffort: o.reasoning,
+		}).result(),
+	signature: (rng, sender) =>
+		sender.api === "openai-codex-responses" || sender.api === "openai-responses"
+			? pick(rng, ['{"type":"reasoning","id":"rs_1","summary":[]}', undefined])
+			: pick(rng, ["sig", undefined]),
+};
+
+/** Azure OpenAI Responses. Not a sender in the other adapters' conversations either. */
+const AZURE_ADAPTER: Adapter = {
+	name: "azure-openai-responses",
+	models: [
+		model("azure-openai-responses", "gpt-a", "azure"),
+		model("azure-openai-responses", "gpt-a", "azure", { input: ["text"] }),
+		model("azure-openai-responses", "gpt-b", "azure", {
+			reasoning: true,
+			compat: { supportsMidConvoSystemMessages: true, supportsAdditionalTools: true },
+		}),
+		model("azure-openai-responses", "gpt-a", "openai", { compat: { supportsToolSearch: true } }),
+	] as Model<Api>[],
+	send: (m, context, o) =>
+		streamAzure(m as Model<"azure-openai-responses">, context, {
+			...common(o),
+			reasoningEffort: o.reasoning,
+		}).result(),
+	signature: (rng, sender) =>
+		sender.api === "azure-openai-responses" || sender.api === "openai-responses"
+			? pick(rng, ['{"type":"reasoning","id":"rs_1","summary":[]}', undefined])
+			: pick(rng, ["sig", undefined]),
+};
+
 const ERROR_RESPONSE = () =>
 	new Response(JSON.stringify({ error: { message: "rejected", type: "invalid_request_error" } }), {
 		status: 400,
@@ -223,6 +278,12 @@ function recordingFetch(bodies: string[]): FetchFunction {
 		const body = init?.body;
 		// Yield first, so that overlapping requests interleave.
 		await Promise.resolve();
+		if (body instanceof Uint8Array) {
+			// Codex: the bytes sent, and the JSON they compress.
+			const json = Buffer.from(zstdDecompressSync(body)).toString("utf8");
+			bodies.push(`${Buffer.from(body).toString("base64")}\n${json}`);
+			return ERROR_RESPONSE();
+		}
 		bodies.push(body instanceof Blob ? await body.text() : String(body));
 		return ERROR_RESPONSE();
 	};
@@ -528,10 +589,11 @@ afterEach(() => {
 });
 
 describe("request cache: cached and uncached request bodies are byte-identical", () => {
-	for (const adapter of ADAPTERS) {
+	for (const adapter of [...ADAPTERS, CODEX_ADAPTER, AZURE_ADAPTER]) {
 		it(`random conversations (${adapter.name})`, async () => {
 			const before = requestCacheStats();
 			let requests = 0;
+			let bodies = 0;
 			for (let seed = 1; seed <= SEEDS; seed++) {
 				const rng = mulberry32(seed * 7919 + ADAPTERS.indexOf(adapter) * 104729);
 				const conversations = [new Conversation(rng, adapter), new Conversation(rng, adapter)];
@@ -563,6 +625,7 @@ describe("request cache: cached and uncached request bodies are byte-identical",
 						: undefined;
 					const { expected, actual } = await sendBoth(adapter, m, context, options, overlapping);
 					requests++;
+					bodies += expected.length;
 					if (process.env.W3_DEBUG && request % 15 === 0)
 						console.log(
 							adapter.name,
@@ -587,6 +650,8 @@ describe("request cache: cached and uncached request bodies are byte-identical",
 			if (process.env.W3_DEBUG)
 				console.log(adapter.name, requests, after.units - before.units, after.derived - before.derived);
 			expect(requests).toBe(SEEDS * REQUESTS);
+			// Most requests reached the fake upstream (some conversations are rejected before a request is built).
+			expect(bodies).toBeGreaterThan(requests * 0.75);
 			expect(after.units - before.units).toBeGreaterThan(requests * 3);
 		}, 120_000);
 	}
@@ -599,7 +664,7 @@ function firstDifference(expected: string, actual: string): string {
 }
 
 describe("request cache: what a reused unit depends on besides its messages", () => {
-	for (const adapter of ADAPTERS) {
+	for (const adapter of [...ADAPTERS, CODEX_ADAPTER, AZURE_ADAPTER]) {
 		it(`a tool result converts again when the call it answers is renamed or removed (${adapter.name})`, async () => {
 			// Every model of the adapter that sends tool call ids, against a call from another API whose id it renames.
 			for (const m of adapter.models) {

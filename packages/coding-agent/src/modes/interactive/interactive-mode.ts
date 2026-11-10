@@ -52,7 +52,6 @@ import {
 	ttiTrace,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { spawn } from "child_process";
 import {
 	APP_NAME,
@@ -89,6 +88,7 @@ import type {
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	ExtensionWidgetOptions,
 	MarkdownTransformer,
 	ProjectTrustContext,
@@ -97,10 +97,11 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
+import { IDLE_GC_DELAY_MS, IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
+import type { ViewChannel } from "../../core/mobile-ui/host.ts";
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
@@ -108,6 +109,7 @@ import {
 } from "../../core/model-resolver.ts";
 import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
+import type { PromptTemplateFile } from "../../core/prompt-templates.ts";
 import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
@@ -118,7 +120,12 @@ import {
 	type UsageEntry,
 } from "../../core/session-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
-import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
+import {
+	BUILTIN_SLASH_COMMANDS,
+	listedBuiltinSlashCommands,
+	REMOTE_CONTROL_OFF_MESSAGE,
+	REMOTE_CONTROL_STOPPED_MESSAGE,
+} from "../../core/slash-commands.ts";
 import { getSourcePackageKey, type SourceInfo } from "../../core/source-info.ts";
 import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
@@ -140,6 +147,7 @@ import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../.
 import { readClipboardImage, writePastedImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoderOnFirstUse } from "../../utils/image-convert.ts";
+import { chalk } from "../../utils/lazy-packages.ts";
 import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
 import { getPiUserAgent } from "../../utils/pi-user-agent.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -244,6 +252,15 @@ function isEmbeddedStatus(editor: EditorComponent): editor is WorkingStatusEdito
 		"setWorkingStatusIndicator" in editor &&
 		typeof editor.setWorkingStatusIndicator === "function"
 	);
+}
+
+/**
+ * A frame for the end of a model's turn: drawn on the next tick (TUI.requestImmediateRender()), not held by the frame cap,
+ * as the user waits to see it. Renderers without that path get a plain request.
+ */
+function requestTurnEndRender(ui: TUI): void {
+	if (ui.requestImmediateRender) ui.requestImmediateRender();
+	else ui.requestRender();
 }
 
 function isExpandable(obj: unknown): obj is Expandable {
@@ -474,6 +491,9 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+/** How many transcript entries compacting at once makes a full collection before their copies are made worth it. */
+const COMPACTED_COLLECT_FIRST = 256;
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -502,11 +522,21 @@ export class InteractiveMode {
 	private keybindings: KeybindingsManager;
 	private version: string;
 	private isInitialized = false;
+	// Until startup is done, prompt templates the resource loader has not read stay unread: autocomplete leaves them out
+	// and the startup listing shows their files (loadDeferredPromptTemplates reads them after the first frame).
+	private deferPromptTemplates = true;
+	// What was built while the templates were unread: the autocomplete provider without them, and the startup listing
+	// from their files. loadDeferredPromptTemplates builds both again, also when something else read the templates first
+	// (a `/x` submitted before startup.done, an extension's pi.getCommands(), a remote-control command list).
+	private autocompleteOmitsTemplates = false;
+	private promptListingFromFiles: { prompts: PromptTemplateFile[]; diagnostics: ResourceDiagnostic[] } | undefined;
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	/** Set by the first /remote-control. */
 	private remoteControl: RemoteControlController | undefined = undefined;
+	/** Inline views of the mobile UI kit in the chat, by view key. */
+	private readonly inlineViews = new Map<string, Text>();
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -556,6 +586,8 @@ export class InteractiveMode {
 	private unsubscribeCapabilityChanges?: () => void;
 	/** Bun only: a full collection when idle after a run (see idle-gc.ts). */
 	private idleCollector: IdleCollector | undefined;
+	/** scheduleTranscriptCompaction()'s timer. */
+	private transcriptCompactionTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Bun only: opens the model connection while the user types after an idle period (see connection-warmer.ts). */
 	private connectionWarmer: ConnectionWarmer | undefined;
 	private signalCleanupHandlers: Array<() => void> = [];
@@ -688,7 +720,8 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
+		// The git watchers attach after startup (init()): the footer's first frames read the branch from HEAD.
+		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd(), { deferGitWatcher: true });
 		const collect = runtimeFullCollection();
 		this.idleCollector = collect
 			? new IdleCollector({
@@ -774,7 +807,9 @@ export class InteractiveMode {
 
 	private createBaseAutocompleteProvider(): AutocompleteProvider {
 		// Define commands for autocomplete
-		const slashCommands: SlashCommand[] = BUILTIN_SLASH_COMMANDS.map((command) => ({
+		const slashCommands: SlashCommand[] = listedBuiltinSlashCommands(
+			this.settingsManager.getRemoteControlEnabled(),
+		).map((command) => ({
 			name: command.name,
 			description: command.description,
 			...(command.argumentHint && { argumentHint: command.argumentHint }),
@@ -834,14 +869,17 @@ export class InteractiveMode {
 		}
 
 		// Convert prompt templates to SlashCommand format for autocomplete
-		const templateCommands: SlashCommand[] = this.session.promptTemplates.map((cmd) => ({
+		const templatesUnread =
+			this.deferPromptTemplates && this.session.resourceLoader.getPromptFiles?.().loaded === false;
+		this.autocompleteOmitsTemplates = templatesUnread;
+		const templateCommands: SlashCommand[] = (templatesUnread ? [] : this.session.promptTemplates).map((cmd) => ({
 			name: cmd.name,
 			description: this.prefixAutocompleteDescription(cmd.description, cmd.sourceInfo),
 			...(cmd.argumentHint && { argumentHint: cmd.argumentHint }),
 		}));
 
 		// Convert extension commands to SlashCommand format
-		const builtinCommandNames = new Set(slashCommands.map((c) => c.name));
+		const builtinCommandNames = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.name));
 		const extensionCommands: SlashCommand[] = this.session.extensionRunner
 			.getRegisteredCommands()
 			.filter((cmd) => !builtinCommandNames.has(cmd.name))
@@ -950,6 +988,8 @@ export class InteractiveMode {
 			if (!this.fullscreenLayoutRoot) throw new Error("Fullscreen layout is not initialized");
 			tui.setLayoutRoot(this.fullscreenLayoutRoot);
 		}
+		// (Scrolling, search, selection and anything else that reads the transcript in whole find all of it.)
+		if (tui instanceof TuiAltScreen) tui.beforeDocumentRead = () => this.chatContainer.completeNow();
 	}
 
 	private stopInteractiveTui(fullscreenExitOutput: FullscreenExitOutput): void {
@@ -958,6 +998,7 @@ export class InteractiveMode {
 			this.switchTuiMode("regular", false, false);
 			this.renderer.renderNow();
 		}
+		this.chatContainer.stopBackfill();
 		this.ui.stop({ preserveScreen: this.renderer.mode === "fullscreen" });
 	}
 
@@ -965,6 +1006,8 @@ export class InteractiveMode {
 		const previousUi = this.renderer;
 		if (mode === previousUi.mode) return true;
 		if (previousUi.hasOverlayEntries) return false;
+		// Regular mode writes the whole transcript.
+		this.chatContainer.completeNow();
 
 		const components = [...previousUi.children];
 		const focus = previousUi.getFocusedComponent();
@@ -1095,6 +1138,8 @@ export class InteractiveMode {
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
+		// The first frame renders only the end of a resumed transcript, the part it shows; the rest renders after it.
+		if (this.renderer.mode === "fullscreen") this.chatContainer.renderEndFirst(() => this.transcriptLinesShown());
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1114,6 +1159,34 @@ export class InteractiveMode {
 		// Flush the completed startup state before loading the remaining syntax grammars.
 		this.ui.renderNow();
 		ttiTrace("startup.done");
+		this.footerDataProvider.startGitWatcher();
+		this.loadDeferredPromptTemplates();
+		const backfilling = this.chatContainer.backfill(() => {
+			ttiTrace("transcript.backfilled");
+			this.ui.requestRender();
+			this.afterTranscriptRendered();
+		});
+		if (!backfilling) this.afterTranscriptRendered();
+	}
+
+	/**
+	 * The terminal rows a fullscreen frame that follows the transcript's end shows of it, plus one; with the scrollbar always
+	 * shown, at least enough lines that its thumb is at its smallest (2 rows), as it is for the whole transcript of a long
+	 * session (getScrollbarGeometry() in tui/src/layout.ts: round(track² / content) rows, at least 2).
+	 */
+	private transcriptLinesShown(): number {
+		const rows = this.ui.terminal.rows;
+		const scrollbarAlways = this.transcriptScrollView?.scrollbar === "always";
+		return (scrollbarAlways ? Math.max(rows, Math.floor(0.4 * rows * rows)) : rows) + 1;
+	}
+
+	/**
+	 * What follows rendering the whole transcript at start: compacting it when idle, and loading the syntax grammars that
+	 * rendering it asked for. (The grammars load only once every entry was rendered, so each is first rendered with the same
+	 * grammars as when a resumed transcript rendered whole before the first frame.)
+	 */
+	private afterTranscriptRendered(): void {
+		this.scheduleTranscriptCompaction();
 		loadAllHighlightLanguagesOnDemand((languages) => {
 			if (!this.isInitialized) return;
 			// Transcript entries that cannot show code in those languages stay as they are drawn.
@@ -1127,6 +1200,7 @@ export class InteractiveMode {
 				() => this.ui.invalidate(),
 			);
 			this.ui.requestRender();
+			this.scheduleTranscriptCompaction();
 		});
 	}
 
@@ -1966,6 +2040,7 @@ export class InteractiveMode {
 	}): void {
 		// Resource rendering is idempotent; chat clears no longer clear this separate container.
 		this.loadedResourcesContainer.clear();
+		this.promptListingFromFiles = undefined;
 
 		const showListing = options?.force || this.shouldShowStartupDetails();
 		const showDiagnostics = showListing || options?.showDiagnosticsWhenQuiet === true;
@@ -2000,7 +2075,9 @@ export class InteractiveMode {
 		};
 
 		const skillsResult = this.session.resourceLoader.getSkills();
-		const promptsResult = this.session.resourceLoader.getPrompts();
+		const promptFiles = this.deferPromptTemplates ? this.session.resourceLoader.getPromptFiles?.() : undefined;
+		this.promptListingFromFiles = promptFiles?.loaded === false ? promptFiles : undefined;
+		const promptsResult = promptFiles ?? this.session.resourceLoader.getPrompts();
 		const themesResult = this.session.resourceLoader.getThemes();
 		const extensions =
 			options?.extensions ??
@@ -2066,7 +2143,7 @@ export class InteractiveMode {
 				addLoadedSection("Skills", skillCompactList, skillList);
 			}
 
-			const templates = this.session.promptTemplates;
+			const templates = promptsResult.prompts;
 			if (templates.length > 0) {
 				const groups = this.buildScopeGroups(
 					templates.map((template) => ({ path: template.filePath, sourceInfo: template.sourceInfo })),
@@ -2155,6 +2232,24 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Reads the prompt templates startup left unread, and draws again what was drawn from their files alone. */
+	private loadDeferredPromptTemplates(): void {
+		this.deferPromptTemplates = false;
+		// (Whether or not the templates are read by now: something may have read them since these were built.)
+		const listed = this.promptListingFromFiles;
+		this.promptListingFromFiles = undefined;
+		if (!this.autocompleteOmitsTemplates && !listed) return;
+		const loaded = this.session.resourceLoader.getPrompts();
+		if (this.autocompleteOmitsTemplates) this.setupAutocompleteProvider();
+		// The listing differs only when a template file could not be read or parsed.
+		const describe = (result: { prompts: PromptTemplateFile[]; diagnostics: ResourceDiagnostic[] }) =>
+			JSON.stringify([result.prompts.map((prompt) => [prompt.name, prompt.filePath]), result.diagnostics]);
+		if (listed && describe(listed) !== describe(loaded)) {
+			this.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+			this.ui.requestRender();
+		}
+	}
+
 	/**
 	 * Initialize the extension system with TUI-based UI context.
 	 */
@@ -2163,6 +2258,7 @@ export class InteractiveMode {
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
+			viewChannel: this.viewChannel(),
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -2276,6 +2372,19 @@ export class InteractiveMode {
 			this.editor.setPaddingX?.(editorPaddingX);
 			this.editor.setAutocompleteMaxVisible?.(autocompleteMaxVisible);
 		}
+		this.stopRemoteControlWhenOff();
+	}
+
+	/**
+	 * A `/remote-control` that runs, or is still starting, stops once the session sees remote control off: at once for the
+	 * `/settings` toggle, and at `/reload` (which reads the settings again) for `pi-bolt remote-control disable` run in a
+	 * shell. A start under way then opens no listener and no tunnel (the controller checks the setting after each wait).
+	 */
+	private stopRemoteControlWhenOff(): void {
+		if (!this.remoteControl?.active || this.settingsManager.getRemoteControlEnabled()) return;
+		void this.remoteControl.stop();
+		// (A warning, not a status line: the next status, such as /reload's, would replace it.)
+		this.showWarning(REMOTE_CONTROL_STOPPED_MESSAGE);
 	}
 
 	private async rebindCurrentSession(options: { renderBeforeBind?: boolean } = {}): Promise<void> {
@@ -2413,6 +2522,63 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Whether a row of `toolName` may let go of its components once settled (ToolExecutionComponent.compact()): its renderers
+	 * are Pi's own (one of Pi's tools, or a tool that brings none; and no extension's renderer resolver gives others) and
+	 * draw a settled result from it alone (not edit and write, which keep what they drew while the call streamed in).
+	 */
+	private toolRowsCompactable(toolName: string): boolean {
+		if (toolName === "edit" || toolName === "write") return false;
+		const definition = this.session.getToolDefinition(toolName);
+		if (
+			this.session.getToolSourceInfo(toolName)?.source !== "builtin" &&
+			(definition?.renderCall !== undefined ||
+				definition?.renderResult !== undefined ||
+				definition?.renderShell !== undefined)
+		) {
+			return false;
+		}
+		const own = withBuiltInRenderers(toolName, definition);
+		return this.session.extensionRunner.resolveToolRenderers(toolName, () => own) === own;
+	}
+
+	/**
+	 * Once Pi has been idle for a moment, the settled entries of the transcript let go of the components their lines were
+	 * rendered from (AssistantMessageComponent.compact(), ToolExecutionComponent.compact()): in a long session those are
+	 * most of the memory the transcript takes. Each is then put back as a fresh copy (compactedCopy()), so that what
+	 * is left of it was not allocated among what rendering the transcript left behind. What has not been rendered since it last
+	 * changed stays as it is. Each call starts the wait again.
+	 */
+	private scheduleTranscriptCompaction(): void {
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
+		this.transcriptCompactionTimer = setTimeout(() => {
+			this.transcriptCompactionTimer = undefined;
+			// (Entries held back are not rendered yet; the end of backfill() schedules this again.)
+			if (this.session.isStreaming || this.session.isCompacting || this.chatContainer.isHoldingBack) return;
+			const pending = new Set<Component>(this.pendingTools.values());
+			const children = this.chatContainer.children;
+			const compacted: number[] = [];
+			for (let i = 0; i < children.length; i++) {
+				const child = children[i]!;
+				if (pending.has(child) || child === this.streamingComponent) continue;
+				if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+					if (child.compact()) compacted.push(i);
+				}
+			}
+			if (compacted.length === 0) return;
+			// Many at once (a resumed session): collect first, so that the copies take the room what rendering the
+			// transcript left behind gives back, instead of adding to the heap's highest point.
+			if (compacted.length >= COMPACTED_COLLECT_FIRST) runtimeFullCollection()?.();
+			// (A copy in each one's place: what is left of an entry was allocated while the transcript was rendered.)
+			for (const i of compacted) {
+				children[i] = (children[i] as AssistantMessageComponent | ToolExecutionComponent).compactedCopy();
+			}
+			// The frame after lays the copies out in place of the entries, which nothing holds then; it draws the same lines.
+			this.ui.requestRender();
+		}, IDLE_GC_DELAY_MS);
+		this.transcriptCompactionTimer.unref?.();
+	}
+
+	/**
 	 * Get a registered tool definition by name (for custom rendering).
 	 */
 	/**
@@ -2438,7 +2604,7 @@ export class InteractiveMode {
 
 		// Create a context for shortcut handlers
 		const createContext = (): ExtensionContext => ({
-			ui: this.createExtensionUIContext(),
+			ui: this.shortcutUIContext(extensionRunner),
 			mode: "tui",
 			hasUI: true,
 			cwd: this.sessionManager.getCwd(),
@@ -2822,7 +2988,58 @@ export class InteractiveMode {
 		};
 	}
 
-	private createExtensionUIContext(): ExtensionUIContext {
+	/**
+	 * Where the mobile UI kit's views go besides the terminal's text form (docs/mobile-ui.md): the phones of
+	 * `/remote-control` that render views. The terminal keeps showing the text form: panels as widgets, inline views in
+	 * the chat, sheets as dialogs that race the phones'.
+	 */
+	private viewChannel(): ViewChannel {
+		return {
+			hasNative: () => this.remoteControl?.hasViewClients() === true,
+			keepText: true,
+			send: (request) => this.remoteControl?.sendView(request),
+			sheetChanged: (viewKey, view, rev) => this.remoteControl?.updateViewSheet(viewKey, view, rev),
+			sheet: (request, signal) =>
+				this.remoteControl
+					? this.remoteControl.viewSheet(request, signal)
+					: new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+			inlineText: (key, lines) => this.setInlineViewText(key, lines),
+			textStyle: () => ({
+				title: (text) => liveTheme.bold(text),
+				muted: (text) => liveTheme.fg("muted", text),
+				success: (text) => liveTheme.fg("success", text),
+				warning: (text) => liveTheme.fg("warning", text),
+				danger: (text) => liveTheme.fg("error", text),
+				accent: (text) => liveTheme.fg("accent", text),
+			}),
+		};
+	}
+
+	/** An inline view's text in the chat, updated in place; undefined removes it. A redrawn chat drops it. */
+	private setInlineViewText(key: string, lines: string[] | undefined): void {
+		const existing = this.inlineViews.get(key);
+		if (lines === undefined) {
+			if (existing) {
+				this.chatContainer.removeChild(existing);
+				this.inlineViews.delete(key);
+			}
+		} else if (existing && this.chatContainer.children.includes(existing)) {
+			existing.setText(lines.join("\n"));
+		} else {
+			const text = new Text(lines.join("\n"), 1, 0);
+			this.inlineViews.set(key, text);
+			this.chatContainer.addChild(text);
+		}
+		this.ui.requestRender();
+	}
+
+	/** A shortcut handler's UI: the terminal's, with the session's views (the mobile UI kit) from the runner. */
+	private shortcutUIContext(extensionRunner: ExtensionRunner): ExtensionUIContext {
+		const { setView, updateView, showView, getView } = extensionRunner.getUIContext();
+		return Object.assign(this.createExtensionUIContext(), { setView, updateView, showView, getView });
+	}
+
+	private createExtensionUIContext(): ExtensionUIHost {
 		return {
 			select: (title, options, opts) =>
 				this.remoteControl
@@ -3602,16 +3819,22 @@ export class InteractiveMode {
 	}
 
 	private subscribeToAgent(): void {
-		this.unsubscribe = this.session.subscribe(async (event) => {
-			await this.handleEvent(event);
+		// The session does not wait for its listeners. An event that arrives before init() is handled once init() finished;
+		// the others are handled at once, in the order they are emitted, with no promise per event (message_update is one
+		// per streamed chunk).
+		this.unsubscribe = this.session.subscribe((event) => {
+			try {
+				if (this.isInitialized) void this.handleEvent(event);
+				else void this.init().then(() => this.handleEvent(event));
+			} catch (error) {
+				// (As from the async listener this was: a failure is an unhandled rejection, not thrown into the session.)
+				void Promise.reject(error);
+			}
 		});
 	}
 
-	private async handleEvent(event: AgentSessionEvent): Promise<void> {
-		if (!this.isInitialized) {
-			await this.init();
-		}
-
+	/** Shows a session event. Synchronous; returns a promise only for the work agent_settled waits for. */
+	private handleEvent(event: AgentSessionEvent): Promise<void> | undefined {
 		this.footer.invalidate();
 		this.programStatus.handleEvent(event);
 		if (isModelActivity(event)) this.connectionWarmer?.markActivity();
@@ -3748,6 +3971,7 @@ export class InteractiveMode {
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
 										outputPad: this.outputPad,
+										compactable: this.toolRowsCompactable(content.name),
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3807,7 +4031,12 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 					this.footer.invalidate();
 				}
-				this.ui.requestRender();
+				// An answer without tool calls ends the turn: its last text is drawn at once, not after the frame cap.
+				if (event.message.role === "assistant" && !event.message.content.some((c) => c.type === "toolCall")) {
+					requestTurnEndRender(this.ui);
+				} else {
+					this.ui.requestRender();
+				}
 				break;
 
 			case "bash_execution_update":
@@ -3827,6 +4056,7 @@ export class InteractiveMode {
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
 							outputPad: this.outputPad,
+							compactable: this.toolRowsCompactable(event.toolName),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3880,13 +4110,13 @@ export class InteractiveMode {
 				}
 				this.pendingTools.clear();
 
-				this.ui.requestRender();
+				requestTurnEndRender(this.ui);
 				this.idleCollector?.schedule();
+				this.scheduleTranscriptCompaction();
 				break;
 
 			case "agent_settled":
-				await this.checkShutdownRequested();
-				break;
+				return this.checkShutdownRequested();
 
 			case "compaction_start": {
 				if (this.settingsManager.getShowTerminalProgress()) {
@@ -4020,6 +4250,7 @@ export class InteractiveMode {
 				break;
 			}
 		}
+		return undefined;
 	}
 
 	/** Extract text content from a user message */
@@ -4235,6 +4466,16 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		// (By tool name, for this transcript: a resumed session has a row per call.)
+		const compactableRows = new Map<string, boolean>();
+		const rowsCompactable = (toolName: string) => {
+			let compactable = compactableRows.get(toolName);
+			if (compactable === undefined) {
+				compactable = this.toolRowsCompactable(toolName);
+				compactableRows.set(toolName, compactable);
+			}
+			return compactable;
+		};
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
@@ -4279,6 +4520,7 @@ export class InteractiveMode {
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
 								outputPad: this.outputPad,
+								compactable: rowsCompactable(content.name),
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -5202,6 +5444,7 @@ export class InteractiveMode {
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
+					remoteControlEnabled: this.settingsManager.getRemoteControlEnabled(),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -5326,6 +5569,11 @@ export class InteractiveMode {
 					},
 					onEnableInstallTelemetryChange: (enabled) => {
 						this.settingsManager.setEnableInstallTelemetry(enabled);
+					},
+					onRemoteControlEnabledChange: (enabled) => {
+						this.settingsManager.setRemoteControlEnabled(enabled);
+						this.stopRemoteControlWhenOff();
+						this.setupAutocompleteProvider();
 					},
 					onQuietStartupChange: (quiet) => {
 						this.settingsManager.setQuietStartup(quiet);
@@ -6941,6 +7189,12 @@ export class InteractiveMode {
 	}
 
 	private async handleRemoteControlCommand(args: string): Promise<void> {
+		if (!this.settingsManager.getRemoteControlEnabled()) {
+			// (Started while it was on: turned off elsewhere since, and read again by /reload.)
+			await this.remoteControl?.stop();
+			this.showStatus(REMOTE_CONTROL_OFF_MESSAGE);
+			return;
+		}
 		if (!this.remoteControl) {
 			const { RemoteControlController } = await loadRemoteControl();
 			this.remoteControl = new RemoteControlController({
@@ -7460,6 +7714,7 @@ export class InteractiveMode {
 		this.unsubscribeCapabilityChanges?.();
 		this.unsubscribeCapabilityChanges = undefined;
 		this.idleCollector?.dispose();
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

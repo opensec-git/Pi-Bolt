@@ -692,6 +692,93 @@ describe("Models runtime", () => {
 		expect((await store.read("dynamic"))?.models[0]?.id).toBe("generation-2");
 	});
 
+	it("hands providers the stored models as the store read them, less unknown types", async () => {
+		const stored = testModel("dynamic", "stored");
+		const unknown = { ...testModel("dynamic", "unknown"), type: "video" } as unknown as Model<Api>;
+		const store: ModelsStore = {
+			read: async () => ({ models: [stored, unknown], checkedAt: 1 }),
+			write: async () => {},
+			delete: async () => {},
+		};
+		let received: readonly unknown[] | undefined;
+		const models = createModels({ modelsStore: store });
+		models.setProvider(
+			testProvider({
+				id: "dynamic",
+				refreshModels: async (context) => {
+					received = context.stored?.models;
+				},
+			}),
+		);
+
+		expect((await models.refresh({ allowNetwork: false })).errors.size).toBe(0);
+		expect(received).toHaveLength(1);
+		expect(received?.[0]).toBe(stored);
+	});
+
+	it("neither publishes nor reports a failure from an offline refresh a later one superseded", async () => {
+		let calls = 0;
+		let state = "initial";
+		let markFirstStarted: (() => void) | undefined;
+		let finishFirst: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstBlocked = new Promise<void>((resolve) => {
+			finishFirst = resolve;
+		});
+		const models = createModels();
+		models.setProvider(
+			testProvider({
+				id: "dynamic",
+				refreshModels: async (context) => {
+					calls++;
+					const value = `refresh-${calls}`;
+					if (calls === 1) {
+						markFirstStarted?.();
+						await firstBlocked;
+					}
+					const published = await context.publish({
+						update: () => {
+							state = value;
+						},
+					});
+					if (!published) throw new Error(`${value} was superseded`);
+				},
+			}),
+		);
+
+		const first = models.refresh({ allowNetwork: false });
+		await firstStarted;
+		expect((await models.refresh({ allowNetwork: false })).errors.size).toBe(0);
+		finishFirst?.();
+
+		expect((await first).errors.size).toBe(0);
+		expect(state).toBe("refresh-2");
+	});
+
+	it("checks API-key auth with the credential it read, reading it once", async () => {
+		const base = new InMemoryCredentialStore();
+		await base.modify("stored", async () => ({ type: "api_key", key: "stored-key" }));
+		const reads: string[] = [];
+		const credentials: CredentialStore = {
+			read: (providerId, options) => {
+				reads.push(providerId);
+				return base.read(providerId, options);
+			},
+			list: (options) => base.list(options),
+			modify: (providerId, fn, options) => base.modify(providerId, fn, options),
+			delete: (providerId, options) => base.delete(providerId, options),
+		};
+		const models = createModels({ credentials });
+		models.setProvider(testProvider({ id: "stored", auth: { apiKey: envKeyAuth(undefined) } }));
+		models.setProvider(testProvider({ id: "ambient", auth: { apiKey: envKeyAuth("env-key") } }));
+
+		expect(await models.checkAuth("stored")).toEqual({ source: "stored", type: "api_key" });
+		expect(await models.checkAuth("ambient")).toEqual({ source: "env", type: "api_key" });
+		expect(reads).toEqual(["stored", "ambient"]);
+	});
+
 	it("passes caller signals to provider auth callbacks", async () => {
 		const controller = new AbortController();
 		const received: AbortSignal[] = [];

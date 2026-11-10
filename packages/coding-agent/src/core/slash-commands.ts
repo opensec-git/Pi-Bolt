@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "../config.ts";
+import { COMMAND_NAME, PRODUCT_NAME } from "../config.ts";
 import type { SourceInfo } from "./source-info.ts";
 
 export type SlashCommandSource = "extension" | "prompt" | "skill";
@@ -28,7 +28,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{
 		name: "remote-control",
 		description: "Control this session from the Pi-Bolt Android app (QR pairing)",
-		argumentHint: "[tunnel|copy|stop|devices]",
+		argumentHint: "[lan|tunnel|copy|stop|devices]",
 	},
 	{ name: "bug", description: "Report a bug to the Pi developers", argumentHint: "<description>" },
 	{ name: "copy", description: "Copy last agent message to clipboard" },
@@ -48,3 +48,16 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{ name: "reload", description: "Reload keybindings, extensions, skills, prompts, themes, and context files" },
 	{ name: "quit", description: `Quit ${PRODUCT_NAME}` },
 ];
+
+/** What `/remote-control` and the `pi-bolt service` commands that start it answer while `remoteControl.enabled` is off. */
+export const REMOTE_CONTROL_OFF_MESSAGE = `Remote control is off. Turn it on with: ${COMMAND_NAME} remote-control enable`;
+
+/** What a session prints when it stops its running `/remote-control` because remote control was turned off. */
+export const REMOTE_CONTROL_STOPPED_MESSAGE = "Remote control is off: this session stopped serving phones";
+
+/** The built-in commands to list (autocomplete): `/remote-control` only while remote control is on. */
+export function listedBuiltinSlashCommands(remoteControlEnabled: boolean): ReadonlyArray<BuiltinSlashCommand> {
+	return remoteControlEnabled
+		? BUILTIN_SLASH_COMMANDS
+		: BUILTIN_SLASH_COMMANDS.filter((command) => command.name !== "remote-control");
+}

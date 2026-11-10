@@ -31,13 +31,34 @@ import opensec.pibolt.app.ui.markdown.TableMath
 import opensec.pibolt.app.ui.markdown.inlineAnnotated
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
-import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 
 private val CELL_X = 12.dp
 private val CELL_Y = 9.dp
 private val MIN_COLUMN = 64.dp
 private val MAX_COLUMN = 240.dp
+
+/**
+ * Natural column widths of tables measured from scratch, by content and style (most recent [MAX] tables). Values are
+ * copied in and out: a composition's [WidthMemo] keeps growing its own array while its table streams.
+ */
+internal object TableWidthCache {
+    const val MAX = 48
+
+    private val map = object : LinkedHashMap<Any, IntArray>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Any, IntArray>?): Boolean = size > MAX
+    }
+
+    fun get(key: Any): IntArray? = synchronized(map) { map[key]?.copyOf() }
+
+    fun put(key: Any, widths: IntArray) {
+        synchronized(map) { map[key] = widths.copyOf() }
+    }
+
+    fun clear() {
+        synchronized(map) { map.clear() }
+    }
+}
 
 /** Natural column widths seen so far: while a table streams in, widths only grow, so columns do not jitter. */
 private class WidthMemo {
@@ -76,22 +97,35 @@ fun MdTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
     val memo = remember { WidthMemo() }
     val pad = with(density) { (CELL_X * 2).roundToPx() }
     val key = listOf(columns, header, headStyle, cellStyle, density.density, density.fontScale)
+    // A table measured from scratch before (scrolled back into view: a new composition) takes its widths from the
+    // cache instead of measuring every cell again; the result is the same, since only from-scratch widths go in.
+    var cacheKey: Any? = null
     if (memo.key != key || table.rows.size < memo.measuredRows) {
         memo.key = key
         memo.measuredRows = 0
-        memo.widths = IntArray(columns) { c -> measurer.measure(header[c], headStyle, softWrap = false, maxLines = 1).size.width + pad }
+        cacheKey = key to body
+        val known = TableWidthCache.get(cacheKey)
+        if (known != null) {
+            memo.widths = known
+            memo.measuredRows = body.size
+            cacheKey = null
+        } else {
+            // +2px: the measured width is rounded, and a cell one pixel short wraps its last letter.
+            memo.widths = IntArray(columns) { c -> measurer.measure(header[c], headStyle, softWrap = false, maxLines = 1).size.width + pad + 2 }
+        }
     }
     for (r in memo.measuredRows until body.size) {
         for (c in 0 until columns) {
-            val w = measurer.measure(body[r][c], cellStyle, softWrap = false, maxLines = 1).size.width + pad
+            val w = measurer.measure(body[r][c], cellStyle, softWrap = false, maxLines = 1).size.width + pad + 2
             if (w > memo.widths[c]) memo.widths[c] = w
         }
     }
+    if (cacheKey != null) TableWidthCache.put(cacheKey, memo.widths)
     // The last row may still be streaming: measure it again next time.
     memo.measuredRows = (body.size - 1).coerceAtLeast(0)
     val natural = memo.widths
 
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(RadiusMedia)
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val available = constraints.maxWidth
         val widths = with(density) { TableMath.widths(natural, available, MIN_COLUMN.roundToPx(), MAX_COLUMN.roundToPx()) }
@@ -129,7 +163,7 @@ fun MdTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
                         )
                     }
                 }
-                Box(Modifier.width(total).height(1.dp).background(colors.lineStrong))
+                Box(Modifier.width(total).height(1.dp).background(colors.line))
                 val zebra = body.size >= 8
                 body.forEachIndexed { r, row ->
                     Row(if (zebra && r % 2 == 1) Modifier.background(colors.ink1.copy(alpha = 0.03f)) else Modifier) {

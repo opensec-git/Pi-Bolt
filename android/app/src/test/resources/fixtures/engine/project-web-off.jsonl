@@ -1,0 +1,3 @@
+{"type":"fixture","mode":"project-web-off","engine":"pi-bolt 1.1.2 linux-arm64","args":["--mode","rpc","--exclude-tools","web_search,fetch_content,get_search_content,source_check"],"answers":[],"recorded":"2026-11-07","modelTools":["read","bash","edit","write","grep","find","ask_user_question"]}
+{"type":"tool_execution_start","toolCallId":"call_1794051334027","toolName":"web_search","args":{"query":"Pi coding agent terminal"}}
+{"type":"tool_execution_end","toolCallId":"call_1794051334027","toolName":"web_search","result":{"content":[{"type":"text","text":"Tool web_search not found"}],"details":{}},"isError":true}

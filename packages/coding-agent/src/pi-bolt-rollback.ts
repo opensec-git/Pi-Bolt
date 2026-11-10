@@ -8,8 +8,8 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import chalk from "chalk";
 import { PIBOLT, PIBOLT_INSTALL_URL, piBoltInstallDir, piBoltInstallMethod, piBoltPackageManager } from "./pi-bolt.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
 /** "Pi-Bolt 0.9.0 (Pi 1.2.0), linux-x64, JIT off, built ..." and what is compiled in, from a build's pi-bolt.txt. */
 function describe(folder: string): string {

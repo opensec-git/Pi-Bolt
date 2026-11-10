@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared through FileProvider: session exports and images (cache/exports), the verified update APK (cache/updates) and diagrams (cache/diagrams). -->
+<paths>
+    <cache-path name="exports" path="exports/" />
+    <cache-path name="updates" path="updates/" />
+    <cache-path name="diagrams" path="diagrams/" />
+</paths>

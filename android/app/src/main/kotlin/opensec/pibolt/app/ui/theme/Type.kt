@@ -73,12 +73,18 @@ data class PiType(
     val monoSmall: TextStyle,
     val monoMeta: TextStyle,
     val thinking: TextStyle,
+    /** Screen titles of the redesign ("Projects", a welcome): 28 / 34, SemiBold, tracked in. */
+    val largeTitle: TextStyle,
+    /** A list row's title in the redesign's lists, Recents and composer pill: 17 / 24. */
+    val rowTitle: TextStyle,
+    /** The line under a row title, tile labels and counts: 15 / 20. */
+    val rowMeta: TextStyle,
 ) {
     /** Text-size setting on top of the system scale (transcript only). */
     fun scaled(factor: Float): PiType {
         if (factor == 1f) return this
         fun TextStyle.s() = copy(fontSize = fontSize * factor, lineHeight = lineHeight * factor)
-        return PiType(display, title, headline.s(), subhead.s(), prose.s(), body.s(), bodyStrong.s(), label.s(), meta.s(), metaStrong.s(), micro.s(), mono.s(), monoSmall.s(), monoMeta.s(), thinking.s())
+        return PiType(display, title, headline.s(), subhead.s(), prose.s(), body.s(), bodyStrong.s(), label.s(), meta.s(), metaStrong.s(), micro.s(), mono.s(), monoSmall.s(), monoMeta.s(), thinking.s(), largeTitle, rowTitle, rowMeta)
     }
 
     companion object {
@@ -98,6 +104,9 @@ data class PiType(
             monoSmall = mono(12.5f, 18f),
             monoMeta = mono(12f, 17f),
             thinking = inter(14.5f, 22f, FontWeight.Normal),
+            largeTitle = inter(28f, 34f, FontWeight.SemiBold, (-0.01).em),
+            rowTitle = inter(17f, 24f, FontWeight.Normal, (-0.005).em),
+            rowMeta = inter(15f, 20f, FontWeight.Normal),
         )
 
         /** Text size steps -1 … +2. */

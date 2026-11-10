@@ -5,7 +5,8 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { isPathWithin, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
-import { createSyntheticSourceInfo, getResourcePathKey, type SourceInfo } from "./source-info.ts";
+import { ResourcePathKeys } from "./resource-path-keys.ts";
+import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -405,6 +406,8 @@ export interface LoadSkillsOptions {
 	skillPaths: string[];
 	/** Include default skills directories. */
 	includeDefaults: boolean;
+	/** Dedupe keys of the caller's load pass, so that a path whose real path it already has is not resolved again. */
+	pathKeys?: ResourcePathKeys;
 }
 
 /**
@@ -413,6 +416,7 @@ export interface LoadSkillsOptions {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const { agentDir, skillPaths, includeDefaults } = options;
+	const pathKeys = options.pathKeys ?? new ResourcePathKeys();
 
 	// Resolve agentDir - if not provided, use default from config
 	const resolvedCwd = resolvePath(options.cwd);
@@ -423,11 +427,28 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const allDiagnostics: ResourceDiagnostic[] = [];
 	const collisionDiagnostics: ResourceDiagnostic[] = [];
 
+	// The first skill's real path, resolved only once a second skill needs it: a realpath costs about 0.17 M instructions,
+	// and a single skill (such as the bundled one alone) has nothing to be a duplicate of.
+	let unresolvedFirst: Skill | undefined;
+
 	function addSkills(result: LoadSkillsResult) {
 		allDiagnostics.push(...result.diagnostics);
+		if (result.skills.length > 1) {
+			pathKeys.prepare(result.skills.map((skill) => skill.filePath));
+		}
 		for (const skill of result.skills) {
+			if (skillMap.size === 0) {
+				skillMap.set(skill.name, skill);
+				unresolvedFirst = skill;
+				continue;
+			}
+			if (unresolvedFirst) {
+				realPathSet.add(pathKeys.keyOf(unresolvedFirst.filePath));
+				unresolvedFirst = undefined;
+			}
+
 			// Resolve symlinks to detect duplicate files
-			const realPath = getResourcePathKey(skill.filePath);
+			const realPath = pathKeys.keyOf(skill.filePath);
 
 			// Skip silently if we've already loaded this exact file (via symlink)
 			if (realPathSet.has(realPath)) {

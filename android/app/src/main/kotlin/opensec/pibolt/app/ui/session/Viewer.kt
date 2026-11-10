@@ -11,10 +11,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -33,18 +31,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
-import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassCopyButton
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.DiffGutter
 import opensec.pibolt.app.ui.components.DiffRow
-import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.markdown.CodeFold
 import opensec.pibolt.app.ui.markdown.CodeInfo
 import opensec.pibolt.app.ui.markdown.UnifiedDiff
@@ -103,23 +101,19 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
                 shape = RoundedCornerShape(Radius.xl * progress)
                 clip = progress > 0f
             }
-            .background(colors.canvas)
-            .statusBarsPadding(),
+            .background(colors.canvas),
     ) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction(Icons.Rounded.Close, "Close", onClick = onClose, tint = colors.ink1)
-            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                Text(content.title, style = type.subhead, color = colors.ink1, maxLines = 1)
-                subtitle?.let {
-                    Text(it, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+        GlassBar(
+            title = content.title,
+            subtitle = subtitle,
+            leading = { GlassIconButton(Icons.Rounded.Close, "Close", onClick = onClose) },
+            actions = {
+                if (!content.selectable) {
+                    GlassIconButton(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink1)
                 }
-            }
-            if (!content.selectable) {
-                IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
-            }
-            CopyButton({ content.text }, label = false, clipLabel = content.title, description = "Copy all")
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+                GlassCopyButton({ content.text }, clipLabel = content.title, description = "Copy all")
+            },
+        )
         when {
             content.selectable -> SelectionContainer(Modifier.weight(1f)) {
                 Text(
@@ -134,10 +128,12 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
                 )
             }
             diffRows != null -> {
-                val numWidth = remember(diffRows) { diffRows.maxOfOrNull { it.number.length } ?: 0 }
+                val gutter = remember(diffRows) { DiffGutter.of(diffRows) }
                 val words = remember(diffRows) { UnifiedDiff.wordRanges(diffRows) }
+                // A tool diff's subtitle is its path: the rows keep that file's syntax colours.
+                val diffLanguage = remember(content) { content.subtitle?.let(CodeInfo::languageOfFile).orEmpty() }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    itemsIndexed(diffRows, contentType = { _, l -> l.kind }) { i, line -> DiffRow(line, numWidth, words[i], wrap = true) }
+                    itemsIndexed(diffRows, contentType = { _, l -> l.kind }) { i, line -> DiffRow(line, gutter, words[i], wrap = true, language = diffLanguage) }
                     item { Spacer(Modifier.navigationBarsPadding()) }
                 }
             }

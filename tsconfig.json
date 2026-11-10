@@ -62,6 +62,6 @@
 			"@earendil-works/pi-agent-old/*": ["./packages/agent-old/src/*"]
 		}
 	},
-	"include": ["scripts/model-catalog-protocol.ts", "scripts/model-catalog-protocol.test.ts", "packages/*/src/**/*", "packages/*/test/**/*", "packages/ai/catalog/**/*", "packages/durable/test-workers/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*"],
+	"include": ["scripts/model-catalog-protocol.ts", "scripts/model-catalog-protocol.test.ts", "packages/*/src/**/*", "packages/*/test/**/*", "packages/ai/catalog/**/*", "packages/durable/test-workers/**/*", "packages/coding-agent/examples/**/*", "packages/agent/examples/**/*", "ios/fixtures/**/*"],
 	"exclude": ["**/dist/**", "packages/coding-agent/examples/extensions/**", "packages/coding-agent/test/suite/regressions/8261-subagent-project-trust.test.ts"]
 }

@@ -10,9 +10,9 @@ import {
 	type Model,
 	modelsAreEqual,
 } from "@earendil-works/pi-ai";
-import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
+import { chalk } from "../utils/lazy-packages.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 

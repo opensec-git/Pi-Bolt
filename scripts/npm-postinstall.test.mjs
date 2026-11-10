@@ -505,6 +505,48 @@ test("Linux and macOS: the install script puts the launcher, with its #!/bin/sh,
 	assert.deepEqual(readdirSync(join(pkgDir, "bin")).sort(), ["pi-bolt", "pi-bolt.exe"]);
 });
 
+/** The folder whose presence tells the launcher it runs on macOS. */
+const MACOS_MARKER = "/System/Library/CoreServices";
+
+/** Makes the package's launcher look for macOS's folder at `marker` instead (a missing folder: as on Linux). */
+function launcherSeesMacosAt(pkgDir, marker) {
+	const file = join(pkgDir, "bin", "pi-bolt");
+	const text = readFileSync(file, "utf8");
+	assert.ok(text.includes(`[ -d ${MACOS_MARKER} ]`), "the launcher tests for macOS's folder");
+	writeFileSync(file, text.replaceAll(MACOS_MARKER, marker), { mode: 0o755 });
+}
+
+test("the launcher tells macOS from Linux without running uname", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	const home = join(pkgDir, "home");
+	const ran = join(pkgDir, "uname-ran");
+	const bin = join(pkgDir, "fake-bin");
+	mkdirSync(bin);
+	writeFileSync(join(bin, "uname"), `#!/bin/sh\necho ran >> "${ran}"\necho Linux\n`, { mode: 0o755 });
+	const macosFolder = join(pkgDir, "System-Library-CoreServices");
+	mkdirSync(macosFolder);
+	for (const [platform, marker] of [
+		["linux", join(pkgDir, "no-such-folder")],
+		["darwin", macosFolder],
+	]) {
+		const dir = join(home, "npm", VERSION, `pi-bolt-${platform}-${platform === "linux" ? "x64" : "arm64"}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pi"), `#!/bin/sh\necho "${platform}: $* PIBOLT_NPM=$PIBOLT_NPM"\n`, { mode: 0o755 });
+		writeFileSync(join(pkgDir, "bin", "pi-bolt"), readFileSync(join(npmDir, "bin", "pi-bolt")));
+		launcherSeesMacosAt(pkgDir, marker);
+		install.installPosix({ pkgDir });
+		const env = { ...process.env, PIBOLT_HOME: home, PATH: `${bin}:${process.env.PATH}` };
+		// (On Linux the variant given, so that nothing else would be run to find it out.)
+		if (platform === "linux") env.PIBOLT_VARIANT = "x64";
+		else delete env.PIBOLT_VARIANT;
+		// As npm's link starts it: the file itself, through its #! line.
+		const result = spawnSync(join(pkgDir, "bin", "pi-bolt.exe"), ["--version"], { encoding: "utf8", env });
+		assert.equal(result.stdout, `${platform}: --version PIBOLT_NPM=1\n`, result.stderr);
+		assert.equal(result.status, 0);
+	}
+	assert.equal(existsSync(ran), false, "uname was not run");
+});
+
 /** sh, if there is one (Git's on Windows). */
 function findSh() {
 	const result = spawnSync("sh", ["-c", "echo ok"], { encoding: "utf8" });
@@ -521,6 +563,8 @@ function fakeUname(dir, system) {
 
 test("the placeholder, run without the install script: on Linux it starts the launcher; elsewhere it says what to run", { skip: !findSh() && "no sh" }, (t) => {
 	const pkgDir = makePackage(t);
+	// (Linux: no macOS folder, and uname says Linux.)
+	launcherSeesMacosAt(pkgDir, join(pkgDir, "no-such-folder"));
 	const separator = process.platform === "win32" ? ";" : ":";
 	// Elsewhere (Git Bash on Windows): how to run the install script, and a failure.
 	const windows = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt.exe"), "--version"], {
@@ -546,6 +590,8 @@ test("the placeholder, run without the install script: on Linux it starts the la
 
 test("the launcher's first run of a version removes the versions installed before it", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
 	const pkgDir = makePackage(t);
+	// (Linux: no macOS folder, and uname says Linux.)
+	launcherSeesMacosAt(pkgDir, join(pkgDir, "no-such-folder"));
 	const home = join(pkgDir, "home");
 	// The installer, as far as the launcher sees it: it puts the build where PIBOLT_INSTALL says.
 	writeFileSync(
@@ -569,10 +615,61 @@ test("the launcher's first run of a version removes the versions installed befor
 	assert.deepEqual(readdirSync(join(home, "npm")).sort(), ["0.7.3", VERSION, "notes"]);
 });
 
+// #280: on a musl system (Alpine) the launcher runs the musl build, which install.sh names so.
+test("the launcher runs the musl build on a musl system", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	// (Linux: no macOS folder, and uname says Linux.)
+	launcherSeesMacosAt(pkgDir, join(pkgDir, "no-such-folder"));
+	const home = join(pkgDir, "home");
+	const bin = fakeUname(pkgDir, "Linux");
+	writeFileSync(join(bin, "ldd"), "#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n", { mode: 0o755 });
+	for (const variant of ["x64", "x64-baseline", "x64-musl", "x64-musl-baseline"]) {
+		const dir = join(home, "npm", VERSION, `pi-bolt-linux-${variant}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pi"), `#!/bin/sh\necho "${variant}"\n`, { mode: 0o755 });
+	}
+	const env = { ...process.env, PIBOLT_HOME: home, PATH: `${bin}:${process.env.PATH}` };
+	delete env.PIBOLT_VARIANT;
+	const result = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt")], { encoding: "utf8", env });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /^x64-musl(-baseline)?\n$/);
+});
+
+// #280: BusyBox's ps (Alpine) has neither -A nor -ww; the launcher then lists the processes with `ps -o args`, so that a session
+// still running keeps its folder there too.
+test("the launcher's first run lists the processes with BusyBox's ps", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	// (Linux: no macOS folder, and uname says Linux.)
+	launcherSeesMacosAt(pkgDir, join(pkgDir, "no-such-folder"));
+	const home = join(pkgDir, "home");
+	writeFileSync(
+		join(pkgDir, "install.sh"),
+		'mkdir -p "$PIBOLT_INSTALL/pi-bolt-linux-x64" && printf \'#!/bin/sh\\necho "the build"\\n\' > "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi" && chmod 755 "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi"\n',
+	);
+	const running = join(home, "npm", "0.7.3", "pi-bolt-linux-x64");
+	mkdirSync(running, { recursive: true });
+	mkdirSync(join(home, "npm", "0.7.4", "pi-bolt-linux-x64"), { recursive: true });
+	const bin = fakeUname(pkgDir, "Linux");
+	// (As BusyBox's: an unknown option is an error, and `-o args` lists every process.)
+	writeFileSync(
+		join(bin, "ps"),
+		`#!/bin/sh\ncase "$1" in -A) echo "ps: unrecognized option: A" >&2; exit 1 ;; esac\nprintf 'COMMAND\\n${running}/pi\\n'\n`,
+		{ mode: 0o755 },
+	);
+	const result = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt")], {
+		encoding: "utf8",
+		env: { ...process.env, PIBOLT_HOME: home, PIBOLT_VARIANT: "x64", PATH: `${bin}:${process.env.PATH}` },
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(readdirSync(join(home, "npm")).sort(), ["0.7.3", VERSION]);
+});
+
 // The first run is not asked for by the user: an opt-in to installing without a signature check, left in their environment, is
 // not passed on to the installer (which ignores it in the first run as well).
 test("the launcher's first run does not pass PIBOLT_UNVERIFIED on to the installer", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
 	const pkgDir = makePackage(t);
+	// (Linux: no macOS folder, and uname says Linux.)
+	launcherSeesMacosAt(pkgDir, join(pkgDir, "no-such-folder"));
 	const home = join(pkgDir, "home");
 	writeFileSync(
 		join(pkgDir, "install.sh"),

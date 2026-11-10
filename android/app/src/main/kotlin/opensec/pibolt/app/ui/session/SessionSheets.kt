@@ -1,9 +1,9 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.material.icons.rounded.History
+import opensec.pibolt.app.ui.components.EmptyState
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,8 +27,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -42,10 +43,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -54,9 +51,12 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
-import java.util.Locale
 import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
@@ -66,9 +66,18 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
+import androidx.compose.foundation.lazy.itemsIndexed
+import opensec.pibolt.app.ui.components.SOFT_PRESS
+import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.components.rememberSheetCloser
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.session.features2.F2Empty
+import opensec.pibolt.app.ui.providers.ProviderCatalog
+import opensec.pibolt.app.ui.providers.ProviderLogos
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.rpc.ModelInfo
@@ -80,16 +89,16 @@ import opensec.pibolt.protocol.session.SessionReducer
 @Composable
 fun OptionRow(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, leading: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     val border by animateColorAsState(if (selected) colors.accent else colors.line, PiMotion.effects(), label = "option")
     Row(
         modifier
             .fillMaxWidth()
             .heightIn(min = Pi.dims.optionRow)
-            .pressable(onClick, shape = shape)
-            .background(if (selected) colors.selected else colors.surface2, shape)
+            .pressable(onClick, shape = shape, pressedScale = SOFT_PRESS)
+            .background(if (selected) colors.selected else colors.surface1, shape)
             .border(if (selected) 1.5.dp else 1.dp, border, shape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leading != null) {
@@ -97,8 +106,8 @@ fun OptionRow(title: String, subtitle: String?, selected: Boolean, onClick: () -
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = Pi.type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = Pi.type.rowTitle, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.rowMeta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         if (selected) {
             Spacer(Modifier.width(10.dp))
@@ -120,14 +129,22 @@ private fun SheetLoading(label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo) -> Unit, onDismiss: () -> Unit) {
+fun ModelSheet(
+    models: List<ModelInfo>,
+    current: ModelInfo?,
+    onPick: (ModelInfo) -> Unit,
+    onDismiss: () -> Unit,
+    initialQuery: String = "",
+    thinking: ThinkingPick? = null,
+) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     val colors = Pi.colors
     val haptics = Pi.haptics
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Model")
+        if (thinking != null && thinking.levels.isNotEmpty() && query.isEmpty()) ThinkingLevels(thinking)
         if (models.isEmpty()) {
             SheetLoading("Loading models")
             return@PiSheet
@@ -138,9 +155,9 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
         }
         val shown = remember(ordered, query) {
             val q = query.trim().lowercase()
-            if (q.isEmpty()) ordered else ordered.filter { q in it.label.lowercase() || q in it.id.lowercase() || q in it.provider.lowercase() }
+            if (q.isEmpty()) ordered else ordered.filter { q in it.label.lowercase() || q in it.id.lowercase() || q in it.provider.lowercase() || q in ModelGroups.title(it).lowercase() || q in ProviderCatalog.name(it.provider).lowercase() }
         }
-        if (models.size > 6) {
+        if (models.size > 6 || query.isNotEmpty()) {
             PiTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -152,48 +169,125 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
             )
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-            items(shown, key = { "${it.provider}/${it.id}" }) { model ->
-                val selected = isCurrent(model)
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(60.dp)
-                        .pressable({
-                            haptics.tick()
-                            close { onPick(model) }
-                        }, shape = RoundedCornerShape(0.dp), pressedScale = 1f)
-                        .padding(horizontal = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(24.dp).background(colors.surface3, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
-                        Text(model.provider.take(1).uppercase().ifBlank { "?" }, style = Pi.type.micro, color = colors.ink2)
+            // By maker, as Pi-Bolt Desktop's picker: "Anthropic" holds Claude from Anthropic, OpenRouter and Bedrock alike;
+            // each row names its provider. The current model comes first under "Current".
+            val sections = ModelGroups.of(shown, current)
+            for ((title, group) in sections) {
+                if (sections.size > 1) {
+                    item(key = "h:$title", contentType = "header") {
+                        Text(title, style = Pi.type.metaStrong, color = colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 16.dp, bottom = 4.dp).semantics { heading() })
                     }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(model.label, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            listOfNotNull(
-                                model.provider.ifBlank { null },
-                                model.contextWindow?.let { "${SessionReducer.formatTokens(it)} context" },
-                                "reasoning".takeIf { model.reasoning },
-                            ).joinToString(" · "),
-                            style = Pi.type.meta,
-                            color = colors.ink3,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (selected) Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.accent, modifier = Modifier.size(20.dp))
                 }
+            itemsIndexed(group, key = { _, it -> "${it.provider}/${it.id}" }) { index, model ->
+                val selected = isCurrent(model)
+                // The kit's plain row: the maker's mark (16dp: ink2, the current model's ink1, as Pi-Bolt Desktop's
+                // picker), the name over "OpenRouter · 200k context · reasoning", inset hairlines; the current model
+                // on the soft highlight with a check.
+                InsetRow(
+                    title = model.label,
+                    meta = listOfNotNull(
+                        model.provider.ifBlank { null }?.let(ProviderCatalog::name),
+                        model.contextWindow?.let { "${SessionReducer.formatTokens(it)} context" },
+                        "reasoning".takeIf { model.reasoning },
+                    ).joinToString(" · ").ifEmpty { null },
+                    onClick = {
+                        haptics.tick()
+                        close { onPick(model) }
+                    },
+                    leading = { LogoMark(ProviderCatalog.modelBrand(model.id, model.provider), size = IconSize.sm, tint = if (selected) colors.ink1 else colors.ink2) },
+                    current = selected,
+                    divider = index < group.lastIndex,
+                    trailing = if (selected) ({ Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.accent, modifier = Modifier.size(20.dp)) }) else null,
+                )
+            }
             }
             if (shown.isEmpty()) {
-                item { Text("No model matches “$query”.", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(20.dp)) }
+                item { F2Empty("No model matches “${query.trim()}”", Icons.Rounded.SearchOff) }
             }
         }
     }
 }
 
+/**
+ * Models grouped for the picker: "Current" first, then one group per maker (Pi-Bolt Desktop's families: "Anthropic",
+ * "Google", "Qwen"…; a model without a known maker goes under its provider's name), groups sorted by title, keeping
+ * the order within a group.
+ */
+object ModelGroups {
+    const val CURRENT = "Current"
+
+    fun title(m: ModelInfo): String =
+        ProviderLogos.maker(m.id)?.title ?: m.provider.ifBlank { null }?.let(ProviderCatalog::name) ?: "Other"
+
+    fun of(models: List<ModelInfo>, current: ModelInfo?): List<Pair<String, List<ModelInfo>>> {
+        val isCurrent = { m: ModelInfo -> current != null && m.id == current.id && m.provider == current.provider }
+        val out = ArrayList<Pair<String, List<ModelInfo>>>()
+        models.filter(isCurrent).takeIf { it.isNotEmpty() }?.let { out += CURRENT to it }
+        models.filterNot(isCurrent).groupBy(::title).toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (title, list) -> out += title to list }
+        return out
+    }
+}
+
 // Thinking level
+
+/** The thinking levels the model sheet offers above the models ([levels] empty: not loaded yet, or none). */
+class ThinkingPick(val levels: List<String>, val current: String?, val onPick: (String) -> Unit)
+
+/**
+ * "Thinking" in the model sheet: one pill per level (36dp, radius full, 48dp to touch; the current one in accent with
+ * the selected fill), then what the current level means. Picking a level keeps the sheet open: the model is the
+ * sheet's main choice.
+ */
+@Composable
+private fun ThinkingLevels(pick: ThinkingPick) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val haptics = Pi.haptics
+    var chosen by remember(pick.current) { mutableStateOf(pick.current) }
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
+        Text("Thinking", style = type.metaStrong, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp).semantics { heading() })
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (level in pick.levels) {
+                val on = level == chosen
+                val shape = CircleShape
+                val edge by animateColorAsState(if (on) colors.accent else colors.line, PiMotion.effects(), label = "level")
+                Box(
+                    Modifier
+                        .heightIn(min = 48.dp)
+                        .pressable({
+                            haptics.tick()
+                            chosen = level
+                            pick.onPick(level)
+                        }, shape = shape, label = "Thinking ${level.lowercase()}")
+                        .semantics {
+                            role = Role.RadioButton
+                            selected = on
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .height(36.dp)
+                            .background(if (on) colors.selected else colors.surface2, shape)
+                            .border(if (on) 1.5.dp else 1.dp, edge, shape)
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(level.replaceFirstChar { it.uppercase() }, style = type.label, color = if (on) colors.ink1 else colors.ink2, maxLines = 1)
+                    }
+                }
+            }
+        }
+        levelDescription(chosen.orEmpty())?.let {
+            Text(it, style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
+        }
+        Box(Modifier.padding(top = 12.dp).fillMaxWidth().height(1.dp).background(colors.line))
+    }
+}
 
 private fun levelDescription(level: String): String? = when (level.lowercase()) {
     "off" -> "No reasoning. Fastest answers."
@@ -303,6 +397,8 @@ fun DialogSheet(
                         close { onConfirm(true) }
                     }, modifier = Modifier.weight(1f))
                 }
+                // A sheet of the mobile UI kit is a ViewSheet (views/ViewHostUi.kt), never this.
+                DialogKind.View -> {}
                 DialogKind.Input, DialogKind.Editor -> {
                     val editor = dialog.kind == DialogKind.Editor
                     var text by remember(dialog.id) { mutableStateOf(dialog.prefill.orEmpty()) }
@@ -351,121 +447,6 @@ private fun Countdown(shownAt: Long, timeoutMs: Long) {
         color = colors.warning,
         modifier = Modifier.background(colors.warningSoft, CircleShape).padding(horizontal = 10.dp, vertical = 4.dp),
     )
-}
-
-// Session info
-
-data class SessionFacts(
-    val model: ModelInfo?,
-    val thinkingLevel: String?,
-    val totalTokens: Long?,
-    val input: Long?,
-    val output: Long?,
-    val cacheRead: Long?,
-    val cost: Double?,
-    val cwd: String?,
-    val version: String?,
-    val sessionName: String?,
-    val compacting: Boolean,
-    val connected: Boolean,
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SessionInfoSheet(
-    facts: SessionFacts,
-    onModel: () -> Unit,
-    onThinking: () -> Unit,
-    onCompact: () -> Unit,
-    onRename: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val close = rememberSheetCloser(state)
-    PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Session", subtitle = facts.sessionName)
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val percent = facts.totalTokens?.let { contextPercent(it, facts.model?.contextWindow) }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(colors.surface1, RoundedCornerShape(Radius.md))
-                    .border(1.dp, colors.line, RoundedCornerShape(Radius.md))
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ContextRing(percent ?: 0)
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        when {
-                            percent != null -> "$percent% of ${SessionReducer.formatTokens(facts.model?.contextWindow ?: 0)} context"
-                            facts.totalTokens != null -> "${SessionReducer.formatTokens(facts.totalTokens)} tokens in context"
-                            else -> "No usage yet"
-                        },
-                        style = type.bodyStrong.copy(fontFeatureSettings = Tnum),
-                        color = colors.ink1,
-                    )
-                    val details = listOfNotNull(
-                        facts.input?.let { "${SessionReducer.formatTokens(it)} in" },
-                        facts.output?.let { "${SessionReducer.formatTokens(it)} out" },
-                        facts.cacheRead?.takeIf { it > 0 }?.let { "${SessionReducer.formatTokens(it)} cached" },
-                        facts.cost?.takeIf { it > 0 }?.let { String.format(Locale.ROOT, "$%.3f", it) },
-                    ).joinToString(" · ")
-                    if (details.isNotBlank()) Text("Last turn: $details", style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
-                }
-            }
-            InfoRow("Model", facts.model?.label ?: "—", onClick = { close(onModel) }, enabled = facts.connected)
-            InfoRow("Thinking", facts.thinkingLevel?.replaceFirstChar { it.uppercase() } ?: "—", onClick = { close(onThinking) }, enabled = facts.connected)
-            facts.cwd?.takeIf { it.isNotBlank() }?.let { InfoRow("Folder", shortPath(it), mono = true) }
-            facts.version?.takeIf { it.isNotBlank() }?.let { InfoRow("Pi-Bolt", "v$it") }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryButton(if (facts.compacting) "Compacting…" else "Compact context", onClick = { close(onCompact) }, enabled = facts.connected && !facts.compacting, modifier = Modifier.weight(1f))
-                SecondaryButton("Rename", onClick = { close(onRename) }, enabled = facts.connected, modifier = Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null, enabled: Boolean = true, mono: Boolean = false) {
-    val colors = Pi.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .then(if (onClick != null) Modifier.pressable(onClick, shape = RoundedCornerShape(Radius.sm), enabled = enabled, pressedScale = 1f) else Modifier)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = Pi.type.body, color = colors.ink2, modifier = Modifier.width(96.dp))
-        Text(value, style = if (mono) Pi.type.monoSmall else Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (onClick != null) Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(20.dp))
-    }
-}
-
-@Composable
-private fun ContextRing(percent: Int) {
-    val colors = Pi.colors
-    val target = percent / 100f
-    val sweep by animateFloatAsState(target, PiMotion.inPlace(PiMotion.SETTLE), label = "ring")
-    val color = when {
-        percent > 90 -> colors.danger
-        percent > 70 -> colors.warning
-        else -> colors.ink2
-    }
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(40.dp)) {
-            val stroke = 3.dp.toPx()
-            val inset = stroke / 2
-            drawArc(colors.lineStrong, 0f, 360f, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
-            drawArc(color, -90f, 360f * sweep, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round))
-        }
-        Text("$percent%", style = Pi.type.micro.copy(fontFeatureSettings = Tnum, fontWeight = FontWeight.SemiBold, fontSize = 10.sp), color = colors.ink1)
-    }
 }
 
 // Text prompt (rename, compact)
@@ -576,5 +557,38 @@ private fun CommandWell(message: String, cwd: String?) {
                 .verticalScroll(rememberScrollState())
                 .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
         )
+    }
+}
+
+/**
+ * Prompts sent earlier (most recent first), each up to two lines; a tap puts one in the composer. Up / Down on a
+ * hardware keyboard walk the same list from inside the composer.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistorySheet(prompts: List<String>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val close = rememberSheetCloser(state)
+    val colors = Pi.colors
+    PiSheet(onDismiss = onDismiss, state = state) {
+        SheetHeader("Prompt history")
+        if (prompts.isEmpty()) {
+            EmptyState("No prompts yet", message = "Prompts you send show here.", icon = Icons.Rounded.History)
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+            items(prompts) { prompt ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp)
+                        .pressable({ close { onPick(prompt) } }, shape = RoundedCornerShape(0.dp), pressedScale = 1f, label = "Put in the composer")
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(prompt, style = Pi.type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }

@@ -1,4 +1,4 @@
-import hostedGitInfo from "hosted-git-info";
+import { hostedGitInfo } from "./lazy-packages.ts";
 
 /**
  * Parsed git URL information.
@@ -184,7 +184,7 @@ export function parseGitUrl(source: string): GitSource | null {
 		(value): value is string => Boolean(value),
 	);
 	for (const candidate of hostedCandidates) {
-		const info = hostedGitInfo.fromUrl(candidate);
+		const info = hostedGitInfo().fromUrl(candidate);
 		if (info) {
 			if (split.ref && info.project?.includes("@")) {
 				continue;
@@ -208,7 +208,7 @@ export function parseGitUrl(source: string): GitSource | null {
 		(value): value is string => Boolean(value),
 	);
 	for (const candidate of httpsCandidates) {
-		const info = hostedGitInfo.fromUrl(candidate);
+		const info = hostedGitInfo().fromUrl(candidate);
 		if (info) {
 			if (split.ref && info.project?.includes("@")) {
 				continue;

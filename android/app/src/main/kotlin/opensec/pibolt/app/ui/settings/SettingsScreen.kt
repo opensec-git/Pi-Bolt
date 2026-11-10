@@ -1,280 +1,588 @@
 package opensec.pibolt.app.ui.settings
 
 import android.content.Context
-import android.content.Intent
-import android.provider.Settings
 import androidx.annotation.RawRes
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Notes
+import androidx.compose.material.icons.automirrored.rounded.Reply
+import androidx.compose.material.icons.rounded.Savings
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Animation
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Cable
+import androidx.compose.material.icons.rounded.Circle
+import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.FormatSize
+import androidx.compose.material.icons.rounded.HideImage
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Replay
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.material.icons.rounded.Vibration
+import androidx.compose.material.icons.rounded.ViewAgenda
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.core.app.NotificationManagerCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
-import opensec.pibolt.app.data.AccentId
+import opensec.pibolt.app.data.AgentDefaults
 import opensec.pibolt.app.data.AppSettings
 import opensec.pibolt.app.data.Density
+import opensec.pibolt.app.data.Host
+import opensec.pibolt.app.data.QueueMode
 import opensec.pibolt.app.data.ReduceMotion
-import opensec.pibolt.app.data.ThemeId
-import opensec.pibolt.app.ui.components.ConfirmSheet
-import opensec.pibolt.app.ui.components.DangerButton
-import opensec.pibolt.app.ui.components.IconAction
-import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
-import opensec.pibolt.app.ui.components.Segmented
+import opensec.pibolt.app.git.github.GitHubState
+import opensec.pibolt.app.ui.components.ChoiceSheet
+import opensec.pibolt.app.ui.components.GroupDivider
+import opensec.pibolt.app.ui.components.GroupRow
+import opensec.pibolt.app.ui.components.GroupSwitchRow
+import opensec.pibolt.app.ui.components.InsetGroup
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.components.LargeTitlePage
+import opensec.pibolt.app.ui.components.LoadingRow
+import opensec.pibolt.app.ui.components.PiSheet
+import opensec.pibolt.app.ui.components.PiSnackHost
+import opensec.pibolt.app.ui.components.PillSearchField
 import opensec.pibolt.app.ui.components.SegmentedSlots
+import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.components.rememberSheetCloser
+import opensec.pibolt.app.ui.components.show
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendText
+import opensec.pibolt.app.ui.git.GitHubSection
+import opensec.pibolt.app.ui.git.GitHubSignInSheet
+import opensec.pibolt.app.ui.packages.McpSheet
+import opensec.pibolt.app.ui.packages.PackagesSheet
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.session.ModelSheet
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
+import opensec.pibolt.app.ui.session.features2.TuningSheet
+import opensec.pibolt.app.ui.session.voice.VoicePickerSheet
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
-/** Preferences, applied live (no activity restart) and saved in settings.json. */
+/** The few-option settings that open a [ChoiceSheet] from their row. */
+private enum class Choice { Thinking, Density, Steering, FollowUp, Retries, ToolPreview, ReduceMotion, VoiceRate }
+
+/** The engine's sheets that Settings opens. */
+private enum class EngineSheet { Packages, Mcp, Tuning }
+
+/**
+ * Preferences, applied live (no activity restart) and saved in settings.json (the engine's own in its
+ * agent/settings.json). A large-title page in the iOS-settings manner: the search pill narrows the page to matching
+ * settings ([SettingsIndex]); with no query the account card leads (GitHub, and the default model with its mark).
+ * Then the groups in [SettingsGroup] order, each a rounded inset group of rows with a tinted glyph tile (one of the
+ * theme's five tints per section; neutral for GitHub, Advanced and About), the title, the value in ink3 and a
+ * chevron. Few-option settings open a [ChoiceSheet]; switches share the end column.
+ */
 @Composable
-fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
+fun SettingsScreen(
+    app: PiBoltApp,
+    onBack: () -> Unit,
+    onRuntimes: () -> Unit,
+    onProviders: () -> Unit = {},
+    onScan: () -> Unit = {},
+    onOpenHost: (Host) -> Unit = {},
+    onResumeHost: () -> Unit = {},
+    onPairingText: (String) -> String? = { null },
+) {
     val settings = Pi.settings
     val colors = Pi.colors
     val type = Pi.type
     val context = LocalContext.current
+    val focus = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
     var licence by remember { mutableStateOf<ViewerContent?>(null) }
+    var licences by remember { mutableStateOf(false) }
+    var themes by remember { mutableStateOf(false) }
+    var textSize by remember { mutableStateOf(false) }
+    var choice by remember { mutableStateOf<Choice?>(null) }
+    var engineSheet by remember { mutableStateOf<EngineSheet?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var voicePicker by remember { mutableStateOf(false) }
+    var signingIn by remember { mutableStateOf(false) }
+    var spendLimits by remember { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val visible = remember(query) { SettingsIndex.visible(query) }
+    val groups = remember(visible) { SettingsIndex.groups(visible).toSet() }
+    val show: (String) -> Boolean = { id -> visible == null || id in visible }
+    val snackbar = remember { SnackbarHostState() }
+    val message: (String) -> Unit = { text -> scope.launch { snackbar.show(text) } }
     fun update(change: (AppSettings) -> AppSettings) = app.settings.update(change)
+    val prefs = rememberAgentPrefs(app)
+    // Providers with a working model: keys, custom endpoints and the providers Pi packages register.
+    val configured by app.providers.connected.collectAsStateWithLifecycle()
+    val github by app.github.state.collectAsStateWithLifecycle()
+    // No provider: the open session lists no model, and the picker would wait for one for ever.
+    fun pickModel() = when {
+        configured.isEmpty() -> onProviders()
+        prefs?.controller != null -> {
+            // Listed afresh, as the session's own picker does: a provider added or removed since then changes the list.
+            prefs.controller.loadModels()
+            picking = true
+        }
+        // No session open: the engine's own list of the models that work (extension providers' too).
+        prefs != null && prefs.models.isNotEmpty() -> {
+            app.providers.refresh()
+            picking = true
+        }
+        else -> {
+            app.providers.refresh()
+            message("Open a session on this phone to choose its models")
+        }
+    }
 
-    Box(Modifier.fillMaxSize().background(colors.canvas)) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(bottom = 32.dp),
-        ) {
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
+    LargeTitlePage(
+        "Settings",
+        onBack = onBack,
+        overlay = {
+            AnimatedVisibility(
+                visible = licence != null,
+                enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + scaleIn(PiMotion.enter(PiMotion.SHEET), initialScale = 0.96f),
+                exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.96f),
+            ) {
+                val shown = remember { mutableStateOf(licence) }
+                licence?.let { shown.value = it }
+                shown.value?.let { Viewer(it, onClose = { licence = null }) }
             }
-            Text("Settings", style = type.display.copy(fontSize = type.display.fontSize * 1.15f), color = colors.ink1, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 12.dp))
+            PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
+        },
+    ) {
+        PillSearchField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = "Search",
+            onSearch = { focus.clearFocus() },
+            modifier = Modifier.padding(start = Space.lg, end = Space.lg, top = Space.xs, bottom = Space.xs),
+        )
+        if (query.isNotBlank() && groups.isEmpty()) {
+            Text(
+                "No results for “${query.trim()}”",
+                style = type.rowMeta,
+                color = colors.ink3,
+                modifier = Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = Space.x4),
+            )
+        }
 
-            Section("Appearance") {
-                Label("Theme")
-                // Four tiles a row; an incomplete last row keeps the tile width.
-                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    for (row in ThemeId.entries.chunked(THEME_TILES_PER_ROW)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            for (theme in row) {
-                                ThemeTile(theme, settings.accent, selected = settings.theme == theme, onClick = { update { it.copy(theme = theme) } }, modifier = Modifier.weight(1f))
-                            }
-                            repeat(THEME_TILES_PER_ROW - row.size) { Spacer(Modifier.weight(1f)) }
+        if (query.isBlank()) {
+            AccountCard(
+                github = github,
+                modelText = prefs?.modelText,
+                modelLeading = prefs?.brand?.let { b -> { LogoMark(b, size = IconSize.sm, tint = colors.ink1) } },
+                onAccount = { if (github !is GitHubState.SignedIn) signingIn = true },
+                onModel = ::pickModel,
+            )
+        }
+
+        if (SettingsGroup.Models in groups) {
+            val rows = buildList<SettingsRow> {
+                if (query.isNotBlank() && show("default-model")) add { d ->
+                    GroupRow(
+                        "Default model",
+                        icon = Icons.Rounded.AutoAwesome,
+                        iconTint = colors.tint0,
+                        leading = prefs?.brand?.let { b -> { LogoMark(b, size = IconSize.sm, tint = colors.ink2) } },
+                        value = prefs?.modelText,
+                        onClick = ::pickModel,
+                        divider = d,
+                    )
+                }
+                if (show("providers")) add { d ->
+                    GroupRow(
+                        "Providers",
+                        icon = Icons.Rounded.Key,
+                        iconTint = colors.tint0,
+                        value = if (configured.isEmpty()) "None" else configured.size.toString(),
+                        onClick = onProviders,
+                        divider = d,
+                    )
+                }
+                if (show("thinking") && prefs != null) add { d ->
+                    GroupRow(
+                        "Thinking level",
+                        icon = Icons.Rounded.Psychology,
+                        iconTint = colors.tint0,
+                        value = thinkingLabel(prefs.current.defaultThinking),
+                        onClick = { choice = Choice.Thinking },
+                        divider = d,
+                    )
+                }
+            }
+            SettingsBlock(rows, header = SettingsGroup.Models.title)
+        }
+
+        if (SettingsGroup.Appearance in groups) {
+            val tint = colors.tint2
+            val rows = buildList<SettingsRow> {
+                if (show("theme")) add { d -> GroupRow("Theme", icon = Icons.Rounded.Palette, iconTint = tint, value = settings.theme.label, onClick = { themes = true }, divider = d) }
+                if (show("accent")) add { d -> GroupRow("Accent", icon = Icons.Rounded.Circle, iconTint = tint, value = settings.accent.label, onClick = { themes = true }, divider = d) }
+                if (show("text-size")) add { d -> GroupRow("Text size", icon = Icons.Rounded.FormatSize, iconTint = tint, value = textSizeLabel(settings.textSize), onClick = { textSize = true }, divider = d) }
+                if (show("density")) add { d -> GroupRow("Density", icon = Icons.Rounded.ViewAgenda, iconTint = tint, value = settings.density.label, onClick = { choice = Choice.Density }, divider = d) }
+            }
+            SettingsBlock(rows, header = SettingsGroup.Appearance.title)
+        }
+
+        if (SettingsGroup.Agent in groups) {
+            val tint = colors.tint3
+            val p = prefs
+            if (p == null) {
+                InsetGroup(header = SettingsGroup.Agent.title) { LoadingRow("Reading settings") }
+            } else {
+                val c = p.current
+                val rows = buildList<SettingsRow> {
+                    if (show("web-search")) add(webSearchRow(app, settings.webSearch, tint))
+                    if (show("steering")) add { d -> GroupRow("Steering", icon = Icons.Rounded.Explore, iconTint = tint, value = c.steeringMode.label, onClick = { choice = Choice.Steering }, divider = d) }
+                    if (show("follow-up")) add { d -> GroupRow("Follow-up", icon = Icons.AutoMirrored.Rounded.Reply, iconTint = tint, value = c.followUpMode.label, onClick = { choice = Choice.FollowUp }, divider = d) }
+                    if (show("compaction")) add { d ->
+                        GroupSwitchRow("Auto-compact", c.autoCompaction, { on -> p.update { it.copy(autoCompaction = on) } }, icon = Icons.Rounded.Compress, iconTint = tint, divider = d)
+                    }
+                    if (show("retry")) {
+                        add { d -> GroupSwitchRow("Auto-retry", c.autoRetry, { on -> p.update { it.copy(autoRetry = on) } }, icon = Icons.Rounded.Replay, iconTint = tint, divider = d) }
+                        if (c.autoRetry) add { d ->
+                            GroupRow("Retries", icon = Icons.Rounded.Repeat, iconTint = tint, value = c.maxRetries.toString(), onClick = { choice = Choice.Retries }, divider = d)
                         }
                     }
-                }
-                Spacer(Modifier.height(20.dp))
-                Label("Accent")
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    for (accent in AccentId.entries) {
-                        AccentDot(accent, settings.theme, selected = settings.accent == accent, onClick = { update { it.copy(accent = accent) } })
+                    if (show("skills")) add { d ->
+                        GroupSwitchRow("Skill commands", c.skillCommands, { on -> p.update { it.copy(skillCommands = on) } }, icon = Icons.Rounded.AutoAwesome, iconTint = tint, divider = d)
+                    }
+                    if (show("images")) add { d ->
+                        GroupSwitchRow("Block images", c.blockImages, { on -> p.update { it.copy(blockImages = on) } }, icon = Icons.Rounded.HideImage, iconTint = tint, divider = d)
+                    }
+                    if (show("thinking-expanded")) add { d ->
+                        GroupSwitchRow("Expand thinking", settings.thinkingExpanded, { on -> update { it.copy(thinkingExpanded = on) } }, icon = Icons.Rounded.UnfoldMore, iconTint = tint, divider = d)
+                    }
+                    if (show("tool-preview")) add { d ->
+                        GroupRow("Tool output", icon = Icons.AutoMirrored.Rounded.Notes, iconTint = tint, value = "${settings.toolPreviewLines} lines", onClick = { choice = Choice.ToolPreview }, divider = d)
+                    }
+                    if (show("voice")) addAll(voiceRows(settings, tint, ::update, onRate = { choice = Choice.VoiceRate }, onVoice = { voicePicker = true }))
+                    if (show("spending")) add { d ->
+                        GroupRow("Spending", icon = Icons.Rounded.Savings, iconTint = tint, value = SpendText.summary(settings.spend), onClick = { spendLimits = true }, divider = d)
                     }
                 }
-                Spacer(Modifier.height(20.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Label("Text size", Modifier.weight(1f))
-                    Text(textSizeLabel(settings.textSize), style = type.meta, color = colors.ink3, modifier = Modifier.padding(bottom = 10.dp))
-                }
-                // Growing "A" glyphs, one per step: reads as a text size control at a glance.
-                val steps = (AppSettings.TEXT_SIZE_MIN..AppSettings.TEXT_SIZE_MAX).toList()
-                SegmentedSlots(
-                    options = steps,
-                    selected = settings.textSize,
-                    onSelect = { step -> update { it.copy(textSize = step) } },
-                    labels = steps.map(::textSizeLabel),
-                    height = 48.dp,
-                    modifier = Modifier.fillMaxWidth(),
-                ) { i, on ->
-                    Text(
-                        "A",
-                        style = type.label.copy(fontSize = 13.sp * (1f + 0.2f * i), fontWeight = FontWeight.SemiBold),
-                        color = if (on) colors.ink1 else colors.ink3,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                val preview = type.prose.let { p -> p.copy(fontSize = p.fontSize * PiType.factorFor(settings.textSize), lineHeight = p.lineHeight * PiType.factorFor(settings.textSize)) }
-                Text(
-                    "Pi reads the failing test, fixes the parser and runs the suite again.",
-                    style = preview,
-                    color = colors.ink1,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(colors.surface1, RoundedCornerShape(Radius.md))
-                        .border(1.dp, colors.line, RoundedCornerShape(Radius.md))
-                        .padding(16.dp),
-                )
-                Spacer(Modifier.height(20.dp))
-                Label("Density")
-                Segmented(
-                    options = Density.entries.map { it to it.label },
-                    selected = settings.density,
-                    onSelect = { d -> update { it.copy(density = d) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    height = 40.dp,
-                )
-            }
-
-            Section("Motion and feedback") {
-                Label("Reduce motion")
-                Segmented(
-                    options = ReduceMotion.entries.map { it to it.label },
-                    selected = settings.reduceMotion,
-                    onSelect = { r -> update { it.copy(reduceMotion = r) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    height = 40.dp,
-                )
-                Text(
-                    "Follow system uses Android's “Remove animations” setting. Reduced motion keeps spinners still and turns transitions into short fades.",
-                    style = type.meta,
-                    color = colors.ink3,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
-                )
-                ToggleRow("Haptics", "Taps for send, stop, answers and errors", settings.haptics) { on -> update { it.copy(haptics = on) } }
-            }
-
-            Section("Session") {
-                ToggleRow("Show thinking expanded", "Open the model's reasoning by default", settings.thinkingExpanded) { on -> update { it.copy(thinkingExpanded = on) } }
-                Spacer(Modifier.height(12.dp))
-                Label("Tool output preview")
-                Segmented(
-                    options = AppSettings.TOOL_PREVIEW_CHOICES.map { it to "$it lines" },
-                    selected = settings.toolPreviewLines,
-                    onSelect = { n -> update { it.copy(toolPreviewLines = n) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    height = 40.dp,
-                )
-            }
-
-            Section("Notifications") {
-                var allowed by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
-                LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = NotificationManagerCompat.from(context).areNotificationsEnabled() }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(if (allowed) "Allowed" else "Off", style = type.bodyStrong, color = colors.ink1)
-                        Text("Pi finished, or needs an answer, while the app is in the background", style = type.meta, color = colors.ink3)
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                SecondaryButton("Open system settings", onClick = { openNotificationSettings(context) }, modifier = Modifier.fillMaxWidth())
-            }
-
-            Section("Security") {
-                var keyId by remember { mutableStateOf(app.deviceKeyId()) }
-                var oldKeyId by remember { mutableStateOf<String?>(null) }
-                var confirmReset by remember { mutableStateOf(false) }
-                // Key ids are shown in mono only: in the UI font "l" and "I" look alike.
-                KeyLine("Device key", keyId, colors.ink1)
-                oldKeyId?.let { KeyLine("Old key", it, colors.ink3) }
-                Text(
-                    if (oldKeyId != null) {
-                        "New key created. Pair again with /remote-control on each computer, then revoke the old key there with /remote-control devices."
-                    } else {
-                        "Computers list this phone by this key in /remote-control devices. Resetting makes a new key: every computer has to pair again."
-                    },
-                    style = type.meta,
-                    color = if (oldKeyId != null) colors.success else colors.ink3,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                )
-                DangerButton("Reset device key", onClick = { confirmReset = true }, modifier = Modifier.fillMaxWidth())
-                if (confirmReset) {
-                    ConfirmSheet(
-                        title = "Reset this phone's key?",
-                        message = "Every paired computer will refuse this phone, so they are removed here and the current session ends. " +
-                            "Pair each computer again with a new QR code, then revoke the old key on it with /remote-control devices. " +
-                            "Settings keeps showing the old key until then.",
-                        confirmLabel = "Reset key",
-                        onConfirm = {
-                            confirmReset = false
-                            oldKeyId = keyId
-                            keyId = app.resetDeviceKey()
-                        },
-                        onDismiss = { confirmReset = false },
-                    )
-                }
-            }
-
-            Section("About") {
-                InfoLine("Version", app.appVersion)
-                InfoLine("This phone", app.deviceName)
-                NavLine("Inter licence (OFL 1.1)") { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) }
-                NavLine("JetBrains Mono licence (OFL 1.1)") { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
+                SettingsBlock(rows, header = SettingsGroup.Agent.title)
             }
         }
 
-        AnimatedVisibility(
-            visible = licence != null,
-            enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + scaleIn(PiMotion.enter(PiMotion.SHEET), initialScale = 0.96f),
-            exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.96f),
-        ) {
-            val shown = remember { mutableStateOf(licence) }
-            licence?.let { shown.value = it }
-            shown.value?.let { Viewer(it, onClose = { licence = null }) }
+        if (SettingsGroup.Projects in groups) {
+            val tint = colors.tint4
+            val shipped by produceState<String?>(null) {
+                value = withContext(Dispatchers.IO) { app.engine.runtimes().runtimes.joinToString(" · ") { it.name } }
+            }
+            val rows = buildList<SettingsRow> {
+                if (show("runtimes")) add { d -> GroupRow("Runtimes", icon = Icons.Rounded.Terminal, iconTint = tint, value = shipped?.ifEmpty { "None" } ?: "…", onClick = onRuntimes, divider = d) }
+                if (show("packages")) add { d -> GroupRow("Packages", icon = Icons.Rounded.Extension, iconTint = tint, onClick = { engineSheet = EngineSheet.Packages }, divider = d) }
+                if (show("mcp")) add { d -> GroupRow("MCP servers", icon = Icons.Rounded.Cable, iconTint = tint, onClick = { engineSheet = EngineSheet.Mcp }, divider = d) }
+            }
+            SettingsBlock(rows, header = SettingsGroup.Projects.title)
+        }
+
+        if (SettingsGroup.RemoteControl in groups) RemoteSection(app, show, onScan, onOpenHost, onResumeHost, onPairingText)
+        if (SettingsGroup.GitHub in groups) GitHubSection(app, header = SettingsGroup.GitHub.title)
+
+        if (SettingsGroup.Advanced in groups) {
+            val rows = buildList<SettingsRow> {
+                if (show("tuning")) add { d -> GroupRow("Retry and compaction", icon = Icons.Rounded.Tune, onClick = { engineSheet = EngineSheet.Tuning }, divider = d) }
+                if (show("reduce-motion")) add { d -> GroupRow("Reduce motion", icon = Icons.Rounded.Animation, value = settings.reduceMotion.label, onClick = { choice = Choice.ReduceMotion }, divider = d) }
+                if (show("haptics")) add { d -> GroupSwitchRow("Haptics", settings.haptics, { on -> update { it.copy(haptics = on) } }, icon = Icons.Rounded.Vibration, divider = d) }
+                if (show("notifications")) add { d -> NotificationsRow(d) }
+                if (show("background")) add { d -> BackgroundRunRow(d) }
+            }
+            SettingsBlock(rows, header = SettingsGroup.Advanced.title)
+        }
+
+        if (SettingsGroup.About in groups) {
+            val rows = buildList<SettingsRow> {
+                if (show("version")) {
+                    add { d -> GroupRow("Version", icon = Icons.Rounded.Info, value = app.appVersion, divider = d) }
+                    add { d -> GroupRow("This phone", icon = Icons.Rounded.PhoneAndroid, value = app.deviceName, divider = d) }
+                }
+                if (show("updates")) addAll(updateRows(app, settings.autoUpdateCheck) { on -> update { it.copy(autoUpdateCheck = on) } })
+                if (show("licences")) add { d -> GroupRow("Licences", icon = Icons.Rounded.Description, onClick = { licences = true }, divider = d) }
+            }
+            SettingsBlock(rows, header = SettingsGroup.About.title)
+        }
+    }
+
+    if (licences) {
+        LicencesSheet(
+            onPick = { name, kind, raw ->
+                licences = false
+                scope.launch { licence = ViewerContent(name, kind, readRaw(context, raw), wrap = true) }
+            },
+            onDismiss = { licences = false },
+        )
+    }
+    if (themes) {
+        ThemeSheet(
+            settings.theme,
+            settings.accent,
+            onTheme = { theme -> update { it.copy(theme = theme) } },
+            onAccent = { accent -> update { it.copy(accent = accent) } },
+            onDismiss = { themes = false },
+        )
+    }
+    if (textSize) TextSizeSheet(settings.textSize, onSelect = { step -> update { it.copy(textSize = step) } }, onDismiss = { textSize = false })
+    if (signingIn) GitHubSignInSheet(app, onDismiss = { signingIn = false })
+    if (voicePicker) {
+        VoicePickerSheet(settings.voiceName, settings.voiceRate, onPick = { name, label -> update { it.copy(voiceName = name, voiceLabel = label) } }, onDismiss = { voicePicker = false })
+    }
+    if (spendLimits) SpendLimitsSheet(app, onDismiss = { spendLimits = false })
+    val p = prefs
+    if (picking && p != null && (p.controller != null || p.models.isNotEmpty())) {
+        ModelSheet(p.models, p.match, onPick = { m ->
+            picking = false
+            p.update { it.copy(defaultModel = "${m.provider}/${m.id}") }
+        }, onDismiss = { picking = false })
+    }
+    val closeEngine = { engineSheet = null }
+    when (engineSheet) {
+        EngineSheet.Packages -> PackagesSheet(app.engine, app.http, p?.anyLive, null, message, closeEngine)
+        EngineSheet.Mcp -> McpSheet(app.engine, null, message, closeEngine)
+        EngineSheet.Tuning -> TuningSheet(app.engine.agentDir, null, message, closeEngine)
+        null -> Unit
+    }
+    val dismiss = { choice = null }
+    when (choice) {
+        Choice.Thinking -> if (p != null) {
+            ChoiceSheet(
+                "Thinking level",
+                AgentDefaults.THINKING_LEVELS.map { it to thinkingLabel(it) },
+                p.current.defaultThinking.takeIf { it in AgentDefaults.THINKING_LEVELS } ?: "medium",
+                onSelect = { level -> p.update { it.copy(defaultThinking = level) } },
+                onDismiss = dismiss,
+            )
+        }
+        Choice.Steering -> if (p != null) {
+            ChoiceSheet("Steering", QueueMode.entries.map { it to it.label }, p.current.steeringMode, onSelect = { m -> p.update { it.copy(steeringMode = m) } }, onDismiss = dismiss)
+        }
+        Choice.FollowUp -> if (p != null) {
+            ChoiceSheet("Follow-up", QueueMode.entries.map { it to it.label }, p.current.followUpMode, onSelect = { m -> p.update { it.copy(followUpMode = m) } }, onDismiss = dismiss)
+        }
+        Choice.Retries -> if (p != null) {
+            ChoiceSheet(
+                "Retries",
+                AgentDefaults.RETRY_CHOICES.map { it to if (it == 1) "1 attempt" else "$it attempts" },
+                p.current.maxRetries.takeIf { it in AgentDefaults.RETRY_CHOICES } ?: 3,
+                onSelect = { n -> p.update { it.copy(maxRetries = n) } },
+                onDismiss = dismiss,
+            )
+        }
+        Choice.Density -> ChoiceSheet("Density", Density.entries.map { it to it.label }, settings.density, onSelect = { v -> update { it.copy(density = v) } }, onDismiss = dismiss)
+        Choice.ToolPreview -> ChoiceSheet(
+            "Tool output",
+            AppSettings.TOOL_PREVIEW_CHOICES.map { it to "$it lines" },
+            settings.toolPreviewLines,
+            onSelect = { n -> update { it.copy(toolPreviewLines = n) } },
+            onDismiss = dismiss,
+        )
+        Choice.VoiceRate -> ChoiceSheet(
+            "Speech rate",
+            AppSettings.VOICE_RATE_CHOICES.map { it to rateLabel(it) },
+            settings.voiceRate,
+            onSelect = { n -> update { it.copy(voiceRate = n) } },
+            onDismiss = dismiss,
+        )
+        Choice.ReduceMotion -> ChoiceSheet("Reduce motion", ReduceMotion.entries.map { it to it.label }, settings.reduceMotion, onSelect = { r -> update { it.copy(reduceMotion = r) } }, onDismiss = dismiss)
+        null -> Unit
+    }
+}
+
+/**
+ * The account card that leads Settings: the GitHub identity (a 44dp avatar disc, the name and @login, or "Sign in with
+ * GitHub") and the default model with its mark. A tap on the signed-out account opens the sign-in sheet; a tap on the
+ * model opens the model picker.
+ */
+@Composable
+private fun AccountCard(
+    github: GitHubState,
+    modelText: String?,
+    modelLeading: (@Composable BoxScope.() -> Unit)?,
+    onAccount: () -> Unit,
+    onModel: () -> Unit,
+) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val account = (github as? GitHubState.SignedIn)?.account
+    InsetGroup(modifier = Modifier.padding(top = Space.sm)) {
+        Box(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .then(if (account == null) Modifier.pressable(onAccount, shape = RectangleShape, pressedScale = 1f, label = "Sign in with GitHub") else Modifier)
+                    .heightIn(min = 76.dp)
+                    .padding(start = Space.lg, end = Space.md, top = Space.md, bottom = Space.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(48.dp).background(colors.surface3, CircleShape).border(1.dp, colors.line, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Rounded.AccountCircle, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(30.dp))
+                }
+                Spacer(Modifier.width(Space.md + Space.xxs))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        account?.let { it.name ?: "@${it.login}" } ?: "Sign in with GitHub",
+                        style = type.rowTitle.copy(fontWeight = FontWeight.SemiBold),
+                        color = colors.ink1,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        account?.let { "@${it.login} · GitHub" } ?: "Clone, push and pull",
+                        style = type.rowMeta,
+                        color = colors.ink3,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = Space.xxs),
+                    )
+                }
+                if (account == null) Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.md))
+            }
+            GroupDivider(Modifier.align(Alignment.BottomStart))
+        }
+        GroupRow(
+            "Default model",
+            icon = Icons.Rounded.AutoAwesome,
+            iconTint = colors.tint0,
+            leading = modelLeading,
+            meta = modelText ?: "…",
+            metaMaxLines = 1,
+            onClick = onModel,
+            divider = false,
+        )
+    }
+}
+
+/** Appearance > Text size: the "A" steps and a live prose preview; a pick applies at once. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TextSizeSheet(step: Int, onSelect: (Int) -> Unit, onDismiss: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    PiSheet(onDismiss = onDismiss) {
+        SheetHeader("Text size")
+        Column(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = Space.sm, bottom = Space.lg)) {
+            // Growing "A" glyphs, one per step: reads as a text size control at a glance.
+            val steps = (AppSettings.TEXT_SIZE_MIN..AppSettings.TEXT_SIZE_MAX).toList()
+            SegmentedSlots(
+                options = steps,
+                selected = step,
+                onSelect = onSelect,
+                labels = steps.map(::textSizeLabel),
+                height = 48.dp,
+                modifier = Modifier.fillMaxWidth(),
+            ) { i, on ->
+                Text(
+                    "A",
+                    style = type.label.copy(fontSize = type.label.fontSize * (0.93f + 0.2f * i), fontWeight = FontWeight.SemiBold),
+                    color = if (on) colors.ink1 else colors.ink3,
+                )
+            }
+            Spacer(Modifier.height(Space.lg))
+            val f = PiType.factorFor(step)
+            Text(
+                "Pi reads the failing test, fixes the parser and runs the suite again.",
+                style = type.prose.let { p -> p.copy(fontSize = p.fontSize * f, lineHeight = p.lineHeight * f) },
+                color = colors.ink1,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(colors.canvas, RoundedCornerShape(Radius.tile))
+                    .border(1.dp, colors.line, RoundedCornerShape(Radius.tile))
+                    .padding(Space.lg),
+            )
         }
     }
 }
 
-private const val THEME_TILES_PER_ROW = 4
+/** The bundled projects' licences, one row each; a tap opens the text in the viewer. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LicencesSheet(onPick: (name: String, kind: String, raw: Int) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val close = rememberSheetCloser(state)
+    PiSheet(onDismiss = onDismiss, state = state) {
+        SheetHeader("Licences")
+        LICENCES.forEachIndexed { i, (name, kind, raw) ->
+            InsetRow(
+                name,
+                onClick = { close { onPick(name, kind, raw) } },
+                meta = kind,
+                leading = { Icon(Icons.Rounded.Description, contentDescription = null, tint = Pi.colors.ink2, modifier = Modifier.size(IconSize.md)) },
+                chevron = true,
+                divider = i < LICENCES.lastIndex,
+            )
+        }
+    }
+}
+
+private val LICENCES = listOf(
+    Triple("Inter", "SIL Open Font License 1.1", R.raw.license_inter),
+    Triple("JetBrains Mono", "SIL Open Font License 1.1", R.raw.license_jetbrains_mono),
+    Triple("Mermaid", "MIT, with the projects it bundles", R.raw.license_mermaid),
+    Triple("Termux terminal", "Apache License 2.0", R.raw.license_termux_terminal),
+    Triple("Lobe Icons", "MIT", R.raw.license_lobe_icons),
+)
 
 private fun textSizeLabel(step: Int) = when (step) {
     -1 -> "Small"
@@ -283,164 +591,6 @@ private fun textSizeLabel(step: Int) = when (step) {
     else -> "Larger"
 }
 
-private fun readRaw(context: Context, @RawRes id: Int): String = context.resources.openRawResource(id).bufferedReader().use { it.readText() }
-
-private fun openNotificationSettings(context: Context) {
-    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(intent) }
-}
-
-@Composable
-private fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        SectionLabel(title, Modifier.padding(bottom = 10.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(Pi.colors.surface1, RoundedCornerShape(Radius.lg))
-                .border(1.dp, Pi.colors.line, RoundedCornerShape(Radius.lg))
-                .padding(16.dp),
-            content = content,
-        )
-    }
-}
-
-@Composable
-private fun Label(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = Pi.type.bodyStrong, color = Pi.colors.ink1, modifier = modifier.padding(bottom = 10.dp))
-}
-
-/** A theme swatch drawn with that theme's own canvas, surface and ink. */
-@Composable
-private fun ThemeTile(theme: ThemeId, accent: AccentId, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val current = Pi.colors
-    val c = remember(theme, accent) { PiColors.of(theme, accent) }
-    val ring by animateColorAsState(if (selected) current.accent else current.line, PiMotion.effects(), label = "tile")
-    val shape = RoundedCornerShape(Radius.md)
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .aspectRatio(0.78f)
-                .pressable(onClick, shape = shape, role = Role.RadioButton, label = theme.label)
-                .border(if (selected) 1.5.dp else 1.dp, ring, shape)
-                .padding(if (selected) 3.dp else 0.dp),
-        ) {
-            Canvas(Modifier.fillMaxSize()) {
-                val r = (Radius.md - if (selected) 3.dp else 0.dp).toPx().coerceAtLeast(4f)
-                drawRoundRect(c.canvas, cornerRadius = CornerRadius(r))
-                val pad = size.width * 0.14f
-                // A user bubble, two lines of prose and a composer.
-                drawRoundRect(c.surface2, Offset(size.width * 0.42f, pad), Size(size.width - size.width * 0.42f - pad, size.height * 0.13f), CornerRadius(6.dp.toPx()))
-                val lineH = size.height * 0.045f
-                drawRoundRect(c.ink1.copy(alpha = 0.85f), Offset(pad, size.height * 0.36f), Size(size.width * 0.62f, lineH), CornerRadius(lineH / 2))
-                drawRoundRect(c.ink2.copy(alpha = 0.8f), Offset(pad, size.height * 0.36f + lineH * 2f), Size(size.width * 0.48f, lineH), CornerRadius(lineH / 2))
-                drawRoundRect(c.ink3.copy(alpha = 0.8f), Offset(pad, size.height * 0.36f + lineH * 4f), Size(size.width * 0.34f, lineH), CornerRadius(lineH / 2))
-                val composerTop = size.height * 0.74f
-                drawRoundRect(c.surface1, Offset(pad * 0.7f, composerTop), Size(size.width - pad * 1.4f, size.height * 0.17f), CornerRadius(8.dp.toPx()))
-                drawRoundRect(c.lineStrong, Offset(pad * 0.7f, composerTop), Size(size.width - pad * 1.4f, size.height * 0.17f), CornerRadius(8.dp.toPx()), style = Stroke(1.dp.toPx()))
-                val dot = size.height * 0.085f
-                drawCircle(c.accent, dot / 2, Offset(size.width - pad * 0.7f - dot * 0.9f, composerTop + size.height * 0.085f))
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(theme.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun AccentDot(accent: AccentId, theme: ThemeId, selected: Boolean, onClick: () -> Unit) {
-    val current = Pi.colors
-    val c = remember(theme, accent) { PiColors.of(theme, accent) }
-    val ring by animateColorAsState(if (selected) c.accent else current.canvas.copy(alpha = 0f), PiMotion.effects(), label = "accent")
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(
-            Modifier
-                .size(48.dp)
-                .pressable(onClick, shape = CircleShape, pressedScale = 0.92f, role = Role.RadioButton, label = accent.label)
-                .border(1.5.dp, ring, CircleShape)
-                .padding(5.dp)
-                .background(c.accent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            val shown by animateFloatAsState(if (selected) 1f else 0f, PiMotion.inPlace(PiMotion.QUICK), label = "check")
-            Icon(
-                Icons.Rounded.Check,
-                contentDescription = null,
-                tint = c.onAccent,
-                modifier = Modifier.size(18.dp).graphicsLayer {
-                    alpha = shown
-                    scaleX = 0.6f + 0.4f * shown
-                    scaleY = 0.6f + 0.4f * shown
-                },
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(accent.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink3)
-    }
-}
-
-@Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    val colors = Pi.colors
-    val haptics = Pi.haptics
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .pressable({
-                haptics.toggle(!checked)
-                onChange(!checked)
-            }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = Role.Switch),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = Pi.type.bodyStrong, color = colors.ink1)
-            Text(subtitle, style = Pi.type.meta, color = colors.ink3)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = null,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = colors.onAccent,
-                checkedTrackColor = colors.accent,
-                checkedBorderColor = colors.accent,
-                uncheckedThumbColor = colors.ink3,
-                uncheckedTrackColor = colors.surface3,
-                uncheckedBorderColor = colors.lineStrong,
-            ),
-        )
-    }
-}
-
-@Composable
-private fun InfoLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(110.dp))
-        Text(value, style = Pi.type.body, color = Pi.colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
-@Composable
-private fun KeyLine(label: String, id: String, color: Color) {
-    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(110.dp))
-        Text("[$id]", style = Pi.type.mono, color = color)
-    }
-}
-
-@Composable
-private fun NavLine(label: String, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
-        Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pi.colors.ink4, modifier = Modifier.size(20.dp))
-    }
+private suspend fun readRaw(context: Context, @RawRes id: Int): String = withContext(Dispatchers.IO) {
+    context.resources.openRawResource(id).bufferedReader().use { it.readText() }
 }

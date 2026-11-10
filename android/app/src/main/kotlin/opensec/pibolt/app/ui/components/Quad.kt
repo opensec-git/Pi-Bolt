@@ -24,11 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -43,13 +41,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.ui.theme.LocalQuadClock
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import kotlin.math.roundToInt
 
 /**
  * The Quad spinner: a 3x3 grid that shows what the agent is doing. Ticks come from the window's shared clock and are
- * read only while drawing. [animate] false (or reduce motion) draws the mode's still frame.
+ * read only while drawing, in the spinner's own layer. [animate] false (or reduce motion) draws the mode's still frame.
  */
 @Composable
 fun QuadSpinner(
@@ -74,6 +73,8 @@ fun QuadSpinner(
         modifier
             .size(size)
             .semantics { contentDescription = mode.label }
+            // Its own layer while it animates: a tick re-records these nine cells, not the card, sheet or bar around it.
+            .then(if (live) Modifier.graphicsLayer() else Modifier)
             .drawBehind {
                 val t = ticket[0]
                 if (live && t >= 0 && clock.canAnimate(t)) {
@@ -163,15 +164,15 @@ enum class StepState { Active, Done, Failed, Skipped }
  * (160 ms, scale 0.7 → 1) only in the live turn.
  */
 @Composable
-fun StepSlot(state: StepState, mode: QuadMode, live: Boolean, modifier: Modifier = Modifier, size: Dp = 20.dp, spinnerSize: Dp = 12.dp) {
+fun StepSlot(state: StepState, mode: QuadMode, live: Boolean, modifier: Modifier = Modifier, size: Dp = IconSize.md, spinnerSize: Dp = IconSize.xs) {
     val colors = Pi.colors
     val animate = live && !Pi.reduceMotion
     AnimatedContent(
         targetState = state,
         transitionSpec = {
             if (animate) {
-                (fadeIn(tween(160, easing = PiMotion.InPlace)) + scaleIn(tween(160, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith
-                    fadeOut(tween(110))
+                (fadeIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace)) + scaleIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith
+                    fadeOut(tween(PiMotion.exit(PiMotion.GLYPH)))
             } else {
                 fadeIn(tween(0)) togetherWith fadeOut(tween(0))
             }

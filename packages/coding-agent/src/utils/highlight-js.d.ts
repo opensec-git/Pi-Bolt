@@ -2,6 +2,9 @@ interface HighlightJsResult {
 	value: string;
 	/** What made the result (its token tree): the emitter class the API is configured with. */
 	emitter: unknown;
+	/** Set when highlight.js gave up (an illegal match without ignoreIllegals, or an error): the value is the code escaped. */
+	illegal?: boolean;
+	errorRaised?: unknown;
 }
 
 interface HighlightJsOptions {
@@ -11,6 +14,7 @@ interface HighlightJsOptions {
 
 interface HighlightJsLanguageDefinition {
 	readonly name?: string;
+	readonly aliases?: string[];
 }
 
 type HighlightJsLanguageFactory = (hljs: HighlightJsApi) => HighlightJsLanguageDefinition;

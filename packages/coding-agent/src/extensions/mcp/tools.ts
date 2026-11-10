@@ -10,7 +10,6 @@
  * errors (`isError`) are error results for the model, but scripts still resolve to the result.
  */
 
-import { createHash } from "node:crypto";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ImageContent, JsonValue, TextContent } from "@earendil-works/pi-ai";
 import {
@@ -88,7 +87,13 @@ export function createMcpToolName(
 ): string {
 	const name = `mcp__${server}__${tool}`.replace(/[^A-Za-z0-9_]/g, "_");
 	if (name.length <= MAX_TOOL_NAME_LENGTH && !isTaken(name)) return name;
-	const hash = createHash("sha256").update(`${server}\0${tool}`).digest("hex").slice(0, 8);
+	// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+	const hash = process
+		.getBuiltinModule("node:crypto")
+		.createHash("sha256")
+		.update(`${server}\0${tool}`)
+		.digest("hex")
+		.slice(0, 8);
 	return `${name.slice(0, MAX_TOOL_NAME_LENGTH - hash.length - 1)}_${hash}`;
 }
 

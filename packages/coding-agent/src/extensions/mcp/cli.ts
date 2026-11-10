@@ -8,10 +8,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import chalk from "chalk";
 import { COMMAND_NAME, CONFIG_DIR_NAME } from "../../config.ts";
 import { validateMcpServerConfig } from "../../core/mcp-servers.ts";
 import { ProjectTrustStore } from "../../core/trust-manager.ts";
+import { chalk } from "../../utils/lazy-packages.ts";
 import { openBrowser } from "../../utils/open-browser.ts";
 import {
 	addMcpServerConfig,

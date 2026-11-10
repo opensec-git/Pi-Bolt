@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -112,6 +113,8 @@ private class TestHost(
                 sendJson(webSocket, """{"type":"agent_start"}""")
                 sendJson(webSocket, """{"type":"agent_settled","aborted":false}""")
             }
+            // The background service hands the port to a terminal's /remote-control.
+            "test_handoff" -> webSocket.close(1012, null)
             else -> sendJson(webSocket, """{"id":"$id","type":"response","command":"${command.type}","success":false,"error":"Not available over remote control"}""")
         }
     }
@@ -267,6 +270,19 @@ class RemoteBackendTest {
         assertFalse(backend.connect())
         val state = assertIs<ConnectionState.Disconnected>(backend.state.value)
         assertEquals(DisconnectReason.Malformed, state.reason)
+    }
+
+    @Test
+    fun closeCode1012EndsTheConnectionAsAHandoff(): Unit = runBlocking {
+        val host = TestHost(hostKey, secret, paired)
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(host).build())
+        val backend = RemoteBackend(config(KeyPair.generate(), secret, listOf(endpoint())))
+        assertTrue(backend.connect())
+        assertTrue(backend.send(buildJsonObject { put("type", "test_handoff"); put("id", "h1") }))
+        val end = withTimeout(5_000) { backend.state.first { it is ConnectionState.Disconnected } } as ConnectionState.Disconnected
+        assertEquals(DisconnectReason.Handoff, end.reason)
+        assertTrue(end.reason.retryable, "the app reconnects at once, to the same addresses")
+        backend.close()
     }
 
     @Test

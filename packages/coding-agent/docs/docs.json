@@ -126,6 +126,10 @@
               "path": "tui.md"
             },
             {
+              "title": "Build Mobile UI for Extensions",
+              "path": "mobile-ui.md"
+            },
+            {
               "title": "Integrate with the CLI",
               "path": "cli-integration.md"
             },

@@ -26,7 +26,25 @@ export const CloseCode = {
 	HandshakeTimeout: 4408,
 	TooManyAttempts: 4429,
 	GoingAway: 1001,
+	/**
+	 * The background service handed its port to a terminal's `/remote-control` (or took it back). Clients treat it as a
+	 * dropped connection and reconnect at once, to the same addresses.
+	 */
+	Handoff: 1012,
+	/**
+	 * The same device completed a newer handshake (it changed networks); its older connection is closed. The phone
+	 * already uses the newer one and ignores the old socket's close. A plain close, not one clients retry: two installs
+	 * sharing one device key (a restored backup) would otherwise take the connection from each other forever.
+	 */
+	Replaced: 1000,
 } as const;
+
+/**
+ * Host to client, after `remote_hello` on connect and again whenever the list changes: every address the host listens on
+ * now, in preference order (`e` of the pairing code). A quick tunnel's address changes when it restarts; a phone that
+ * stores this list keeps reaching the host from anywhere without a new QR code. Older clients ignore it.
+ */
+export const ENDPOINTS_MESSAGE = "remote_endpoints";
 
 export interface PairingPayload {
 	v: number;
@@ -44,6 +62,21 @@ export interface PairingPayload {
 
 export function encodePairingUri(payload: PairingPayload): string {
 	return `${PAIRING_URI_PREFIX}${toBase64Url(Buffer.from(JSON.stringify(payload), "utf8"))}`;
+}
+
+/**
+ * A code that carries the host's current addresses but pairs nothing (`pi-bolt service status`): its secret is all zeros
+ * and it expired at the epoch. A phone that knows the host takes the addresses; any other phone says it has expired.
+ */
+export function encodeReconnectUri(hostName: string, hostPublicKey: Buffer, endpoints: string[]): string {
+	return encodePairingUri({
+		v: PROTOCOL_VERSION,
+		n: hostName,
+		k: toBase64Url(hostPublicKey),
+		s: toBase64Url(Buffer.alloc(32)),
+		e: endpoints,
+		x: 0,
+	});
 }
 
 export function decodePairingUri(uri: string): PairingPayload {

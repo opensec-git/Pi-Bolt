@@ -556,6 +556,52 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("asks the document to complete itself before a viewport key or mouse event and render(), laying it out first", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		const lines = (from: number) =>
+			Array.from({ length: 11 - from }, (_, index) => `line ${from + index}`).join("\n");
+		// Only the end of the document, as a resumed transcript draws its first frame.
+		const text = new Text(lines(5), 0, 0);
+		tui.addChild(text);
+		let reads = 0;
+		let complete = false;
+		tui.beforeDocumentRead = () => {
+			reads++;
+			if (complete) return false;
+			complete = true;
+			text.setText(lines(1));
+			return true;
+		};
+		tui.start();
+		await terminal.waitForRender();
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 7", "line 8", "line 9", "line 10"],
+		);
+
+		terminal.sendInput("x");
+		terminal.sendInput("\x1b[I");
+		assert.strictEqual(reads, 0, "typing and focus events do not read the document");
+
+		// Page up moves one row (four rows of overlap) from the end of the whole document, not of the part drawn before.
+		terminal.sendInput("\x1b[5~");
+		await terminal.waitForRender();
+		assert.strictEqual(reads, 1);
+		assert.deepStrictEqual(
+			terminal.getViewport().map((line) => line.trimEnd()),
+			["line 6", "line 7", "line 8", "line 9"],
+		);
+		assert.strictEqual(tui.viewportTop, 5);
+
+		terminal.sendInput("\x1b[<64;1;1M");
+		await terminal.waitForRender();
+		assert.strictEqual(reads, 2);
+		tui.render(20);
+		assert.strictEqual(reads, 3);
+		tui.stop();
+	});
+
 	it("supports configurable keyboard viewport navigation with four rows of page overlap", async () => {
 		const terminal = new VirtualTerminal(20, 8);
 		const tui = new TuiAltScreen(terminal);

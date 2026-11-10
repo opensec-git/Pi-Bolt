@@ -1,0 +1,67 @@
+'use strict';
+const http = require('http');
+const { promisify } = require("util");
+
+/* eslint-disable no-console */
+class Server extends EventEmitter {
+  constructor(port = 8080, host = "localhost") {
+    super();
+    this.port = port;
+    this.host = host;
+    this.routes = new Map();
+  }
+
+  route(method, path, handler) {
+    this.routes.set(`${method} ${path}`, handler);
+    return this;
+  }
+
+  listen(cb) {
+    const server = http.createServer(async (req, res) => {
+      const handler = this.routes.get(`${req.method} ${req.url}`);
+      if (!handler) {
+        res.statusCode = 404;
+        return res.end('not found');
+      }
+      try {
+        await handler(req, res);
+      } catch (err) {
+        console.error(err.stack || err);
+        res.statusCode = 500;
+        res.end(String(err));
+      }
+    });
+    server.listen(this.port, this.host, cb);
+  }
+}
+
+function parseQuery(query) {
+  return query
+    .split('&')
+    .filter(Boolean)
+    .map((pair) => pair.split('=').map(decodeURIComponent))
+    .reduce((acc, [k, v]) => ({ ...acc, [k]: v }), {});
+}
+
+const re = /\/api\/(v\d+)\/([^/]+)/;
+const total = items.reduce((sum, item) => sum + item.price * item.qty, 0) / 100;
+label: for (let i = 0; i < 10; i++) {
+  if (i % 2) continue label;
+  else break label;
+}
+
+export const config = {
+  name: "app",
+  version: 3,
+  flags: [true, false, null, undefined, NaN, Infinity],
+  callback: function (error, value) {
+    if (error) throw error;
+    return value?.result ?? 'none';
+  },
+};
+const tpl = html`<ul>${items.map((i) => html`<li>${i}</li>`)}</ul>`;
+const style = css`
+  .box { color: red; }
+`;
+async function* gen() { yield* other(); }
+new Server().route('GET', '/', (req, res) => res.end('ok')).listen(() => console.log("up"));

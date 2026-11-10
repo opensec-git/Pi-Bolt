@@ -1,0 +1,27 @@
+{
+  "v": 1,
+  "title": "Deploy",
+  "subtitle": "production",
+  "icon": "rocket",
+  "body": [
+    {
+      "type": "row",
+      "children": [
+        { "type": "chip", "id": "state", "label": "Running", "tone": "running" },
+        { "type": "chip", "label": "main", "icon": "branch" }
+      ]
+    },
+    { "type": "progress", "id": "bar", "value": 0.6, "label": "Uploading assets", "detail": "12 of 20 files" },
+    {
+      "type": "kv",
+      "items": [
+        { "key": "Commit", "value": "1a2b3c4", "mono": true, "copy": true },
+        { "key": "Started", "value": "2 min ago" }
+      ]
+    }
+  ],
+  "actions": [
+    { "type": "button", "id": "logs", "label": "Logs", "icon": "terminal" },
+    { "type": "button", "id": "cancel", "label": "Cancel", "style": "danger", "confirm": { "title": "Cancel the deploy?", "message": "The release stops where it is.", "label": "Cancel deploy" } }
+  ]
+}

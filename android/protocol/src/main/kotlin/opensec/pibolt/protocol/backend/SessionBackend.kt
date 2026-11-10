@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Where a Pi session lives. The UI depends only on this and the RPC layer, so a session on a computer (over remote
- * control, [RemoteBackend]) and one running on the phone itself (stdio RPC, phase 2) look the same.
+ * control, [RemoteBackend]) and one running on the phone itself (stdio RPC, [LocalBackend]) look the same.
  */
 interface SessionBackend {
     val state: StateFlow<ConnectionState>
@@ -42,6 +42,9 @@ enum class DisconnectReason {
     /** 1001: Pi-Bolt stopped remote control. */
     HostStopped,
 
+    /** 1012: the background service handed the port to the computer's terminal (`/remote-control`). Reconnect at once. */
+    Handoff,
+
     /** 4400: the host could not read the handshake or a message. */
     Malformed,
 
@@ -53,15 +56,19 @@ enum class DisconnectReason {
 
     /** 4429: too many failed handshakes from this address. */
     RateLimited,
+
+    /** The on-device engine could not start, did not answer, or keeps stopping. The detail says why. */
+    EngineFailed,
     ;
 
     /** Worth retrying automatically. */
-    val retryable: Boolean get() = this == Unreachable || this == Lost || this == HandshakeTimeout
+    val retryable: Boolean get() = this == Unreachable || this == Lost || this == HandshakeTimeout || this == Handoff
 
     companion object {
         fun fromCloseCode(code: Int): DisconnectReason = when (code) {
             1000 -> Closed
             1001 -> HostStopped
+            1012 -> Handoff
             4400 -> Malformed
             4403 -> Unauthorized
             4408 -> HandshakeTimeout

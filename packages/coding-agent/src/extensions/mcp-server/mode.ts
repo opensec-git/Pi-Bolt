@@ -22,7 +22,7 @@ import {
 	createAgentSessionRuntime,
 } from "../../core/agent-session-runtime.ts";
 import { formatNoApiKeyFoundMessage } from "../../core/auth-guidance.ts";
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../../core/extensions/index.ts";
+import type { ExtensionUIDialogOptions, ExtensionUIHost } from "../../core/extensions/index.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import { flushRawStdout, takeOverStdout, writeRawStdout } from "../../core/output-guard.ts";
 import { SessionManager } from "../../core/session-manager.ts";
@@ -623,7 +623,7 @@ class PiSession {
 		};
 	}
 
-	private createUIContext(): ExtensionUIContext {
+	private createUIContext(): ExtensionUIHost {
 		const server = this.server;
 		return clientUIContext({
 			select: async (title, options, opts) => {

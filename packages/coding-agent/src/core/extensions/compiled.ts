@@ -11,7 +11,6 @@
  * which is gone) is loaded from its files, as Pi loads it, with a warning; it then works,
  * or fails with Pi's own error. With nothing compiled in (every other build), nothing here is used.
  */
-import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "./types.ts";
@@ -103,7 +102,8 @@ export function extensionFingerprint(
 ): string | undefined {
 	try {
 		if (source.files) {
-			const hash = createHash("sha256");
+			// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+			const hash = process.getBuiltinModule("node:crypto").createHash("sha256");
 			for (const file of source.files) hash.update(`${statPart(file)}\n`);
 			return `files:${source.files.length}:${hash.digest("hex").slice(0, 32)}`;
 		}

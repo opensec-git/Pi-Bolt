@@ -1,16 +1,12 @@
 import { mkdir as fsMkdir, writeFile as fsWriteFile } from "fs/promises";
 import { dirname } from "path";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { writeRenderers } from "./renderers/write.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
-
-const writeSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
-	content: Type.String({ description: "Content to write to the file" }),
-});
+import { writeSchema } from "./tool-schemas.generated.ts";
 
 export const writeToolSystemPromptContribution = {
 	snippet: "Create or overwrite files",

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, toNamespacedPath } from "node:path";
 import { getCwdRelativePath } from "./paths.ts";
@@ -71,7 +70,7 @@ export function quarantineWindowsNativeDependencies(packageDir: string): void {
 		return;
 	}
 
-	const quarantineRunDir = join(quarantineRoot, `${Date.now()}-${process.pid}-${randomUUID()}`);
+	const quarantineRunDir = join(quarantineRoot, `${Date.now()}-${process.pid}-${crypto.randomUUID()}`);
 	for (const loadedFile of loadedFiles) {
 		if (!existsSync(loadedFile)) {
 			continue;

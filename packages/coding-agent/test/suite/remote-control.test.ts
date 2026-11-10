@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,12 +9,13 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
-import { RemoteControlController } from "../../src/remote-control/controller.ts";
+import type { RemoteControlSettings } from "../../src/core/settings-schema.ts";
+import { RemoteControlController, type RemoteControlDeps } from "../../src/remote-control/controller.ts";
 import { generateKeyPair } from "../../src/remote-control/noise.ts";
 import { CloseCode, decodePairingUri, encodePairingUri } from "../../src/remote-control/protocol.ts";
 import { RemoteControlServer } from "../../src/remote-control/server.ts";
 import { RemoteControlStore } from "../../src/remote-control/store.ts";
-import { startTunnel } from "../../src/remote-control/tunnel.ts";
+import { installCloudflared, startTunnel, TunnelError } from "../../src/remote-control/tunnel.ts";
 import { createHarness, type Harness } from "./harness.ts";
 import { connectTestClient, type TestClient } from "./remote-control-client.ts";
 
@@ -107,6 +109,99 @@ describe("remote control", () => {
 		const code = uri();
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		await expect(connectTestClient(code, generateKeyPair())).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
+	});
+
+	it("keeps the secret when a phone abandons the handshake, so its retry with the same QR code pairs", async () => {
+		const { server, store, endpoint, uri } = await setup({ firstFrameTimeoutMs: 300 });
+		const code = uri();
+		const phone = generateKeyPair();
+		let recorded: Buffer | undefined;
+		// The phone's 3-second timeout fires after message 1 (a slow network, iOS's Local Network prompt).
+		const stalled = await connectTestClient(code, phone, {
+			ready: false,
+			onMessage1: (frame) => {
+				recorded = frame;
+			},
+		});
+		expect(stalled.welcome.paired).toBe(true);
+		stalled.close();
+		await stalled.closed;
+		// A replay of its message 1 cannot send remote_ready either: the host times it out.
+		const replay = await openIdle(endpoint);
+		const replayClosed = new Promise<number>((resolve) => replay.on("close", resolve));
+		replay.send(recorded as Buffer);
+		expect(await replayClosed).toBe(CloseCode.HandshakeTimeout);
+		expect(store.devices()).toEqual([]);
+		expect(server.clients()).toEqual([]);
+
+		const retry = track(await connectTestClient(code, phone, { device: "iPhone" }));
+		expect(retry.welcome.paired).toBe(true);
+		expect(store.devices().map((device) => device.name)).toEqual(["iPhone"]);
+	});
+
+	it("pairs exactly one of two phones that confirm with the same secret", async () => {
+		const { server, store, uri } = await setup();
+		const code = uri();
+		// Both are past message 2 before either confirms.
+		const [first, second] = await Promise.all([
+			connectTestClient(code, generateKeyPair(), { ready: false, device: "A" }),
+			connectTestClient(code, generateKeyPair(), { ready: false, device: "B" }),
+		]);
+		track(first);
+		track(second);
+		expect(first.welcome.paired && second.welcome.paired).toBe(true);
+		const outcome = (client: TestClient) =>
+			Promise.race([
+				client.waitFor((message) => message.type === "remote_hello").then(() => "paired"),
+				client.closed,
+			]);
+		first.send({ type: "remote_ready" });
+		second.send({ type: "remote_ready" });
+		const results = await Promise.all([outcome(first), outcome(second)]);
+		expect(results.sort()).toEqual([CloseCode.NotAuthorized, "paired"].sort());
+		expect(store.devices()).toHaveLength(1);
+		expect(server.clients()).toHaveLength(1);
+		// Phones that each run a whole handshake in parallel: one pairs, the other is refused.
+		const fresh = uri();
+		const raced = await Promise.allSettled([
+			connectTestClient(fresh, generateKeyPair()),
+			connectTestClient(fresh, generateKeyPair()),
+		]);
+		for (const result of raced) if (result.status === "fulfilled") track(result.value);
+		expect(raced.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		expect(store.devices()).toHaveLength(2);
+	});
+
+	it("lets the same phone in on both connections when it pairs on two at once", async () => {
+		const { store, uri } = await setup();
+		const code = uri();
+		const phone = generateKeyPair();
+		const [lan, tunnel] = await Promise.all([
+			connectTestClient(code, phone, { ready: false }),
+			connectTestClient(code, phone, { ready: false }),
+		]);
+		track(lan);
+		track(tunnel);
+		lan.send({ type: "remote_ready" });
+		await lan.waitFor((message) => message.type === "remote_hello");
+		// The secret is spent, but this device is paired now: the second connection replaces the first.
+		tunnel.send({ type: "remote_ready" });
+		await tunnel.waitFor((message) => message.type === "remote_hello");
+		expect(await lan.closed).toBe(CloseCode.Replaced);
+		expect(store.devices()).toHaveLength(1);
+	});
+
+	it("refuses a secret reused after its pairing completed, or replaced by a new QR code mid-handshake", async () => {
+		const { server, store, uri } = await setup();
+		const code = uri();
+		track(await connectTestClient(code, generateKeyPair()));
+		await expect(connectTestClient(code, generateKeyPair())).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
+
+		const pending = track(await connectTestClient(uri(), generateKeyPair(), { ready: false }));
+		server.newPairing();
+		pending.send({ type: "remote_ready" });
+		expect(await pending.closed).toBe(CloseCode.NotAuthorized);
+		expect(store.devices()).toHaveLength(1);
 	});
 
 	it("strips control characters from the device name it shows", async () => {
@@ -367,6 +462,38 @@ describe("remote control", () => {
 		await expect(connectTestClient(uri(), key, { pair: false })).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
 	});
 
+	it("closes a phone's older connection when it connects again, as after leaving Wi-Fi for the tunnel", async () => {
+		const { harness, server, store, uri } = await setup();
+		const phone = generateKeyPair();
+		const lan = track(await connectTestClient(uri(), phone, { device: "motorola edge 60 pro" }));
+		const other = track(await connectTestClient(uri(), generateKeyPair(), { device: "M2101K6P" }));
+		expect(server.clients()).toHaveLength(2);
+
+		// Handshake message 1 alone (a replay, or a phone still connecting) proves nothing: the old socket stays.
+		const unconfirmed = track(
+			await connectTestClient(uri(), phone, { pair: false, ready: false, device: "motorola edge 60 pro" }),
+		);
+		expect(server.clients()).toHaveLength(2);
+		unconfirmed.close();
+
+		const tunnel = track(await connectTestClient(uri(), phone, { pair: false, device: "motorola edge 60 pro" }));
+		expect(await lan.closed).toBe(CloseCode.Replaced);
+		expect(
+			server
+				.clients()
+				.map((client) => client.device.name)
+				.sort(),
+		).toEqual(["M2101K6P", "motorola edge 60 pro"]);
+		expect(store.devices()).toHaveLength(2);
+		// Only the newest connection gets events and runs commands; the other phone is untouched.
+		harness.setResponses([fauxAssistantMessage("after the switch")]);
+		await harness.session.prompt("hi");
+		await tunnel.waitFor((message) => message.type === "agent_end");
+		await other.waitFor((message) => message.type === "agent_end");
+		expect(lan.received.some((message) => message.type === "agent_end")).toBe(false);
+		expect((await tunnel.request({ type: "get_state" })).success).toBe(true);
+	});
+
 	it("runs nothing from a phone revoked elsewhere, even before its socket closes", async () => {
 		const { harness, store, uri } = await setup();
 		const phone = track(await connectTestClient(uri(), generateKeyPair()));
@@ -389,36 +516,161 @@ describe("remote control", () => {
 	});
 
 	describe("controller", () => {
-		async function controllerSetup() {
+		async function controllerSetup(
+			options: {
+				remoteControl?: RemoteControlSettings;
+				deps?: Partial<RemoteControlDeps>;
+				select?: (title: string, options: string[]) => Promise<string | undefined>;
+				command?: string;
+			} = {},
+		) {
 			const harness = await createHarness();
 			cleanups.push(() => harness.cleanup());
 			const lines: string[][] = [];
 			const statuses: Array<string | undefined> = [];
-			const controller = new RemoteControlController({
-				getSession: () => harness.session,
-				settingsManager: SettingsManager.inMemory({ remoteControl: { port: 0 } }),
-				agentDir: tempDir(),
-				version: "9.9.9",
-				showStatus: () => {},
-				showWarning: () => {},
-				showError: (message) => {
-					throw new Error(message);
-				},
-				showLines: (block) => lines.push(block),
-				setStatus: (text) => statuses.push(text),
-				select: async () => undefined,
-				copyToClipboard: async () => {},
-				columns: () => 200,
-				rows: () => 60,
-				bindAddress: "127.0.0.1",
+			const warnings: string[] = [];
+			const settingsManager = SettingsManager.inMemory({
+				remoteControl: { enabled: true, port: 0, ...options.remoteControl },
 			});
+			const controller = new RemoteControlController(
+				{
+					getSession: () => harness.session,
+					settingsManager,
+					agentDir: tempDir(),
+					version: "9.9.9",
+					showStatus: () => {},
+					showWarning: (message) => warnings.push(message),
+					showError: (message) => {
+						throw new Error(message);
+					},
+					showLines: (block) => lines.push(block),
+					setStatus: (text) => statuses.push(text),
+					select: options.select ?? (async () => undefined),
+					copyToClipboard: async () => {},
+					columns: () => 200,
+					rows: () => 60,
+					bindAddress: "127.0.0.1",
+				},
+				// No real cloudflared in tests: by default it is "not installed".
+				{
+					startTunnel: async () => {
+						throw new TunnelError("cloudflared was not found.", true);
+					},
+					installCloudflared: async () => "not in tests",
+					platform: "darwin",
+					...options.deps,
+				},
+			);
 			cleanups.push(() => controller.stop());
-			await controller.handleCommand("");
+			await controller.handleCommand(options.command ?? "");
 			const pairing = decodePairingUri(controller.pairingUri ?? "");
 			const port = new URL(pairing.e[0] ?? "ws://127.0.0.1:1").port;
 			const uri = encodePairingUri({ ...pairing, e: [`ws://127.0.0.1:${port}/rc`] });
-			return { controller, lines, statuses, uri };
+			return { controller, lines, statuses, warnings, settingsManager, uri, pairing };
 		}
+
+		const fakeTunnel = (endpoint = "wss://quiet-fox.trycloudflare.com/rc") => {
+			const stopped: string[] = [];
+			return {
+				stopped,
+				start: async () => ({ endpoint, stop: () => stopped.push(endpoint) }),
+			};
+		};
+
+		it("starts the Cloudflare tunnel by default and puts both addresses in the QR code", async () => {
+			const tunnel = fakeTunnel();
+			const { pairing, statuses, lines } = await controllerSetup({ deps: { startTunnel: tunnel.start } });
+			expect(pairing.e.at(-1)).toBe("wss://quiet-fox.trycloudflare.com/rc");
+			expect(pairing.e[0]).toMatch(/^ws:\/\//);
+			expect(statuses.at(-1)).toBe("remote lan+tunnel: waiting");
+			expect(lines.at(-1)?.some((line) => line.includes("internet   wss://quiet-fox.trycloudflare.com/rc"))).toBe(
+				true,
+			);
+		});
+
+		it("stays on the LAN with /remote-control lan and when the tunnel setting is off", async () => {
+			let started = 0;
+			const start = async () => {
+				started++;
+				return { endpoint: "wss://x.trycloudflare.com/rc", stop: () => {} };
+			};
+			const lan = await controllerSetup({ deps: { startTunnel: start }, command: "lan" });
+			expect(lan.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			const off = await controllerSetup({ deps: { startTunnel: start }, remoteControl: { tunnel: "off" } });
+			expect(off.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			expect(started).toBe(0);
+		});
+
+		it("offers to install a missing cloudflared, then starts the tunnel", async () => {
+			let installed = false;
+			const asked: string[][] = [];
+			const { pairing } = await controllerSetup({
+				deps: {
+					startTunnel: async () => {
+						if (!installed) throw new TunnelError("cloudflared was not found.", true);
+						return { endpoint: "wss://after-install.trycloudflare.com/rc", stop: () => {} };
+					},
+					installCloudflared: async () => {
+						installed = true;
+						return undefined;
+					},
+				},
+				select: async (_title, options) => {
+					asked.push(options);
+					return options[0];
+				},
+			});
+			expect(asked[0]?.[0]).toBe("Install it now (brew install cloudflared)");
+			expect(pairing.e.at(-1)).toBe("wss://after-install.trycloudflare.com/rc");
+		});
+
+		it('remembers "Don\'t ask again" and keeps working on the LAN', async () => {
+			const first = await controllerSetup({ select: async (_title, options) => options.at(-1) });
+			expect(first.settingsManager.getRemoteControlSettings().askCloudflared).toBe(false);
+			expect(first.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			let asked = 0;
+			await controllerSetup({
+				remoteControl: { askCloudflared: false },
+				select: async () => {
+					asked++;
+					return undefined;
+				},
+			});
+			expect(asked).toBe(0);
+		});
+
+		it("stops a tunnel that finishes starting after /remote-control lan", async () => {
+			let finish: (() => void) | undefined;
+			const stopped: string[] = [];
+			const slowStart = () =>
+				new Promise<{ endpoint: string; stop: () => void }>((resolve) => {
+					finish = () =>
+						resolve({ endpoint: "wss://late.trycloudflare.com/rc", stop: () => stopped.push("late") });
+				});
+			const { controller } = await controllerSetup({ deps: { startTunnel: slowStart }, command: "lan" });
+			// The default command starts the tunnel; `lan` runs before it finishes (the editor does not await commands).
+			const pending = controller.handleCommand("");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await controller.handleCommand("lan");
+			finish?.();
+			await pending;
+			expect(stopped).toEqual(["late"]);
+			expect(decodePairingUri(controller.pairingUri ?? "").e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(
+				true,
+			);
+		});
+
+		it("keeps the LAN when the tunnel fails, but fails /remote-control tunnel", async () => {
+			const broken = async () => {
+				throw new TunnelError("cloudflared exited with code 1");
+			};
+			const auto = await controllerSetup({ deps: { startTunnel: broken } });
+			expect(auto.warnings.some((warning) => warning.includes("this network only"))).toBe(true);
+			expect(auto.pairing.e.length).toBeGreaterThan(0);
+			await expect(controllerSetup({ deps: { startTunnel: broken }, command: "tunnel" })).rejects.toThrow(
+				"cloudflared exited with code 1",
+			);
+		});
 
 		it("shows the QR code and footer status", async () => {
 			const { lines, statuses } = await controllerSetup();
@@ -489,6 +741,24 @@ describe("remote control", () => {
 			chmodSync(path, 0o755);
 			return path;
 		}
+
+		it("installs cloudflared with the package manager and reports its output", async () => {
+			const ok = fakeCloudflared(`console.log("==> Pouring cloudflared"); console.log("==> Summary");`);
+			const lines: string[] = [];
+			const spawnOk = ((_command: string, args: string[], spawnOptions: object) =>
+				spawn(ok, args, spawnOptions)) as unknown as typeof spawn;
+			expect(
+				await installCloudflared((line) => lines.push(line), { spawnProcess: spawnOk, platform: "darwin" }),
+			).toBeUndefined();
+			expect(lines.at(-1)).toBe("==> Summary");
+			const bad = fakeCloudflared(`console.error("Error: no bottle"); process.exit(1);`);
+			const spawnBad = ((_command: string, args: string[], spawnOptions: object) =>
+				spawn(bad, args, spawnOptions)) as unknown as typeof spawn;
+			expect(await installCloudflared(() => {}, { spawnProcess: spawnBad, platform: "darwin" })).toContain(
+				"brew exited with code 1",
+			);
+			expect(await installCloudflared(() => {}, { platform: "linux" })).toContain("developers.cloudflare.com");
+		});
 
 		it("starts a quick tunnel and returns its wss endpoint", async () => {
 			const path = fakeCloudflared(`
