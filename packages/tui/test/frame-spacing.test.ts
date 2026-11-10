@@ -93,6 +93,33 @@ describe("frame spacing", () => {
 		tui.stop();
 	});
 
+	it("draws an immediate frame (the end of an answer) at once, not held by the frame cap or the spacing", async () => {
+		const { tui, component } = setup(30);
+		tui.start();
+		await advance(20);
+		tui.requestRender();
+		await advance(1);
+		const last = component.starts.at(-1)!;
+		await advance(3);
+		// (The stream asked for a frame: it waits for the spacing. Then the answer ends.)
+		component.text = "streamed";
+		tui.requestRender();
+		await ticks();
+		component.text = "answer";
+		const at = now;
+		tui.requestImmediateRender();
+		await ticks();
+		assert.strictEqual(component.starts.at(-1), at);
+		assert.strictEqual(component.shown.at(-1), "answer");
+		// (The stream's frame would have started 90 ms after the last one.)
+		assert.ok(at - last < 90, `drawn ${at - last} ms after the last frame`);
+		// Nothing else is left waiting: the timer of the stream's frame was replaced.
+		const frames = component.starts.length;
+		await advance(200);
+		assert.strictEqual(component.starts.length, frames);
+		tui.stop();
+	});
+
 	it("starts a slow frame no sooner than three times the last one's duration after it", async () => {
 		const { tui, component } = setup(30);
 		tui.start();
