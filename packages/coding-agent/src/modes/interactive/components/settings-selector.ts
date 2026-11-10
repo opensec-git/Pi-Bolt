@@ -87,6 +87,8 @@ export interface SettingsConfig {
 	collapseChangelog: boolean;
 	enableInstallTelemetry: boolean;
 	remoteControlEnabled: boolean;
+	/** Pi-Bolt's `piBolt.autoUpdate`; the setting is not listed without it (a build that is not Pi-Bolt). */
+	piBoltAutoUpdate?: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
@@ -129,6 +131,7 @@ export interface SettingsCallbacks {
 	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onEnableInstallTelemetryChange: (enabled: boolean) => void;
 	onRemoteControlEnabledChange: (enabled: boolean) => void;
+	onPiBoltAutoUpdateChange?: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
@@ -597,6 +600,18 @@ export class SettingsSelectorComponent extends Container {
 				currentValue: config.remoteControlEnabled ? "true" : "false",
 				values: ["true", "false"],
 			},
+			...(config.piBoltAutoUpdate === undefined
+				? []
+				: [
+						{
+							id: "pibolt-auto-update",
+							label: "Automatic updates",
+							description:
+								"Install new Pi-Bolt releases in the background at startup, at most once a day; they start next time. The installer's installations only (global setting; PIBOLT_NO_AUTO_UPDATE=1 turns it off)",
+							currentValue: config.piBoltAutoUpdate ? "true" : "false",
+							values: ["true", "false"],
+						},
+					]),
 			{
 				id: "default-project-trust",
 				label: "Default project trust",
@@ -966,6 +981,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "remote-control":
 						callbacks.onRemoteControlEnabledChange(newValue === "true");
+						break;
+					case "pibolt-auto-update":
+						callbacks.onPiBoltAutoUpdateChange?.(newValue === "true");
 						break;
 					case "default-project-trust": {
 						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);
