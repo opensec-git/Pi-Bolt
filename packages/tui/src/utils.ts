@@ -498,6 +498,33 @@ export function isWebLink(url: string): boolean {
 	return /^(?:https?|mailto):/i.test(url);
 }
 
+/** Longest URL drawn as a hyperlink: VTE ignores longer ones (2083 bytes). */
+const MAX_HYPERLINK_URL_LENGTH = 2048;
+
+/**
+ * What a link to `url` may be a hyperlink (OSC 8) to, when `url` is a `file:` URL of an absolute path on this computer
+ * (`file:///…`, `file://localhost/…`): the URL as parsed, with spaces and other characters percent-encoded. Such a link is
+ * drawn with its URL printed after its text, as Pi draws the paths tools read and write, so the hyperlink opens what a
+ * click on the printed URL opens. Undefined for anything else: a file on another computer (`file://server/share`, or
+ * `file:////server/share`, a share Windows would sign in to), a URL without `//` (`file:C:/x`), one with an encoded
+ * separator (`%2f`, `%5c`) or control character, one with control or format characters (which can make the printed URL
+ * read as another), or one too long for terminals to keep.
+ */
+export function localFileLinkTarget(url: string): string | undefined {
+	if (!/^file:\/\/(?:localhost)?\//i.test(url) || /[\p{Cc}\p{Cf}]/u.test(url) || !URL.canParse(url)) return undefined;
+	const parsed = new URL(url);
+	if (
+		parsed.protocol !== "file:" ||
+		parsed.hostname !== "" ||
+		parsed.pathname.startsWith("//") ||
+		/%(?:2f|5c|[01][0-9a-f]|7f|c2%[89][0-9a-f])/i.test(parsed.href) ||
+		parsed.href.length > MAX_HYPERLINK_URL_LENGTH
+	) {
+		return undefined;
+	}
+	return parsed.href;
+}
+
 function extractAnsiCodes(str: string): string {
 	let result = "";
 	let i = str.indexOf("\x1b");

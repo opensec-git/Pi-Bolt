@@ -250,20 +250,23 @@ describe("Markdown links drawn as terminal hyperlinks", () => {
 		assert.strictEqual(linkAt("Write to [us](mailto:team@example.com).", "us"), "mailto:team@example.com");
 	});
 
-	it("shows any other link as text only", () => {
+	// A local file: URL is a hyperlink too, drawn with its URL (markdown-link-destinations.test.ts).
+	it("shows any other link as text, with where it goes, without a hyperlink", () => {
 		setCapabilities({ images: null, trueColor: false, hyperlinks: true });
 		for (const href of [
 			"-aTerminal",
 			"scripts/setup.command",
-			"file:///System/Applications/Calculator.app",
 			"/Applications/Calculator.app",
 			"x-apple.systempreferences:com.apple.preference.security",
 			"vscode://file/etc/passwd",
 		]) {
 			const source = `See [the release notes](${href}).`;
 			assert.strictEqual(linkAt(source, "release"), undefined, href);
+			assert.strictEqual(linkAt(source, href), undefined, href);
 			const line = new Markdown(source, 0, 0, defaultMarkdownTheme).render(80)[0] ?? "";
 			assert.ok(line.includes("the release notes"), JSON.stringify(line));
+			// Issue #297: the destination is not dropped.
+			assert.ok(line.includes(`(${href})`), JSON.stringify(line));
 		}
 	});
 });
