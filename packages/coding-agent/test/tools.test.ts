@@ -1243,6 +1243,53 @@ describe("Coding Agent Tools", () => {
 			expect(await matchedFiles({ glob: "*.ts" })).toEqual(["lib/src/c.ts", "src/a.ts", "src/sub/b.ts", "x.ts"]);
 			expect(await matchedFiles({ glob: "!*.ts" })).toEqual(["src/e.md"]);
 		});
+
+		// The in-process search (Pi-Bolt builds) prints what ripgrep prints: merged context windows, the exact limit,
+		// the last match's trailing context, a lone CR kept, a last line without a line break (#11705, #11895).
+		it("should print the same with the in-process search as with ripgrep", async () => {
+			const dir = join(testDir, "native-same");
+			mkdirSync(join(dir, "sub"), { recursive: true });
+			writeFileSync(
+				join(dir, "a.txt"),
+				["one", "needle 1", "two", "needle 2", "three", "four", "five", "needle 3"].join("\n"),
+			);
+			writeFileSync(join(dir, "b.txt"), "x\none\rtwo needle\r\ny\r\nneedle at end");
+			writeFileSync(join(dir, "sub", "c.txt"), ["needle", "needle", "needle", "z", "needle"].join("\n") + "\n");
+			const cases: Array<{ path?: string; glob?: string; context?: number; limit?: number }> = [
+				{},
+				{ context: 1 },
+				{ context: 2 },
+				{ context: 5 },
+				// (A limit over several files: rg searches them in parallel, so which come first differs.)
+				{ path: "a.txt", limit: 3 },
+				{ path: "a.txt", limit: 2 },
+				{ path: "a.txt", limit: 2, context: 1 },
+				{ path: "a.txt", limit: 1, context: 3 },
+				{ path: "sub", limit: 2, context: 1 },
+				{ path: "sub", limit: 4, context: 1 },
+				{ glob: "sub/*.txt", context: 1 },
+				{ glob: "./*.txt" },
+				{ path: "b.txt", context: 1 },
+			];
+			const rg = createGrepTool(dir, { native: false });
+			const native = createGrepTool(dir, { native: true });
+			for (const input of cases) {
+				const args = { pattern: "needle", ...input };
+				const sorted = (text: string) => {
+					// rg searches files in parallel: compare file by file.
+					const [body, ...notices] = text.split("\n\n");
+					const files = new Map<string, string[]>();
+					for (const line of body.split("\n")) {
+						const file = line.match(/^(.*?)[:-]\d+[:-] /)?.[1] ?? "";
+						files.set(file, [...(files.get(file) ?? []), line]);
+					}
+					return { files: [...files].sort(([a], [b]) => a.localeCompare(b)), notices };
+				};
+				const expected = getTextOutput(await rg.execute("rg", args));
+				const actual = getTextOutput(await native.execute("native", args));
+				expect(sorted(actual), JSON.stringify(input)).toEqual(sorted(expected));
+			}
+		});
 	});
 
 	describe("find tool", () => {
@@ -1346,7 +1393,8 @@ describe("Coding Agent Tools", () => {
 			const result = await findTool.execute("test-call-find-byte-cap", { pattern: "*.txt", path: testDir });
 			const expected = truncateHead(names.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
 			expect(result.details?.truncation).toEqual({ ...expected, content: result.details?.truncation?.content });
-			expect(result.details?.truncation?.content.split("\n")).toHaveLength(expected.outputLines);
+			// (Pi-Bolt's details hold the truncation without its content, the text output: truncationDetails().)
+			expect(getTextOutput(result).split("\n\n")[0].split("\n")).toHaveLength(expected.outputLines);
 			expect(result.details?.resultLimitReached).toBeUndefined();
 			expect(getTextOutput(result)).toMatch(/\n\n\[50\.0KB limit reached\]$/);
 		});
