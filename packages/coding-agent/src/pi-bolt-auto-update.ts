@@ -12,7 +12,7 @@
  * run from anywhere else.
  */
 import { spawn } from "node:child_process";
-import { closeSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -33,7 +33,7 @@ export const AUTO_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * How long the lock of an update that stopped holding it (it crashed, or was killed) keeps another out. Its holder renews it
- * every half of that; a compile after the update, which blocks its process for a minute or two, is well within it.
+ * every half of that while it downloads and runs the installer.
  */
 export const AUTO_UPDATE_LOCK_STALE_MS = 10 * 60 * 1000;
 
@@ -110,12 +110,21 @@ export function planAutoUpdate(
 	if (!installDir) return { kind: "skip", reason: "not in an installation" };
 	const byInstaller = context.byInstaller ?? piBoltInstalledByInstaller(installDir, dirname(process.execPath));
 	if (!byInstaller) return { kind: "skip", reason: "not an installation the installer made" };
-	const last = readAutoUpdateRecord(installDir)?.checkedAt;
-	const now = context.now ?? Date.now();
-	if (last !== undefined && now - last < AUTO_UPDATE_INTERVAL_MS && last <= now) {
+	// (The installer could not replace it either; the notice of a newer version says to run `pi-bolt update`.)
+	try {
+		accessSync(installDir, constants.W_OK);
+	} catch {
+		return { kind: "skip", reason: "the installation cannot be written to" };
+	}
+	if (startedRecently(readAutoUpdateRecord(installDir), context.now ?? Date.now())) {
 		return { kind: "skip", reason: "an update started less than a day ago" };
 	}
 	return { kind: "start", installDir };
+}
+
+/** Whether `record` is of an update that started less than AUTO_UPDATE_INTERVAL_MS before `now`. */
+export function startedRecently(record: AutoUpdateRecord | undefined, now: number): boolean {
+	return record !== undefined && record.checkedAt <= now && now - record.checkedAt < AUTO_UPDATE_INTERVAL_MS;
 }
 
 /** The line a session shows for an update. */
@@ -143,9 +152,9 @@ export function autoUpdateLine(result: AutoUpdateResult | undefined, log: string
 
 /**
  * Starts the background update for the installation in `installDir`, in a process of its own that outlives this session,
- * its output in <install>/auto-update.log. `report` gets the line for how it ended, if this session is still running then;
- * nothing for an update with nothing to install, or one another Pi-Bolt was already running. `command`: the executable and
- * its arguments, for tests.
+ * its output in <install>/auto-update.log. `report` gets the line for how it ended, if this session is still running then
+ * (one that stopped before it recorded how it ended too); nothing for an update with nothing to install, or one another
+ * Pi-Bolt was already running. `command`: the executable and its arguments, for tests.
  */
 export function startAutoUpdate(
 	installDir: string,
@@ -157,11 +166,28 @@ export function startAutoUpdate(
 ): void {
 	const { log } = autoUpdatePaths(installDir);
 	const started = Date.now();
+	let reported = false;
+	const once = (line: AutoUpdateLine | undefined) => {
+		if (reported || !line) return;
+		reported = true;
+		report(line);
+	};
+	// A process that could not start is an attempt all the same: the next sessions of the day do not try again.
+	const notStarted = (error: Error) => {
+		try {
+			writeAutoUpdateRecord(installDir, { checkedAt: started, result: { kind: "failed", reason: error.message } });
+		} catch {
+			// The line below says why; the next session tries again.
+		}
+		once({ kind: "error", text: `Pi-Bolt could not start its update: ${error.message}` });
+	};
 	let output: number;
 	try {
-		output = openSync(log, "w");
+		// (Appended to, not emptied: a second Pi-Bolt starting at the same moment must not cut the output of the update that
+		// runs. The update empties it when it takes the lock.)
+		output = openSync(log, "a");
 	} catch (error) {
-		report({ kind: "error", text: `Pi-Bolt could not start its update: ${(error as Error).message}` });
+		notStarted(error as Error);
 		return;
 	}
 	try {
@@ -171,15 +197,23 @@ export function startAutoUpdate(
 			windowsHide: true,
 			stdio: ["ignore", output, output],
 		});
-		child.on("error", (error) =>
-			report({ kind: "error", text: `Pi-Bolt could not start its update: ${error.message}` }),
-		);
-		child.on("exit", () => {
+		child.on("error", notStarted);
+		child.on("exit", (code, signal) => {
+			// (No pid: it never started, and "error" says why.)
+			if (child.pid === undefined) return;
 			// (A record older than this start is an earlier update's: this one found another running, and wrote nothing.)
 			const record = readAutoUpdateRecord(installDir);
-			if (!record || record.checkedAt < started) return;
-			const line = autoUpdateLine(record.result, log);
-			if (line) report(line);
+			if (record?.result && record.checkedAt >= started) {
+				once(autoUpdateLine(record.result, log));
+				return;
+			}
+			// It stopped before it recorded how it ended: it crashed or was killed.
+			if (code !== 0) {
+				once({
+					kind: "error",
+					text: `Pi-Bolt's update stopped (${signal ? `signal ${signal}` : `exit code ${code}`}) before it finished. Run \`pi-bolt update\` to update it yourself (${log}).`,
+				});
+			}
 		});
 		child.unref();
 	} finally {

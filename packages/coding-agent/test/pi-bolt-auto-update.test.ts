@@ -195,6 +195,21 @@ describe("who starts an update", () => {
 		expect(planAutoUpdate(true, { ...on, build: undefined }).kind).toBe("skip");
 	});
 
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"never for an installation it cannot write to: every start would report the same failure",
+		() => {
+			chmodSync(installDir, 0o555);
+			try {
+				expect(planAutoUpdate(true, on)).toEqual({
+					kind: "skip",
+					reason: "the installation cannot be written to",
+				});
+			} finally {
+				chmodSync(installDir, 0o755);
+			}
+		},
+	);
+
 	it("tells an installation the installer made from an archive unpacked by hand, as doctor does", () => {
 		expect(planAutoUpdate(true, { env: {} }).kind).toBe("start");
 		const elsewhere = join(dir, "tools", `pi-bolt-${process.platform}-x64`);
@@ -249,6 +264,10 @@ describe("an interactive session", () => {
 				await new Promise((r) => setTimeout(r, 10));
 			}
 			expect(String(fake.showWarning.mock.calls[0]?.[0])).toMatch(/^Pi-Bolt could not start its update: /);
+			// An update that could not start counts as the day's: the next session does not try (and warn) again.
+			expect(readAutoUpdateRecord(installDir)?.result).toMatchObject({ kind: "failed" });
+			expect(start.call(session(true))).toBe(false);
+			expect(fake.showWarning).toHaveBeenCalledTimes(1);
 		},
 	);
 });
@@ -293,6 +312,36 @@ describe("what a session shows", () => {
 		expect(readFileSync(autoUpdatePaths(installDir).log, "utf8")).toBe("started\n");
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"one line when the update stopped before it recorded how it ended (it crashed, or was killed)",
+		async () => {
+			const killed = await startFake(
+				`printf '%s' '{"checkedAt": ${Date.now() + 60_000}}' > "${join(installDir, "auto-update.json")}"; touch "${join(dir, "done")}"; kill -9 $$`,
+			);
+			expect(killed).toHaveLength(1);
+			expect(killed[0]).toMatchObject({ kind: "error" });
+			expect(killed[0].text).toMatch(
+				/^Pi-Bolt's update stopped \(signal SIGKILL\) before it finished\. Run `pi-bolt update`/,
+			);
+			rmSync(join(dir, "done"));
+			const failed = await startFake(`touch "${join(dir, "done")}"; exit 3`);
+			expect(failed.map((line) => line.text)).toEqual([
+				expect.stringMatching(/^Pi-Bolt's update stopped \(exit code 3\)/),
+			]);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"a second Pi-Bolt starting at the same moment does not cut the output of the update that runs",
+		async () => {
+			writeFileSync(autoUpdatePaths(installDir).log, "the update that runs\n");
+			await startFake(`echo "Another Pi-Bolt is updating this installation."; touch "${join(dir, "done")}"`);
+			expect(readFileSync(autoUpdatePaths(installDir).log, "utf8")).toBe(
+				"the update that runs\nAnother Pi-Bolt is updating this installation.\n",
+			);
+		},
+	);
+
 	it.skipIf(process.platform === "win32")("nothing when there is no update", async () => {
 		expect(await startFake(record('{"kind":"current","version":"1.0.2"}'))).toEqual([]);
 	});
@@ -311,6 +360,8 @@ describe("the update a session starts (pi-bolt update --background)", () => {
 	let base: string;
 	let requests: string[];
 	let releaseVersion: string;
+	/** The version the served SHA256SUMS name on their first line (the release's, unless a test says otherwise). */
+	let sumsVersion: string | undefined;
 	let signWith: KeyObject;
 	const realFetch = globalThis.fetch;
 
@@ -330,6 +381,7 @@ chmod +x "$dir/pi"
 	beforeEach(async () => {
 		requests = [];
 		releaseVersion = "1.0.3";
+		sumsVersion = undefined;
 		signWith = releaseKey;
 		server = createServer((request, response) => {
 			const url = request.url ?? "";
@@ -342,7 +394,7 @@ chmod +x "$dir/pi"
 			}
 			const script = Buffer.from(installer());
 			const sha = (data: Buffer) => createHash("sha256").update(data).digest("hex");
-			const sums = Buffer.from(`# pi-bolt ${releaseVersion}\n${sha(script)}  install.sh\n`);
+			const sums = Buffer.from(`# pi-bolt ${sumsVersion ?? releaseVersion}\n${sha(script)}  install.sh\n`);
 			const files: Record<string, Buffer> = {
 				[`/opensec-git/Pi-Bolt/releases/download/${tag}/SHA256SUMS`]: sums,
 				[`/opensec-git/Pi-Bolt/releases/download/${tag}/SHA256SUMS.sig`]: sign(null, sums, signWith),
@@ -412,6 +464,38 @@ chmod +x "$dir/pi"
 		expect(result?.kind === "failed" && result.reason).toContain("signature does not verify");
 		expect(readFileSync(join(buildDir, "pi"), "utf8")).toBe("");
 		expect(requests).not.toContain("/opensec-git/Pi-Bolt/releases/download/bolt-v1.0.3/install.sh");
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"refuses checksums, signed all the same, that are another release's",
+		async () => {
+			sumsVersion = "1.0.2";
+			await handlePackageCommand(["update", "--background"]);
+			const result = readAutoUpdateRecord(installDir)?.result;
+			expect(result).toMatchObject({ kind: "failed", version: "1.0.3" });
+			expect(result?.kind === "failed" && result.reason).toContain("is Pi-Bolt 1.0.2, not 1.0.3");
+			expect(readFileSync(join(buildDir, "pi"), "utf8")).toBe("");
+			expect(requests).not.toContain("/opensec-git/Pi-Bolt/releases/download/bolt-v1.0.3/install.sh");
+		},
+	);
+
+	it("two Pi-Bolts starting at the same moment: the second does nothing when the first was done before it took the lock", async () => {
+		const first = { checkedAt: Date.now() - 1000, result: { kind: "current" as const, version: "1.0.2" } };
+		writeAutoUpdateRecord(installDir, first);
+		writeFileSync(autoUpdatePaths(installDir).log, "the first one's output\n");
+		expect(await handlePackageCommand(["update", "--background"])).toBe(true);
+		expect(process.exitCode).toBe(0);
+		expect(requests).toEqual([]);
+		expect(readAutoUpdateRecord(installDir)).toEqual(first);
+		expect(readFileSync(autoUpdatePaths(installDir).log, "utf8")).toBe("the first one's output\n");
+		expect(existsSync(`${autoUpdatePaths(installDir).lock}.lock`)).toBe(false);
+	});
+
+	it("empties the last update's output when it takes the lock", async () => {
+		writeFileSync(autoUpdatePaths(installDir).log, "yesterday's update\n");
+		releaseVersion = "1.0.2";
+		await handlePackageCommand(["update", "--background"]);
+		expect(readFileSync(autoUpdatePaths(installDir).log, "utf8")).toBe("");
 	});
 
 	it("records an installation that is up to date, and installs nothing", async () => {

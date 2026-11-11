@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	truncateSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -59,6 +60,8 @@ import {
 	AUTO_UPDATE_LOCK_STALE_MS,
 	type AutoUpdateResult,
 	autoUpdatePaths,
+	readAutoUpdateRecord,
+	startedRecently,
 	writeAutoUpdateRecord,
 } from "./pi-bolt-auto-update.ts";
 import { buildHasCompiledExtensions, runPiBoltCompile } from "./pi-bolt-compile.ts";
@@ -953,7 +956,19 @@ async function runPiBoltBackgroundUpdate(currentVersion: string): Promise<number
 		throw error;
 	}
 	const checkedAt = Date.now();
+	// Another Pi-Bolt that started at the same moment may have run its update and let go of the lock before this one took it.
+	if (startedRecently(readAutoUpdateRecord(installDir), checkedAt)) {
+		await release();
+		console.log("Another Pi-Bolt updated this installation less than a day ago.");
+		return 0;
+	}
 	let result: AutoUpdateResult;
+	try {
+		// (The log is this update's from here; until now it was the last one's.)
+		truncateSync(autoUpdatePaths(installDir).log);
+	} catch {
+		// No log: run by hand, not by a session.
+	}
 	try {
 		writeAutoUpdateRecord(installDir, { checkedAt });
 		result = await backgroundUpdate(currentVersion, installDir);
