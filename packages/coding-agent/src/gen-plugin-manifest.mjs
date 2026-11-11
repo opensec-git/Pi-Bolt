@@ -1224,8 +1224,9 @@ const isScript = (name) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(name) && !/\.d\.[cm]?
 
 /**
  * Rewrites every script of `staged`, a copy of `original`, as the build is to have it (rewriteCopy): `import.meta` pinned
- * to the file it was copied from, and Pi's other names for its modules replaced. `original` is the path as Pi finds it, not
- * resolved through links: Pi loads an extension by that path, and so do the modules it imports.
+ * to the file it was copied from, and Pi's other names for its modules replaced. Each file is pinned to its real path,
+ * resolved through links: Pi's loader imports an extension by its real path (core/extensions/loader.ts, upstream #8112), and
+ * the modules it imports resolve from there (/var is /private/var on macOS).
  */
 function rewriteCopies(staged, original) {
 	for (const entry of readdirSync(staged, { withFileTypes: true })) {
@@ -1242,7 +1243,8 @@ function rewriteCopies(staged, original) {
 		const source = bytes.toString("utf8");
 		// (A file that is not UTF-8 is left as it is rather than rewritten with replacement characters.)
 		if (!Buffer.from(source, "utf8").equals(bytes)) continue;
-		const rewritten = rewriteCopy(source, join(original, entry.name));
+		const file = join(original, entry.name);
+		const rewritten = rewriteCopy(source, existsSync(file) ? realpathSync(file) : file);
 		if (rewritten === source) continue;
 		// (A copy keeps its file's mode, and an installed file may be read-only.)
 		chmodSync(path, statSync(path).mode | 0o200);

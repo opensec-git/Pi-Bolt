@@ -1622,10 +1622,11 @@ describe("import.meta in the copies", () => {
 		rmSync(join(out, "src"), { recursive: true, force: true });
 		const ran = spawnSync("bun", [join(out, "dist", "main.js")], { encoding: "utf8" });
 		assert.equal(ran.status, 0, ran.stderr);
+		// (Every path is the real one, as loaded from its files: Pi's loader imports the extension by its real path.)
 		const real = realpathSync(extension);
 		assert.deepEqual(JSON.parse(ran.stdout), {
 			data: "data",
-			file: join(extension, "index.ts"),
+			file: join(real, "index.ts"),
 			resolved: join(real, "data.txt"),
 			dyn: "dyn",
 			dynEsm: "dyn-esm",
@@ -1730,7 +1731,8 @@ describe("import.meta in the copies", () => {
 		writePluginFolder(planPlugins({ agentDir }), out);
 
 		const copy = await import(pathToFileURL(join(out, "global", "with-skills", "src", "index.js")).href);
-		assert.equal(copy.skills(), join(extension, "skills"));
+		// (Pinned to the real path, as Pi's loader imports the installed file: /var is /private/var on macOS.)
+		assert.equal(copy.skills(), join(realpathSync(extension), "skills"));
 		assert.equal(readFileSync(join(extension, "src", "index.js"), "utf8"), RESOLVES);
 		// (A dependency is pinned to its real path: where it is when the installed extension imports it, as Node resolves links.)
 		assert.equal(
