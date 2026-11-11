@@ -277,3 +277,160 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 });
+
+describe("FooterDataProvider deferred git watcher", () => {
+	let originalCwd: string;
+	let tempDir: string;
+
+	type WatcherInternals = { headWatcher: FSWatcher | null; reftableWatcher: FSWatcher | null };
+	const internals = (provider: FooterDataProvider) => provider as unknown as WatcherInternals;
+
+	beforeEach(() => {
+		originalCwd = process.cwd();
+		tempDir = mkdtempSync(join(tmpdir(), "footer-data-provider-"));
+		resolvedBranch = "main";
+		vi.mocked(spawnSync).mockClear();
+		vi.mocked(execFile).mockClear();
+	});
+
+	afterEach(() => {
+		process.chdir(originalCwd);
+		if (tempDir && existsSync(tempDir)) {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads the branch from HEAD without attaching a watcher until startGitWatcher()", () => {
+		const repoDir = createPlainRepo(tempDir);
+		const provider = new FooterDataProvider(repoDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			expect(internals(provider).headWatcher).toBeNull();
+			provider.startGitWatcher();
+			expect(internals(provider).headWatcher).not.toBeNull();
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("reports a branch switch made before the watcher attached", async () => {
+		const repoDir = createPlainRepo(tempDir);
+		const provider = new FooterDataProvider(repoDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			const onBranchChange = vi.fn();
+			provider.onBranchChange(onBranchChange);
+			writeFileSync(join(repoDir, ".git", "HEAD"), "ref: refs/heads/feature\n");
+
+			provider.startGitWatcher();
+			await waitFor(() => provider.getGitBranch() === "feature");
+			expect(onBranchChange).toHaveBeenCalledTimes(1);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("does not notify when the branch did not change before the watcher attached", async () => {
+		vi.useFakeTimers();
+		const repoDir = createPlainRepo(tempDir);
+		const provider = new FooterDataProvider(repoDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			const onBranchChange = vi.fn();
+			provider.onBranchChange(onBranchChange);
+			provider.startGitWatcher();
+			await vi.advanceTimersByTimeAsync(10);
+			expect(provider.getGitBranch()).toBe("main");
+			expect(onBranchChange).not.toHaveBeenCalled();
+		} finally {
+			provider.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("attaches the reftable watcher in a worktree (.git is a file)", () => {
+		const { worktreeDir } = createReftableWorktree(tempDir);
+		const provider = new FooterDataProvider(worktreeDir, { deferGitWatcher: true });
+		try {
+			expect(internals(provider).reftableWatcher).toBeNull();
+			provider.startGitWatcher();
+			expect(internals(provider).headWatcher).not.toBeNull();
+			expect(internals(provider).reftableWatcher).not.toBeNull();
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("runs no git at start in an unchanged reftable repository", async () => {
+		vi.useFakeTimers();
+		const { worktreeDir } = createReftableWorktree(tempDir);
+		const provider = new FooterDataProvider(worktreeDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			const onBranchChange = vi.fn();
+			provider.onBranchChange(onBranchChange);
+			provider.startGitWatcher();
+			await vi.advanceTimersByTimeAsync(10);
+			expect(execFile).not.toHaveBeenCalled();
+			expect(onBranchChange).not.toHaveBeenCalled();
+		} finally {
+			provider.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("reports a reftable branch switch made before the watcher attached", async () => {
+		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
+		const provider = new FooterDataProvider(worktreeDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			const onBranchChange = vi.fn();
+			provider.onBranchChange(onBranchChange);
+			resolvedBranch = "feature";
+			writeFileSync(join(reftableDir, "tables.list"), "0\n1\n");
+
+			provider.startGitWatcher();
+			await waitFor(() => provider.getGitBranch() === "feature");
+			expect(execFile).toHaveBeenCalledTimes(1);
+			expect(onBranchChange).toHaveBeenCalledTimes(1);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("keeps the watcher deferred across setCwd()", () => {
+		const repoDir = createPlainRepo(tempDir);
+		const otherDir = join(tempDir, "other");
+		mkdirSync(join(otherDir, ".git"), { recursive: true });
+		writeFileSync(join(otherDir, ".git", "HEAD"), "ref: refs/heads/other\n");
+		const provider = new FooterDataProvider(repoDir, { deferGitWatcher: true });
+		try {
+			provider.setCwd(otherDir);
+			expect(provider.getGitBranch()).toBe("other");
+			expect(internals(provider).headWatcher).toBeNull();
+			provider.startGitWatcher();
+			expect(internals(provider).headWatcher).not.toBeNull();
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("never attaches a watcher when disposed before startGitWatcher()", () => {
+		const repoDir = createPlainRepo(tempDir);
+		const provider = new FooterDataProvider(repoDir, { deferGitWatcher: true });
+		provider.dispose();
+		provider.startGitWatcher();
+		expect(internals(provider).headWatcher).toBeNull();
+	});
+
+	it("attaches nothing outside a repository", () => {
+		const provider = new FooterDataProvider(tempDir, { deferGitWatcher: true });
+		try {
+			provider.startGitWatcher();
+			expect(provider.getGitBranch()).toBeNull();
+			expect(internals(provider).headWatcher).toBeNull();
+		} finally {
+			provider.dispose();
+		}
+	});
+});

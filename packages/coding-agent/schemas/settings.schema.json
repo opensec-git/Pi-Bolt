@@ -77,6 +77,103 @@
       "description": "Destination used by /share. \"auto\" uses Radius when authenticated and otherwise creates a GitHub gist.",
       "default": "auto"
     },
+    "remoteControl": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Turn on /remote-control and the background service (pi-bolt service). Default false. Read from the global settings only: a project's settings cannot turn it on."
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the /remote-control listener. 0 picks a free port each time; a fixed port lets paired phones reconnect on the LAN without a new QR code."
+        },
+        "tunnel": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "quick"
+            },
+            {
+              "type": "string",
+              "const": "off"
+            },
+            {
+              "type": "object",
+              "required": [
+                "name",
+                "hostname"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Named Cloudflare tunnel (cloudflared tunnel create)."
+                },
+                "hostname": {
+                  "type": "string",
+                  "description": "Public hostname routed to the tunnel."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "cloudflared": {
+          "type": "string",
+          "description": "Path to the cloudflared executable."
+        },
+        "askCloudflared": {
+          "type": "boolean",
+          "description": "Offer to install cloudflared when /remote-control finds none (false after \"Don't ask again\")."
+        },
+        "readSecretFiles": {
+          "type": "boolean",
+          "description": "Let paired phones read files that look like secrets (.env*, keys, .git/, ...) when reviewing the session's folder. Default false."
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "tunnel": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "quick"
+                },
+                {
+                  "type": "string",
+                  "const": "off"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "hostname"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Named Cloudflare tunnel (cloudflared tunnel create)."
+                    },
+                    "hostname": {
+                      "type": "string",
+                      "description": "Public hostname routed to the tunnel."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ],
+              "description": "Tunnel of the background service (pi-bolt service install). Default: the remoteControl.tunnel setting; \"off\" serves the local network and Tailscale only."
+            }
+          },
+          "additionalProperties": false,
+          "description": "The background service (pi-bolt service)."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Settings of /remote-control (Pi-Bolt Android app)."
+    },
     "steeringMode": {
       "anyOf": [
         {

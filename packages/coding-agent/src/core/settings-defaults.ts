@@ -60,6 +60,7 @@ export const SETTINGS_DEFAULTS = {
 		mode: "on",
 		inlineBudget: 3000,
 	},
+	// Pi-Bolt: "idle" re-sends the session's last request while the user is away (billed), so it is opt-in.
 	cacheWarming: "streaming",
 	tuiMode: "fullscreen",
 	fullscreenExitOutput: "transcript",

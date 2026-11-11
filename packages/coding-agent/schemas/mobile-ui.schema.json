@@ -1,0 +1,1394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pi.dev/schemas/mobile-ui.schema.json",
+  "$comment": "This file is generated from TypeScript source. Do not edit it manually; run npm run generate:schemas.",
+  "title": "Pi mobile UI view",
+  "description": "A view of the mobile UI kit, version 1. See docs/mobile-ui.md.",
+  "type": "object",
+  "properties": {
+    "v": {
+      "const": 1,
+      "description": "Kit version the view needs."
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "subtitle": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "icon": {
+      "$ref": "#/$defs/icon"
+    },
+    "body": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      },
+      "maxItems": 200
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/button"
+      },
+      "maxItems": 3
+    },
+    "fallback": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 4000
+      },
+      "maxItems": 200,
+      "description": "Text lines instead of the derived text form."
+    }
+  },
+  "required": [
+    "v",
+    "body"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+      "description": "Unique within the view."
+    },
+    "icon": {
+      "enum": [
+        "add",
+        "alert",
+        "archive",
+        "bell",
+        "bolt",
+        "book",
+        "branch",
+        "bug",
+        "build",
+        "calendar",
+        "chart",
+        "check",
+        "clock",
+        "close",
+        "cloud",
+        "code",
+        "copy",
+        "database",
+        "delete",
+        "download",
+        "edit",
+        "error",
+        "file",
+        "filter",
+        "flag",
+        "folder",
+        "globe",
+        "heart",
+        "home",
+        "info",
+        "key",
+        "link",
+        "lock",
+        "mail",
+        "package",
+        "pause",
+        "person",
+        "play",
+        "refresh",
+        "rocket",
+        "search",
+        "send",
+        "server",
+        "settings",
+        "shield",
+        "star",
+        "stop",
+        "sync",
+        "terminal",
+        "upload",
+        "warning"
+      ]
+    },
+    "tone": {
+      "enum": [
+        "neutral",
+        "success",
+        "warning",
+        "danger",
+        "running"
+      ]
+    },
+    "chipProps": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "link": {
+      "type": "string",
+      "pattern": "^(https?|mailto):",
+      "maxLength": 2048
+    },
+    "node": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/text"
+        },
+        {
+          "$ref": "#/$defs/markdown"
+        },
+        {
+          "$ref": "#/$defs/code"
+        },
+        {
+          "$ref": "#/$defs/image"
+        },
+        {
+          "$ref": "#/$defs/divider"
+        },
+        {
+          "$ref": "#/$defs/notice"
+        },
+        {
+          "$ref": "#/$defs/kv"
+        },
+        {
+          "$ref": "#/$defs/progress"
+        },
+        {
+          "$ref": "#/$defs/chip"
+        },
+        {
+          "$ref": "#/$defs/tile"
+        },
+        {
+          "$ref": "#/$defs/chart"
+        },
+        {
+          "$ref": "#/$defs/table"
+        },
+        {
+          "$ref": "#/$defs/location"
+        },
+        {
+          "$ref": "#/$defs/button"
+        },
+        {
+          "$ref": "#/$defs/card"
+        },
+        {
+          "$ref": "#/$defs/section"
+        },
+        {
+          "$ref": "#/$defs/list"
+        },
+        {
+          "$ref": "#/$defs/item"
+        },
+        {
+          "$ref": "#/$defs/row"
+        },
+        {
+          "$ref": "#/$defs/grid"
+        },
+        {
+          "$ref": "#/$defs/form"
+        },
+        {
+          "$ref": "#/$defs/input"
+        },
+        {
+          "$ref": "#/$defs/toggle"
+        },
+        {
+          "$ref": "#/$defs/select"
+        },
+        {
+          "$ref": "#/$defs/slider"
+        }
+      ]
+    },
+    "text": {
+      "type": "object",
+      "description": "Plain text.",
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "style": {
+          "enum": [
+            "body",
+            "title",
+            "meta",
+            "mono"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "markdown": {
+      "type": "object",
+      "description": "Markdown, as the transcript renders it.",
+      "properties": {
+        "type": {
+          "const": "markdown"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 32000
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "code": {
+      "type": "object",
+      "description": "A code block.",
+      "properties": {
+        "type": {
+          "const": "code"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 64000
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "image": {
+      "type": "object",
+      "description": "A data: image, or an https: image on a public host that loads on a tap.",
+      "properties": {
+        "type": {
+          "const": "image"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "src": {
+          "type": "string",
+          "pattern": "^(data:image/(png|jpeg|webp|gif);base64,|https://)"
+        },
+        "alt": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "decorative": {
+          "type": "boolean",
+          "description": "No alt text needed: the image adds nothing to read."
+        },
+        "aspect": {
+          "type": "number",
+          "minimum": 0.25,
+          "maximum": 4,
+          "description": "Width / height."
+        }
+      },
+      "required": [
+        "type",
+        "src"
+      ],
+      "additionalProperties": false
+    },
+    "divider": {
+      "type": "object",
+      "description": "A line.",
+      "properties": {
+        "type": {
+          "const": "divider"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "notice": {
+      "type": "object",
+      "description": "A notice with a glyph in its tone's colour.",
+      "properties": {
+        "type": {
+          "const": "notice"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "tone": {
+          "enum": [
+            "info",
+            "success",
+            "warning",
+            "danger"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "type",
+        "tone",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "kv": {
+      "type": "object",
+      "description": "Key and value rows.",
+      "properties": {
+        "type": {
+          "const": "kv"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "value": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "mono": {
+                "type": "boolean"
+              },
+              "copy": {
+                "type": "boolean",
+                "description": "Adds a copy action."
+              }
+            },
+            "required": [
+              "key",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "type",
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "progress": {
+      "type": "object",
+      "description": "Progress: determinate with value, indeterminate without.",
+      "properties": {
+        "type": {
+          "const": "progress"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "value": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "chip": {
+      "type": "object",
+      "description": "A status chip.",
+      "properties": {
+        "type": {
+          "const": "chip"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        }
+      },
+      "required": [
+        "type",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "tile": {
+      "type": "object",
+      "description": "A status tile; tappable with action. Put tiles in a grid.",
+      "properties": {
+        "type": {
+          "const": "tile"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "tone": {
+          "$ref": "#/$defs/tone"
+        },
+        "action": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "chart": {
+      "type": "object",
+      "description": "A line, bar or area chart, or a sparkline, in the app's chart colours. Every series has as many values as labels.",
+      "properties": {
+        "type": {
+          "const": "chart"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "kind": {
+          "enum": [
+            "line",
+            "bar",
+            "area",
+            "sparkline"
+          ]
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": -1000000000000000,
+                      "maximum": 1000000000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxItems": 200
+              }
+            },
+            "required": [
+              "name",
+              "values"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 4
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "maxItems": 200
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "min": {
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "max": {
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "What screen readers say; derived from the data when absent."
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "series"
+      ],
+      "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "description": "Rows under typed columns; sorting and filtering happen in the app. A row with action sends a tap with its id as value.",
+      "properties": {
+        "type": {
+          "const": "table"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "number",
+                  "date",
+                  "mono"
+                ]
+              },
+              "sortable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 12
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "cells": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "action": {
+                "$ref": "#/$defs/id"
+              }
+            },
+            "required": [
+              "id",
+              "cells"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 500
+        },
+        "sort": {
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "desc": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "additionalProperties": false
+        },
+        "filter": {
+          "type": "boolean",
+          "description": "A search box over the rows."
+        },
+        "empty": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type",
+        "columns",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "description": "A place; a tap opens the phone's maps app. Needs lat and lon together, or address.",
+      "properties": {
+        "type": {
+          "const": "location"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "lat": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "lon": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "button": {
+      "type": "object",
+      "description": "A button: sends a tap event, or opens url.",
+      "properties": {
+        "type": {
+          "const": "button"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "style": {
+          "enum": [
+            "primary",
+            "secondary",
+            "ghost",
+            "danger"
+          ]
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "action": {
+          "$ref": "#/$defs/id"
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "busy": {
+          "type": "boolean",
+          "description": "Shows a spinner and takes no taps."
+        },
+        "url": {
+          "$ref": "#/$defs/link"
+        },
+        "confirm": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "card": {
+      "type": "object",
+      "description": "A card.",
+      "properties": {
+        "type": {
+          "const": "card"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "status": {
+          "$ref": "#/$defs/chipProps"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          },
+          "maxItems": 200
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/button"
+          },
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "additionalProperties": false
+    },
+    "section": {
+      "type": "object",
+      "description": "A titled group without a box.",
+      "properties": {
+        "type": {
+          "const": "section"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node"
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "additionalProperties": false
+    },
+    "list": {
+      "type": "object",
+      "description": "Rows.",
+      "properties": {
+        "type": {
+          "const": "list"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/item"
+          },
+          "maxItems": 200
+        },
+        "empty": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "additionalProperties": false
+    },
+    "item": {
+      "type": "object",
+      "description": "A list row; tappable with action.",
+      "properties": {
+        "type": {
+          "const": "item"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "icon": {
+          "$ref": "#/$defs/icon"
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "chip": {
+          "$ref": "#/$defs/chipProps"
+        },
+        "progress": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "action": {
+          "$ref": "#/$defs/id"
+        },
+        "chevron": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "row": {
+      "type": "object",
+      "description": "Chips, buttons and meta text side by side, wrapping.",
+      "properties": {
+        "type": {
+          "const": "row"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/chip"
+              },
+              {
+                "$ref": "#/$defs/button"
+              },
+              {
+                "$ref": "#/$defs/text"
+              }
+            ]
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "additionalProperties": false
+    },
+    "grid": {
+      "type": "object",
+      "description": "Tiles in columns.",
+      "properties": {
+        "type": {
+          "const": "grid"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "columns": {
+          "enum": [
+            2,
+            3,
+            4
+          ]
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tile"
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "type",
+        "children"
+      ],
+      "additionalProperties": false
+    },
+    "form": {
+      "type": "object",
+      "description": "Fields with a submit button.",
+      "properties": {
+        "type": {
+          "const": "form"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/input"
+              },
+              {
+                "$ref": "#/$defs/toggle"
+              },
+              {
+                "$ref": "#/$defs/select"
+              },
+              {
+                "$ref": "#/$defs/slider"
+              },
+              {
+                "$ref": "#/$defs/text"
+              },
+              {
+                "$ref": "#/$defs/notice"
+              },
+              {
+                "$ref": "#/$defs/divider"
+              }
+            ]
+          },
+          "maxItems": 200
+        },
+        "submit": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "action": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "required": [
+            "label"
+          ],
+          "additionalProperties": false
+        },
+        "disabled": {
+          "type": "boolean"
+        },
+        "busy": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "children",
+        "submit"
+      ],
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "description": "A text field.",
+      "properties": {
+        "type": {
+          "const": "input"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "placeholder": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "hint": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "multiline",
+            "number",
+            "email",
+            "url",
+            "password"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "type",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "toggle": {
+      "type": "object",
+      "description": "A switch.",
+      "properties": {
+        "type": {
+          "const": "toggle"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "value": {
+          "type": "boolean"
+        },
+        "hint": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "select": {
+      "type": "object",
+      "description": "One of a few options.",
+      "properties": {
+        "type": {
+          "const": "select"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "options": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "value",
+                  "label"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "value": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "options"
+      ],
+      "additionalProperties": false
+    },
+    "slider": {
+      "type": "object",
+      "description": "A number in a range.",
+      "properties": {
+        "type": {
+          "const": "slider"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 20
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "min",
+        "max",
+        "value"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

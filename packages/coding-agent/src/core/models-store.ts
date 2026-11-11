@@ -123,10 +123,15 @@ export class FileModelsStore implements ModelsStore {
 		}
 	}
 
+	/**
+	 * The provider's entry as the file was last parsed, not a copy: Pi reads every provider's entry at every start, and
+	 * the parsed file is never changed in place (a write or reload replaces it whole), so the entry is a snapshot.
+	 * Callers must not modify it.
+	 */
 	async read(providerId: string, options?: ModelsStoreOperationOptions): Promise<ModelsStoreEntry | undefined> {
 		const entry = (await this.readLatest(this.readState, options))[providerId];
 		options?.signal?.throwIfAborted();
-		return entry ? structuredClone(entry) : undefined;
+		return entry;
 	}
 
 	async write(providerId: string, entry: ModelsStoreEntry, options?: ModelsStoreOperationOptions): Promise<void> {

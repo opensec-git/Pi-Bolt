@@ -1,7 +1,8 @@
+import { getEventListeners } from "node:events";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { zstdDecompressSync } from "node:zlib";
+import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,8 +12,9 @@ import {
 	stream as streamOpenAICodexResponses,
 	streamSimple as streamSimpleOpenAICodexResponses,
 } from "../src/api/openai-codex-responses.ts";
-import type { Api, Context, Model } from "../src/types.ts";
+import type { Api, AssistantMessage, Context, Message, Model, ToolResultMessage } from "../src/types.ts";
 import { formatUserAgent } from "../src/utils/identity.ts";
+import { requestCacheStats } from "../src/utils/request-cache.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -318,6 +320,61 @@ describe("openai-codex streaming", () => {
 		expect(result.content.find((c) => c.type === "text")?.text).toBe("Hello");
 		expect(result.stopReason).toBe("stop");
 		expect(result.endTurn).toBe(false);
+	});
+
+	// Regression test for #11708
+	it("removes SSE retry backoff abort listeners after the retry succeeds", async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "pi-codex-stream-"));
+		process.env.PI_CODING_AGENT_DIR = tempDir;
+		const token = mockToken();
+		let calls = 0;
+		const fetchMock = vi.fn(async (input: string | URL) => {
+			const url = typeof input === "string" ? input : input.toString();
+			if (url !== "https://chatgpt.com/backend-api/codex/responses") {
+				return new Response("not found", { status: 404 });
+			}
+			calls++;
+			if (calls <= 3) {
+				return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+					status: 429,
+					headers: { "retry-after": "0" },
+				});
+			}
+			return new Response(buildSSEPayload({ status: "completed" }), {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const context = normalizeContext({
+			systemPrompt: "You are a helpful assistant.",
+			messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+		});
+
+		const controller = new AbortController();
+		const result = await streamOpenAICodexResponses(model, context, {
+			apiKey: token,
+			transport: "sse",
+			maxRetries: 3,
+			signal: controller.signal,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(calls).toBe(4);
+		expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
 	});
 
 	it("maps response.incomplete to stopReason length even when the SSE body stays open", async () => {
@@ -2865,5 +2922,267 @@ describe("openai-codex streaming", () => {
 		const result = await resultPromise;
 		expect(result.content.find((content) => content.type === "text")?.text).toBe("Hello");
 		expect(codexRequests).toBe(4);
+	});
+});
+
+describe("openai-codex request reuse", () => {
+	const model: Model<"openai-codex-responses"> = {
+		id: "gpt-5.1-codex",
+		name: "GPT-5.1 Codex",
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		baseUrl: "https://chatgpt.com/backend-api",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 400000,
+		maxTokens: 128000,
+	};
+
+	const usage = {
+		input: 1,
+		output: 1,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 2,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+
+	/** One turn of a conversation: a question, a reply with reasoning and a tool call, and a long tool result. */
+	function turn(n: number): Message[] {
+		const reply: AssistantMessage = {
+			role: "assistant",
+			content: [
+				{
+					type: "thinking",
+					thinking: `thought ${n}`,
+					thinkingSignature: JSON.stringify({
+						type: "reasoning",
+						id: `rs_${n}`,
+						summary: [{ type: "summary_text", text: `thought ${n}` }],
+						encrypted_content: "gAAAA".padEnd(2000, "x"),
+					}),
+				},
+				{ type: "text", text: `Reading f${n}.ts → "${n}"`, textSignature: `{"v":1,"id":"msg_${n}"}` },
+				{ type: "toolCall", id: `call_${n}|fc_${n}`, name: "read", arguments: { path: `f${n}.ts` } },
+			],
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "gpt-5.1-codex",
+			usage,
+			stopReason: "toolUse",
+			timestamp: n,
+		};
+		const result: ToolResultMessage = {
+			role: "toolResult",
+			toolCallId: `call_${n}|fc_${n}`,
+			toolName: "read",
+			content: [{ type: "text", text: `const s${n} = "naïve \\ \t 漢字 \u{1F600} \ud800";\n`.repeat(60) }],
+			isError: false,
+			timestamp: n,
+		};
+		return [{ role: "user", content: `Question ${n}`, timestamp: n }, reply, result];
+	}
+
+	function sseResponse(): Response {
+		return new Response(buildSSEPayload({ status: "completed" }), {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		});
+	}
+
+	it("sends the zstd of JSON.stringify(body) over SSE while it reuses converted messages", async () => {
+		const sent: Uint8Array[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_input: string | URL, init?: RequestInit) => {
+				sent.push(init?.body as Uint8Array);
+				return sseResponse();
+			}),
+		);
+		const token = mockToken();
+		const sessionId = "reuse-sse";
+		const messages: Message[] = [];
+		const before = requestCacheStats();
+		for (let request = 0; request < 5; request++) {
+			messages.push(...turn(request));
+			const context = normalizeContext({ systemPrompt: "You are a helpful assistant.", messages: [...messages] });
+			// The reference: a payload hook (which turns the reuse off) records the body as JSON.stringify gives it.
+			let json = "";
+			await streamOpenAICodexResponses(model, context, {
+				apiKey: token,
+				sessionId,
+				transport: "sse",
+				onPayload: (payload) => {
+					json = JSON.stringify(payload);
+					return undefined;
+				},
+			}).result();
+			// The same messages, which the caller says are never changed in place: converted messages are reused.
+			await streamOpenAICodexResponses(model, context, {
+				apiKey: token,
+				sessionId,
+				transport: "sse",
+				immutableMessages: true,
+			}).result();
+			const [reference, reused] = sent.splice(0, 2);
+			const expected = zstdCompressSync(Buffer.from(json), {
+				params: { [zlibConstants.ZSTD_c_compressionLevel]: 3 },
+			});
+			expect(Buffer.from(reference).equals(expected), `request ${request}: reference`).toBe(true);
+			expect(Buffer.from(reused).equals(expected), `request ${request}: reused`).toBe(true);
+		}
+		// Not vacuous: messages of the earlier turns were reused.
+		expect(requestCacheStats().units - before.units).toBeGreaterThan(5);
+	});
+
+	it("counts the UTF-8 bytes of the body it then sends over SSE when the WebSocket fails", async () => {
+		const sent: Uint8Array[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_input: string | URL, init?: RequestInit) => {
+				sent.push(init?.body as Uint8Array);
+				return sseResponse();
+			}),
+		);
+		class FailingWebSocket {
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			constructor(_url: string, _protocols?: unknown) {
+				queueMicrotask(() => {
+					for (const listener of this.listeners.get("error") ?? []) listener({ message: "refused" });
+				});
+			}
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				let listeners = this.listeners.get(type);
+				if (!listeners) {
+					listeners = new Set();
+					this.listeners.set(type, listeners);
+				}
+				listeners.add(listener);
+			}
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+			send(): void {}
+			close(): void {}
+		}
+		vi.stubGlobal("WebSocket", FailingWebSocket);
+		const result = await streamOpenAICodexResponses(
+			model,
+			normalizeContext({ systemPrompt: "You are a helpful assistant.", messages: turn(1) }),
+			{ apiKey: mockToken(), sessionId: "fallback-bytes", transport: "auto", immutableMessages: true },
+		).result();
+		expect(sent).toHaveLength(1);
+		const json = zstdDecompressSync(sent[0]);
+		// Not ASCII: the count is of bytes, not characters.
+		expect(json.byteLength).toBeGreaterThan(json.toString("utf8").length);
+		expect(result.diagnostics?.[0]?.details).toMatchObject({
+			fallbackTransport: "sse",
+			requestBytes: json.byteLength,
+		});
+	});
+
+	/** A WebSocket that answers every request with an empty completed response `resp_<n>`. */
+	function stubWebSocket(sent: Array<{ input: unknown[]; previous_response_id?: string }>): void {
+		class MockWebSocket {
+			static OPEN = 1;
+			readyState = MockWebSocket.OPEN;
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+			constructor(_url: string, _protocols?: unknown) {
+				queueMicrotask(() => this.dispatch("open", {}));
+			}
+
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				let listeners = this.listeners.get(type);
+				if (!listeners) {
+					listeners = new Set();
+					this.listeners.set(type, listeners);
+				}
+				listeners.add(listener);
+			}
+
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+
+			send(data: string): void {
+				sent.push(JSON.parse(data));
+				const id = `resp_${sent.length}`;
+				queueMicrotask(() => {
+					for (const event of [
+						{ type: "response.created", response: { id } },
+						{ type: "response.completed", response: { id, status: "completed", usage: { input_tokens: 1 } } },
+					]) {
+						this.dispatch("message", { data: JSON.stringify(event) });
+					}
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+
+			private dispatch(type: string, event: unknown): void {
+				for (const listener of this.listeners.get(type) ?? []) listener(event);
+			}
+		}
+		vi.stubGlobal("WebSocket", MockWebSocket);
+	}
+
+	it.each([
+		{ name: "the same message objects, converted once and reused", edit: undefined, delta: true },
+		// JSON.stringify leaves out a property whose value is undefined: the input is the same.
+		{
+			name: "an earlier item with a property that is undefined",
+			edit: (item: Record<string, unknown>) => {
+				item.extra = undefined;
+			},
+			delta: true,
+		},
+		{
+			name: "an earlier item changed",
+			edit: (item: Record<string, unknown>) => {
+				item.role = "developer";
+			},
+			delta: false,
+		},
+	])("compares the continued input as JSON: $name", async ({ edit, delta }) => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const token = mockToken();
+		const sessionId = `reuse-ws-${delta}-${edit === undefined}`;
+		const messages: Message[] = [];
+		const before = requestCacheStats();
+		for (let request = 0; request < 3; request++) {
+			messages.push(...turn(request));
+			const context = normalizeContext({ systemPrompt: "You are a helpful assistant.", messages: [...messages] });
+			await streamOpenAICodexResponses(model, context, {
+				apiKey: token,
+				sessionId,
+				transport: "websocket-cached",
+				immutableMessages: true,
+				onPayload:
+					edit && request === 2
+						? (payload) => {
+								edit((payload as { input: Record<string, unknown>[] }).input[0]);
+								return undefined;
+							}
+						: undefined,
+			}).result();
+		}
+		expect(sent).toHaveLength(3);
+		expect(sent[0].previous_response_id).toBeUndefined();
+		// The second request continues the first (whose reply was empty): the new turn's five items.
+		expect(sent[1].previous_response_id).toBe("resp_1");
+		expect(sent[1].input).toHaveLength(5);
+		if (delta) {
+			expect(sent[2].previous_response_id).toBe("resp_2");
+			expect(sent[2].input).toHaveLength(5);
+		} else {
+			expect(sent[2].previous_response_id).toBeUndefined();
+			expect(sent[2].input).toHaveLength(15);
+		}
+		if (edit === undefined) expect(requestCacheStats().units - before.units).toBeGreaterThan(0);
 	});
 });

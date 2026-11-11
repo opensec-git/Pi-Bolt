@@ -1,4 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -170,5 +172,144 @@ describe("the latest Pi-Bolt release", () => {
 		expect(output).toContain("You can update without it: ");
 		expect(output).toMatch(/install\.(sh|ps1)/);
 		expect(process.exitCode).toBe(1);
+	});
+});
+
+// #303: an npm install updates from the npm registry, so it asks the registry first; and each source has its own time limit,
+// so a slow GitHub does not use up the time of the next source.
+describe("the latest Pi-Bolt release for an npm install (#303)", () => {
+	const realFetch = globalThis.fetch;
+	let registry: Server;
+	let registryUrl: string;
+	let registryRequests: string[];
+	let answer: (request: IncomingMessage, response: ServerResponse) => void;
+
+	beforeEach(async () => {
+		vi.stubEnv("PIBOLT_NPM", "1");
+		registryRequests = [];
+		answer = (_request, response) => {
+			response.writeHead(404);
+			response.end();
+		};
+		registry = createServer((request, response) => {
+			registryRequests.push(request.url ?? "");
+			answer(request, response);
+		});
+		await new Promise<void>((done) => registry.listen(0, "127.0.0.1", done));
+		registryUrl = `http://127.0.0.1:${(registry.address() as AddressInfo).port}`;
+		vi.stubEnv("PIBOLT_NPM_REGISTRY", `${registryUrl}/`);
+	});
+
+	afterEach(async () => {
+		registry.closeAllConnections();
+		await new Promise((done) => registry.close(done));
+	});
+
+	/** GitHub, answered by `routes`; the fake registry on 127.0.0.1 through the network. */
+	function github(routes: Record<string, (init?: RequestInit) => Response | Promise<Response>>) {
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+			if (url.startsWith(registryUrl)) return realFetch(input, init);
+			const route = routes[url];
+			if (!route) throw new Error(`unexpected request: ${url}`);
+			return route(init);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return fetchMock;
+	}
+
+	const json = (data: unknown) => (_request: IncomingMessage, response: ServerResponse) => {
+		response.writeHead(200, { "content-type": "application/json" });
+		response.end(JSON.stringify(data));
+	};
+
+	it("is the version of the registry's latest dist-tag, and GitHub is not asked", async () => {
+		answer = json({ name: "pi-bolt", version: "1.0.3" });
+		const fetchMock = github({});
+		await expect(getLatestPiRelease("1.0.2", { retry: true })).resolves.toEqual({ version: "1.0.3" });
+		expect(registryRequests).toEqual(["/pi-bolt/latest"]);
+		expect(requested(fetchMock)).toEqual([`${registryUrl}/pi-bolt/latest`]);
+	});
+
+	it("on the beta channel, is the newer of the registry's latest and beta dist-tags", async () => {
+		vi.stubEnv("PIBOLT_CHANNEL", "beta");
+		answer = json({ latest: "1.0.3", beta: "1.0.4" });
+		github({});
+		await expect(getLatestPiRelease("1.0.2")).resolves.toEqual({ version: "1.0.4" });
+		answer = json({ latest: "1.0.5", beta: "1.0.4" });
+		await expect(getLatestPiRelease("1.0.2")).resolves.toEqual({ version: "1.0.5" });
+		expect(registryRequests).toEqual(["/-/package/pi-bolt/dist-tags", "/-/package/pi-bolt/dist-tags"]);
+	});
+
+	it("is asked of GitHub when the registry does not say", async () => {
+		answer = (_request, response) => {
+			response.writeHead(500);
+			response.end();
+		};
+		const fetchMock = github({
+			[LATEST]: () => redirectTo("https://github.com/opensec-git/Pi-Bolt/releases/tag/bolt-v1.0.3"),
+		});
+		await expect(getLatestPiRelease("1.0.2")).resolves.toEqual({ version: "1.0.3" });
+		expect(requested(fetchMock)).toEqual([`${registryUrl}/pi-bolt/latest`, LATEST]);
+	});
+
+	it("a registry that does not answer in time leaves the next source its own time", async () => {
+		// (Answers after the time limit: the old shared limit was used up here, and GitHub failed without a request.)
+		answer = (_request, response) => setTimeout(json({ version: "1.0.9" }).bind(null, _request, response), 1000);
+		const fetchMock = github({
+			[LATEST]: () => redirectTo("https://github.com/opensec-git/Pi-Bolt/releases/tag/bolt-v1.0.3"),
+		});
+		await expect(getLatestPiRelease("1.0.2", { timeoutMs: 200 })).resolves.toEqual({ version: "1.0.3" });
+		expect(requested(fetchMock)).toEqual([`${registryUrl}/pi-bolt/latest`, LATEST]);
+	});
+
+	it("pi-bolt update says which version is out and the npm command, without asking GitHub", async () => {
+		answer = json({ version: "1.0.3" });
+		github({});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		expect(await handlePackageCommand(["update", "--self"])).toBe(true);
+		const output = log.mock.calls.flat().join("\n");
+		expect(output).toContain("Pi-Bolt 1.0.3 is out");
+		expect(output).toContain("npm install -g --allow-scripts=pi-bolt pi-bolt@latest");
+	});
+
+	it("pi-bolt update says an npm install is up to date from the registry alone", async () => {
+		answer = json({ version: "1.0.2" });
+		github({});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		expect(await handlePackageCommand(["update", "--self"])).toBe(true);
+		expect(log.mock.calls.flat().join("\n")).toContain("Pi-Bolt is already up to date (v1.0.2)");
+		expect(process.exitCode).toBeUndefined();
+	});
+});
+
+describe("each GitHub source has its own time limit (#303)", () => {
+	it("a releases/latest that is slow does not use up the API's time", async () => {
+		const hang = (init?: RequestInit) =>
+			new Promise<Response>((_, reject) =>
+				init?.signal?.addEventListener("abort", () => reject(init.signal?.reason ?? new Error("aborted"))),
+			);
+		const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input);
+			if (url === LATEST) return hang(init);
+			if (url === API_LATEST) return Response.json({ tag_name: "bolt-v1.0.3" });
+			throw new Error(`unexpected request: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(getLatestPiRelease("1.0.2", { timeoutMs: 100, retry: true })).resolves.toEqual({ version: "1.0.3" });
+		expect(requested(fetchMock)).toEqual([LATEST, API_LATEST]);
+	});
+
+	it("the reasons end with one period", async () => {
+		vi.stubGlobal("fetch", async () => {
+			throw new DOMException("The operation timed out.", "TimeoutError");
+		});
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		await handlePackageCommand(["update", "--self"]);
+		const output = error.mock.calls.flat().join("\n");
+		expect(output).toContain("The operation timed out.; ");
+		expect(output).not.toContain("..");
 	});
 });

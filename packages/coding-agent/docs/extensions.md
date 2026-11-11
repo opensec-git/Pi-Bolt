@@ -696,19 +696,29 @@ If the run is aborted while `agent_before_settle` handlers are running, valid re
 
 #### ui_prompt_start / ui_prompt_end
 
-Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, and `ctx.ui.custom()` so host/status integrations can report "waiting for user" instead of just "running".
+Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, `ctx.ui.custom()`, and `ctx.ui.showView()` so host/status integrations can report "waiting for user" instead of just "running".
 
 Nested or overlapping prompts are coalesced into one outer waiting span. Handlers are invoked best-effort and are not awaited before showing or closing the prompt.
 
 ```typescript
 pi.on("ui_prompt_start", async (event, ctx) => {
   // event.reason === "ui_prompt"
-  // event.kind: "select" | "confirm" | "input" | "editor" | "custom"
+  // event.kind: "select" | "confirm" | "input" | "editor" | "custom" | "view"
   // event.title: prompt title when available
 });
 
 pi.on("ui_prompt_end", async (event, ctx) => {
   // Pi is no longer waiting on that UI prompt span.
+});
+```
+
+#### view_event
+
+A tap, committed field value or form submit in a [view](mobile-ui.md), after Pi checked it against the view.
+
+```typescript
+pi.on("view_event", async (event, ctx) => {
+  // event.key, event.id (node), event.action, event.kind: "tap" | "change" | "submit", event.value, event.values
 });
 ```
 
@@ -877,6 +887,8 @@ pi.on("before_provider_request", (event, ctx) => {
 ```
 
 This is mainly useful for debugging provider serialization and cache behavior.
+
+The payload is the full request. Providers that continue from a previous response (OpenAI Codex over WebSocket, Anthropic message threads) may send only the part that is new since the previous request.
 
 #### after_provider_response
 
@@ -1259,7 +1271,7 @@ Control flow helpers. `ctx.isIdle()` is false while Pi is processing an agent ru
 Request a graceful shutdown of pi.
 
 - **Interactive mode:** Deferred until the agent becomes idle (after processing all queued steering and follow-up messages).
-- **RPC mode:** Deferred until the next idle state (after completing the current command response, when waiting for the next command).
+- **RPC mode:** Runs right away when the session is idle and no command is being handled. Otherwise deferred until the current command finishes (including its response) or the active run settles. (A request made while an extension-started compaction is running waits for the next command or run to finish.)
 - **Print mode:** No-op. The process exits automatically when all prompts are processed.
 
 Emits `session_shutdown` event to all extensions before exiting. Available in all contexts (event handlers, tools, commands, shortcuts).
@@ -1804,16 +1816,25 @@ mode and would not execute if sent via `prompt`.
 
 Register a custom TUI renderer for custom messages with your `customType`. Custom messages are created with `pi.sendMessage()` and participate in LLM context. See [Custom UI](#custom-ui).
 
-### pi.registerMarkdownTransformer(transformer)
+### pi.registerMarkdownTransformer(transformer, options?)
 
-Register a transformer for the Markdown in normal user text, assistant text, and thinking blocks. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Pi renders the transformed content with its built-in renderer.
+Register a transformer for Markdown before Pi renders it in interactive mode. Transformers run in extension load order, and each transformer receives the Markdown returned by the previous transformer. After the chain finishes, Pi renders the transformed content with its built-in renderer.
+
+By default a transformer runs on normal user text, assistant text, and thinking blocks. `options.messageTypes` lists the surfaces it runs on instead:
+
+| `messageType` | Surface |
+|---------------|---------|
+| `"user"`, `"assistant"`, `"assistant-thinking"` | Transcript messages (default) |
+| `"custom"` | Custom messages from `pi.sendMessage()` without a registered message renderer, and expanded skill blocks (their content, without Pi's header) |
+| `"summary"` | Expanded branch and compaction summaries (the summary, without Pi's header) |
+| `"changelog"` | Pi's changelog ("What's New" at startup and `/changelog`), the startup "Extension Updates" notice, and the release note of the "Update Available" notice |
 
 The transformer receives the Markdown string and a context with:
 
-- `messageType` — `"user"`, `"assistant"`, or `"assistant-thinking"`
-- `isStreaming` — `true` for partial assistant updates; `false` for user, finalized assistant, and restored messages
+- `messageType` — one of the surfaces above
+- `isStreaming` — `true` for partial assistant updates; `false` otherwise
 - `availableWidth` — exact terminal columns available for the transformed Markdown content
-- `messageId`, `timestamp` — session-entry ID and ISO timestamp when rendering from persisted session entries; `undefined` for live messages
+- `messageId`, `timestamp` — session-entry ID and ISO timestamp when rendering from persisted session entries; `undefined` for live messages and notices
 
 Return the transformed Markdown:
 
@@ -1822,9 +1843,14 @@ pi.registerMarkdownTransformer((markdown, { messageType, isStreaming }) => {
   if (isStreaming || messageType === "assistant-thinking") return markdown;
   return markdown.replaceAll("-->", "→");
 });
+
+// Show :warning: shortcodes in changelogs as a symbol.
+pi.registerMarkdownTransformer((markdown) => markdown.replaceAll(":warning:", "⚠"), {
+  messageTypes: ["changelog"],
+});
 ```
 
-If a transformer throws, Pi keeps the Markdown produced so far and continues with the next transformer. The hook is display-only: the original message remains unchanged in the session and model context. It runs for new user messages, assistant streaming updates, restored session messages, and terminal width changes, so transformers should remain synchronous and inexpensive.
+If a transformer throws, Pi keeps the Markdown produced so far and continues with the next transformer. The hook is display-only: the original message remains unchanged in the session and model context. It runs for new messages, assistant streaming updates, restored session messages, and terminal width changes, so transformers should remain synchronous and inexpensive. An extension has one transformer; registering again replaces it.
 
 ### pi.registerEntryRenderer(customType, renderer)
 
@@ -2398,9 +2424,13 @@ pi.registerTool({
 });
 ```
 
+`ReadOperations.createReadStream` is optional. When it returns the file as an async iterable of chunks (a Node `Readable` works), `read` keeps only the lines it shows in memory, so large files can be read with `offset`/`limit`; without it, `read` loads the whole file through `readFile`.
+
 The `create*ToolDefinition()` factories, such as `createReadToolDefinition()`, return complete tool definitions, including the built-in prompt snippet and guidelines, for the same purpose. Rendering does not need copying: a tool registered under a built-in name inherits the built-in renderer for each slot it leaves out (see [Overriding Built-in Tools](#overriding-built-in-tools)).
 
 **Operations interfaces:** `ReadOperations`, `WriteOperations`, `EditOperations`, `BashOperations`, `PowerShellOperations`, `LsOperations`, `GrepOperations`, `FindOperations`
+
+`GrepOperations` only covers the directory check: grep always runs the local `rg`. To search a remote system, override grep's `execute()` instead, as the [Gondolin example](../examples/extensions/gondolin/index.ts) does.
 
 For `user_bash`, extensions can reuse Pi's local shell backend via `createLocalBashOperations()` (or `createLocalPowerShellOperations()`) instead of reimplementing local process spawning, shell resolution, and process-tree termination.
 
@@ -2795,6 +2825,10 @@ The built-in MCP support connects registered servers. When nothing does, because
 ## Custom UI
 
 Extensions can interact with users via `ctx.ui` methods and customize how messages/tools render.
+
+For a UI in the Pi-Bolt app (cards, lists, progress, buttons, forms that look native on the phone and show as text in
+the terminal), use views: `ctx.ui.setView()`, `updateView()`, `showView()` and the `view_event` event. See
+[Mobile UI Kit](mobile-ui.md).
 
 For custom components, focus, overlays, themes, and rendering performance, see [Terminal UI](tui.md). The examples it lists show selection lists, settings toggles, cancellable loaders, footers, and widgets.
 
@@ -3242,7 +3276,7 @@ const highlighted = highlightCode(code, lang);
 | Mode | `ctx.mode` | `ctx.hasUI` | Notes |
 |------|------------|-------------|-------|
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
-| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`, component factories are ignored. See [RPC Extension UI](rpc-extension-ui.md) |
+| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`, component factories are ignored; [views](mobile-ui.md) render natively in clients with the kit. See [RPC Extension UI](rpc-extension-ui.md) |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 
@@ -3306,6 +3340,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `modal-editor.ts` | Vim-style modal editor | `setEditorComponent`, `CustomEditor` |
 | `rainbow-editor.ts` | Custom editor styling | `setEditorComponent` |
 | `widget-placement.ts` | Widget above/below editor | `setWidget` |
+| `mobile-ui-board/` | Task board with a native UI in the Pi-Bolt app and text in the terminal | `setView`, `updateView`, `showView`, `view_event` |
 | `overlay-test.ts` | Overlay components | `ui.custom` with overlay options |
 | `overlay-qa-tests.ts` | Comprehensive overlay tests | `ui.custom`, all overlay options |
 | `notify.ts` | Native terminal notification when the agent is done | `on("agent_settled")` |

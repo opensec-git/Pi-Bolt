@@ -856,6 +856,18 @@ export class Container implements Component {
 		this.changeReported = false;
 	}
 
+	/**
+	 * Forgets what the children rendered to, telling neither them nor the containers this is in: for a subclass that keeps
+	 * the lines it last rendered and lets go of the components they were rendered from. The next render of the children
+	 * renders them as from nothing.
+	 */
+	protected forgetRendered(): void {
+		this.rendered = undefined;
+		this.sharedLines = undefined;
+		this.changedChildren = [];
+		this.changesUnlisted = false;
+	}
+
 	/** A child reported a change (reportRenderChange()). */
 	[CHILD_CHANGED](child: Component): void {
 		if (this.rendered !== undefined && !this.changesUnlisted) {
@@ -1220,6 +1232,11 @@ export interface TUI extends Component {
 	 * for (requestRender()) once the time is up. For a change that need not be drawn at once, such as a spinner's next step.
 	 */
 	requestRenderWithin?(delayMs: number): void;
+	/**
+	 * A frame on the next tick, not held by MIN_RENDER_INTERVAL_MS or the spacing of slow frames, as for a key: for a change
+	 * someone waits to see, such as the end of a model's answer.
+	 */
+	requestImmediateRender?(): void;
 	addInputListener(listener: TuiInputListener): () => void;
 	removeInputListener(listener: TuiInputListener): void;
 	onTerminalColorSchemeChange(listener: (scheme: TerminalColorScheme) => void): () => void;
@@ -1849,7 +1866,7 @@ export abstract class TuiBase extends Container implements TUI {
 		}, delayMs);
 	}
 
-	private requestImmediateRender(): void {
+	requestImmediateRender(): void {
 		this.cancelRenderTimer();
 		this.renderRequested = true;
 		if (this.immediateRenderScheduled) return;
@@ -2272,7 +2289,8 @@ export abstract class TuiBase extends Container implements TUI {
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (!isImageLine(line)) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+				// Cursor markers are internal render metadata and must never reach terminal output.
+				lines[i] = normalizeTerminalOutput(line.replaceAll(CURSOR_MARKER, "")) + reset;
 			}
 		}
 		return lines;
@@ -2307,8 +2325,9 @@ export abstract class TuiBase extends Container implements TUI {
 				const beforeMarker = line.slice(0, markerIndex);
 				const col = visibleWidth(beforeMarker);
 
-				// Strip marker from the line
-				lines[row] = line.slice(0, markerIndex) + line.slice(markerIndex + CURSOR_MARKER.length);
+				// Strip all markers from the selected line. The first marker determines the
+				// hardware cursor position; any others are stale internal sentinels.
+				lines[row] = line.replaceAll(CURSOR_MARKER, "");
 
 				return { row, col };
 			}

@@ -92,7 +92,7 @@ Or:
 - mise: `github:opensec-git/Pi-Bolt` with the options in the
   [installation guide](https://pi-bolt.opensec.in/docs/installation.html), updated with
   `mise upgrade --bump github:opensec-git/Pi-Bolt`
-- npm: `npm install -g --allow-scripts=pi-bolt pi-bolt`
+- npm: `npm install -g --allow-scripts=pi-bolt pi-bolt`, updated with `npm install -g --allow-scripts=pi-bolt pi-bolt@latest`
 - Bun: `bun add -g --trust pi-bolt`
 - Arch Linux: the community AUR package
   [`pi-bolt-avx2-bin-release-git`](https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git) (the x86-64 AVX2 build,
@@ -106,6 +106,11 @@ pi-bolt update                  # install the latest release
 pi-bolt update --rollback       # put back the build it replaced
 pi-bolt update --channel beta   # take pre-releases too
 ```
+
+These update the installer's installations. For an npm install, `pi-bolt update` asks the npm registry for the latest version
+and prints the npm command that installs it; `pi-bolt update --rollback` says to install the version you want with
+`npm install -g --allow-scripts=pi-bolt pi-bolt@<version>`. Homebrew, Scoop and mise installs are updated with their own
+commands, which `pi-bolt update` prints.
 
 New to Pi? Run `/login` to connect a provider. Your Pi configuration in `~/.pi/agent` is used as is. Pi-Bolt installs next to Pi as `pi-bolt`, so both can stay installed;
 running the installer again updates, reinstalls or uninstalls it.
@@ -185,7 +190,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 <summary><a id="requirements"></a><b>Requirements</b></summary>
 
 - **Linux** x86-64 or ARM64 with glibc 2.17 or later (Ubuntu 20.04+, Debian 11+, RHEL/Rocky 8+, Amazon Linux 2, Raspberry Pi
-  OS 64-bit). musl is not supported.
+  OS 64-bit), or x86-64 with musl (Alpine 3.23 or later, with `libstdc++`: `apk add libstdc++`). The installer and the npm
+  package pick the musl builds there by themselves.
 - **Android** 7 or later on 64-bit ARM, in Termux.
 - **macOS** 13 or later on Apple silicon. Install with the installer, Homebrew, mise or npm
   ([Troubleshooting](docs/TROUBLESHOOTING.md#macos)).
@@ -206,7 +212,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
   FFF's search tools are used instead. To turn them off (for an extension with search tools of its own), set
   `"defaultTools": ["-grep", "-find"]` in `~/.pi/agent/settings.json`.
 - **Compiled plugins:** `pi-bolt compile` compiles the extensions installed on this machine into your Pi-Bolt (Linux and macOS)
-  with the release's own compiler, where they run as machine code; `pi-bolt update` compiles them into each new release.
+  with the release's own compiler, where they run as machine code. `pi-bolt update` installs the release's build, where they
+  load from their files until `pi-bolt compile` compiles them in again.
   [Plugins](docs/PLUGINS.md)
 - **Doctor:** `pi-bolt doctor` prints a plain-text report of your installation to paste into an issue. [Details](#pi-bolt-doctor)
 - **Updates:** `pi-bolt update` installs the latest release, and `--rollback` puts back the build it replaced.
@@ -423,6 +430,12 @@ tests/aot/run.sh                    # engine tests
     <img alt="Star history of Pi-Bolt" src="https://api.star-history.com/svg?repos=opensec-git/pi-bolt&type=Date" width="600">
   </picture>
 </a>
+
+## Written about Pi-Bolt
+
+- [Pi-Bolt: A Compiled Coding Agent That Can Afford Guardrails](https://blog.arihantdeva.com/blog/pi-bolt-compiled-coding-agent-guardrails)
+  by Arihant Deva, an independent write-up with its own measurements
+  ([#253](https://github.com/opensec-git/Pi-Bolt/issues/253)).
 
 ## License
 

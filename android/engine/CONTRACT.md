@@ -1,0 +1,195 @@
+# On-device engine: contract
+
+The Android app runs Pi-Bolt itself on the phone: the stock Pi-Bolt linux-arm64 engine on a glibc rebuilt for the
+app's prefix, shipped inside the APK, talking to the UI over Pi's RPC mode on stdin/stdout. No proot, no ptrace, no
+LD_PRELOAD. Proven on Android 16 (API 36, arm64): `research/engine-spike-glibc.md` (spike B).
+
+## Identity and paths
+
+- applicationId `in.opensec.pibolt` for every build type (no `.debug` suffix: the glibc prefix is compiled in).
+- `DATA` = `/data/data/in.opensec.pibolt` (user 0). Other users and work profiles: the engine is reported as
+  unavailable there (detected at runtime), remote control still works.
+- `PREFIX` = `DATA/files/usr`: `lib/`, `bin/`, `libexec/`, `etc/`, `share/`, `tmp/`. glibc is built with this prefix
+  (slibdir `PREFIX/lib`, `/etc/*` remapped to `PREFIX/etc/*`, `/tmp` to `PREFIX/tmp`, `/bin/sh` to `PREFIX/bin/sh`).
+- `HOME` = `DATA/files/home`; Pi's agent dir is the default `HOME/.pi/agent` (auth.json, settings.json, sessions/).
+- Projects live in `HOME/projects/<name>` (real paths: tools need them).
+- `TMPDIR` = `PREFIX/tmp`.
+
+## What ships in the APK (jniLibs/arm64-v8a; arm64 only)
+
+Android only executes or maps executable code from nativeLibraryDir, and only extracts files named `lib*.so`
+(`packaging.jniLibs.useLegacyPackaging = true`). So:
+
+| Shipped file | Runtime path (symlink in PREFIX) | What |
+|---|---|---|
+| `libpibolt.so` | (exec'd directly from nativeLibraryDir) | Pi-Bolt `pi`, PT_INTERP rewritten in place to `PREFIX/lib/ld-linux-aarch64.so.1` |
+| `libld.so` | `PREFIX/lib/ld-linux-aarch64.so.1` | glibc loader |
+| `lib<soname with . and - as _>.so`, e.g. `libc_so_6.so` | `PREFIX/lib/libc.so.6` | glibc and every shared library a shipped tool needs |
+| `lib<tool>_exe.so`, e.g. `libbash_exe.so` | `PREFIX/bin/bash` (and aliases) | userland executables, PT_INTERP set to the loader path above |
+| `lib<tool>_exe.so`, e.g. `libgit_submodule_exe.so` | `PREFIX/libexec/git-core/git-submodule` | executable scripts too (exec needs nativeLibraryDir); shebang `PREFIX/bin/sh` |
+| `libnode_exe.so`, `libpython3_14_exe.so` | `PREFIX/bin/node`, `PREFIX/bin/python3.14` (`python3`, `python`) | the language runtimes, exec'd directly like the userland |
+| `libesbuild_exe.so` | `PREFIX/bin/esbuild` | esbuild built for Android: interpreter `/system/bin/linker64`, no libraries, shipped unchanged (see esbuild) |
+| `libnpm_exe.so`, `libnpx_exe.so`, `libpip_exe.so` | `PREFIX/bin/npm`, `npx`, `pip` (`pip3`) | wrapper scripts: `exec PREFIX/bin/node .../npm-cli.js "$@"`, `exec PREFIX/bin/python3.14 -m pip "$@"` |
+| `lib<module file name>.so`, e.g. `lib_ssl_cpython_314_aarch64_linux_gnu_so.so` | `PREFIX/lib/python3.14/lib-dynload/_ssl.cpython-314-aarch64-linux-gnu.so` | Python's extension modules (no SONAME; always shipped) |
+
+Names: every character other than `[A-Za-z0-9_]` becomes `_` (`git-sh-i18n--envsubst` -> `libgit_sh_i18n__envsubst_exe.so`).
+Identical files (hard links, `git-remote-https` -> `git-remote-http`) ship once; the aliases are extra links.
+
+The engine must be exec'd itself (never as an argument of the loader: its static heap maps `/proc/self/exe`).
+Node and Python are exec'd directly too, although they would run under the loader: Node's `process.execPath` (and so
+`child_process.fork`, npm's `node` for scripts, node-gyp) and Python's prefix search come from `/proc/self/exe`,
+which under the loader names the loader.
+
+### Exec in the app's data directory (glibc's execve)
+
+Android 10+ refuses `execve()` of any file under `DATA` for apps targeting API 29+ (SELinux grants `execute`, which
+maps a file as code, but not `execute_no_trans`: system/sepolicy `private/untrusted_app_all.te` vs
+`untrusted_app_27.te`). npm and pip put scripts there: `node_modules/.bin/*`, `npm install -g` bins, pip console
+scripts, a venv's `bin/`. The pack's glibc therefore has its own `execve` (`glibc/execve.c`), used by everything that
+links it (bash, git, node's child_process, Python's subprocess, `system()`, `posix_spawn`):
+
+- a file whose real path is under `DATA/` is not handed to the kernel: `#!interp [arg]` runs `interp [arg] FILE ARGS`
+  (like binfmt_script, 4 levels), an ELF runs as `PREFIX/lib/ld-linux-aarch64.so.1 --argv0 ARGV0 FILE ARGS` (the
+  loader maps it; allowed), anything else is ENOEXEC (the shell runs it as a script); the execute bit is still checked;
+- `/bin/X`, `/usr/bin/X` and `/usr/local/bin/X` run `PREFIX/bin/X` when it exists (`#!/usr/bin/env node`, node's
+  `shell: true` = `/bin/sh`);
+- everything else goes to the kernel unchanged.
+
+The rule is by path, not by the kernel's answer, so the verify container (no SELinux) runs the same code as the phone.
+Static ELF programs in `DATA` (Go binaries such as esbuild's npm package) cannot run this way: the loader only loads
+dynamic programs. esbuild itself therefore ships in the pack (see esbuild).
+
+`assets/engine/manifest.json` (generated by the pack build) lists every link to create:
+
+```json
+{ "version": 1, "engine": "1.1.1", "glibc": "2.44", "prefix": "/data/data/in.opensec.pibolt/files/usr",
+  "links": [ { "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "bin/bash", "target": "libbash_exe.so" } ],
+  "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/etc/ssl/certs/ca-certificates.crt" } ],
+  "package": [ "package.json", "theme/dark.json", "..." ],
+  "extensions": [ { "name": "opensec-pi-todo", "version": "2.13.1", "files": [ "package.json", "dist-bun/index.js", "..." ] },
+                  { "name": "juicesharp-rpiv-ask-user-question", "package": "@juicesharp/rpiv-ask-user-question", "version": "2.15.0",
+                    "files": [ "..." ], "modules": { "asset": "engine/modules/juicesharp-rpiv-ask-user-question.zip", "sha256": "...", "files": 5, "bytes": 24337 } } ],
+  "env": { "PATH": "/data/data/in.opensec.pibolt/files/usr/bin:/system/bin", "SHELL": "...", "...": "..." },
+  "packFingerprint": "<sha256 of every shipped file and the manifest>" }
+```
+
+`links[].target` is a file name in nativeLibraryDir; `files[]` are copied from APK assets (non-executable data: CA
+bundle, terminfo, git templates and mergetools, the git shell libraries that are sourced rather than exec'd).
+`trees[]` (`{ "path": "lib/python3.14", "asset": "engine/trees/python.zip", "sha256", "files", "bytes",
+"executables": [...] }`) are directories shipped as one zip asset each (npm, the Python standard library and pip:
+thousands of files, some in directories the APK build would drop, such as `_pyrepl`); the app unpacks each into
+`PREFIX/<path>`, replacing what was there, and sets the execute bit on `executables` (paths inside the tree).
+`runtimes[]` (`{ "id": "node", "name": "Node.js", "version", "commands": ["node", "npm", "npx"], "bytes", "details":
+{ "npm": "10.9.4" } }`) describes the language runtimes for the Runtimes screen (`bytes`: installed size of its
+executables, modules, tree and the libraries only it uses).
+`package[]` lists every file under assets `engine/package/` (relative paths), so the app copies PI_PACKAGE_DIR without
+a recursive `AssetManager.list`. `extensions[]` are the Pi extensions the pack bundles (the repo's `extensions.txt` pins, npm
+integrity checked, and the third-party ones of `android/engine/npm/extensions.txt`), each unpacked under assets
+`engine/extensions/<name>/` with every file listed (`name` is a directory name: npm's `@scope/pkg` is `scope-pkg`, the
+npm name is `package`). One with runtime dependencies also has `modules`: its `node_modules` tree as one zip asset
+(every dependency's tarball checked against its lockfile's sha512; no install scripts; TypeScript declarations and
+source maps left out). `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
+may apply it as is). `assets/engine/licenses/` holds THIRD_PARTY_NOTICES.md and the licence texts for the About screen
+(not copied anywhere).
+
+## Runtime setup (app, at each engine start; cheap when unchanged)
+
+1. If `PREFIX/.pack` differs from `packFingerprint` (first run, app update, nativeLibraryDir moved): unpack `trees[]`,
+   recreate the symlink farm (after the trees: some links point into them) and copy `files[]` and `extensions[]` (to `PREFIX/share/pi-extensions/<name>`, an extension's `modules` zip unpacked into its `node_modules`), add those extension
+   directories to `packages` in `HOME/.pi/agent/settings.json` (merged under Pi's lock: other settings and packages
+   stay, no duplicates, paths of extensions no longer bundled are dropped), then write the fingerprint. Otherwise skip.
+2. Always: write `PREFIX/etc/resolv.conf` from the active network's DNS servers (rewrite on network change), plus
+   `etc/hosts` (`127.0.0.1 localhost`, `::1 localhost`).
+3. Spawn `nativeLibraryDir/libpibolt.so --mode rpc` in the project directory with env:
+   `HOME`, `TMPDIR`, `TZ` (`TimeZone.getDefault().id`), `LANG=C.UTF-8`, `PATH=PREFIX/bin:/system/bin`,
+   `SHELL=PREFIX/bin/bash`, `PI_PACKAGE_DIR` = a dir holding the engine's side files (theme/, export-html/,
+   assets/, package.json, README.md, docs/, examples/, photon_rs_bg.wasm) copied from APK assets `engine/package/`,
+   `GIT_EXEC_PATH=PREFIX/libexec/git-core`, `GIT_TEMPLATE_DIR=PREFIX/share/git-core/templates`,
+   `SSL_CERT_FILE=PREFIX/etc/ssl/certs/ca-certificates.crt`, `TERMINFO=PREFIX/share/terminfo`; for the runtimes
+   `npm_config_cache=DATA/cache/xdg/npm`, `PIP_CACHE_DIR=DATA/cache/xdg/pip`, `PYTHONUSERBASE=HOME/.local`,
+   `PIP_DISABLE_PIP_VERSION_CHECK=1`, `ESBUILD_BINARY_PATH=PREFIX/bin/esbuild` (when that link exists), and
+   `HOME/.local/bin` in front of PATH (`npm install -g` and `pip install`
+   commands). No `LD_LIBRARY_PATH`, no `LD_PRELOAD`. (git and curl also have these PREFIX paths compiled in, so they work without the variables.)
+4. stdin/stdout carry RPC JSON lines exactly like `pi-bolt --mode rpc` (packages/coding-agent/docs/rpc.md);
+   stderr goes to the app log.
+
+## Userland pack (first set)
+
+bash (also `bin/sh`, the shell glibc's system()/popen() and git use), busybox (coreutils, grep, sed, awk, find,
+xargs, tar, gzip, unzip, diff, less, vi... as `bin/<applet>` links; root-only applets skipped, see
+`userland/busybox-skip.txt`), git (+ `libexec/git-core` helpers, https via libcurl/OpenSSL), curl, ripgrep (`rg`),
+fd (`fd`, `fdfind`), CA certificates (Mozilla, via Debian), terminfo (xterm-256color, xterm, screen, tmux, vt100,
+linux, dumb...). bash, busybox, rg, fd and the shared libraries are Debian trixie arm64 binaries pinned in
+`userland/debs.lock`; git and curl are built from release tarballs for PREFIX.
+Later packs (they ship in the APK or a split, see Language runtimes): openssh, make/clang.
+
+## Language runtimes
+
+Node.js 22 LTS (the official linux-arm64 build, interpreter set to the pack's loader; npm, no corepack) and CPython
+3.14 (built from source for PREFIX: `sys.prefix` = PREFIX; ssl via OpenSSL, sqlite3, ctypes, bz2, lzma, decimal,
+curses, uuid; pip from ensurepip; no tkinter, readline, test suite or IDLE), from `runtimes/build-runtimes.sh`.
+They ship inside the APK like the userland, so they always exec. Package managers:
+
+- npm: the builtin config (`PREFIX/lib/node_modules/npm/npmrc`) puts global installs and their commands in
+  `HOME/.local` and runs scripts with `PREFIX/bin/sh`; the cache is `DATA/cache/xdg/npm`. Node uses its built-in CA
+  store for HTTPS.
+- pip: `PREFIX/pip.conf` makes `pip install` outside a virtualenv a user install (`HOME/.local`); inside a venv it
+  installs into the venv. The cache is `DATA/cache/xdg/pip`. TLS uses `SSL_CERT_FILE`.
+- Packages with native code: wheels and `.node` addons are mapped from `DATA` by the loader (allowed, see above);
+  packages that exec a static binary (some Go/Rust CLIs) do not run, except esbuild, which the pack ships (below);
+  there is no compiler for source builds.
+
+## esbuild (Vite)
+
+esbuild's npm package runs a native binary from `node_modules` (`@esbuild/linux-arm64`, a static Go program: it cannot
+run from `DATA`). The pack ships its own, and the app sets `ESBUILD_BINARY_PATH`, which every version of esbuild's JS
+API and CLI shim uses instead of its package's binary. So `vite`, `vite build`, tsx and anything else that uses
+esbuild's JS API work in any project, with no change to the project.
+
+- What ships: esbuild `ESBUILD_VERSION` (versions.env) from the release's source, built by `runtimes/build-esbuild.sh`
+  the way esbuild builds its own `@esbuild/android-arm64` package: `GOOS=android`, `CGO_ENABLED=0`, Go `GO_VERSION` (the
+  one esbuild's `go.version` names). The result is a PIE whose interpreter is `/system/bin/linker64` and which needs
+  no library; the kernel runs it from nativeLibraryDir. Go's android port avoids system calls Android's seccomp
+  filter kills, which a `GOOS=linux` build does not (`faccessat2`; pidfd before Android 12).
+- `ESBUILD_BINARY_PATH` is `PREFIX/bin/esbuild` (the link), not the file in nativeLibraryDir: esbuild's postinstall
+  writes the path into `node_modules/esbuild` (`lib/main.js` and the `bin/esbuild` shim), and nativeLibraryDir moves on
+  every app update. The link is remade after an update. Project secrets cannot set the variable (`SecretEnv.RESERVED`).
+- Version check. Upstream, the JS API (the host) starts the binary with `--service=<host version>`; the binary exits
+  unless that is its own version, and the host refuses any version but its own in the binary's first packet. Projects
+  pin different versions (Vite 5: `^0.19.3` to `^0.21.3`, Vite 6: `^0.24.0`/`^0.25.0`, Vite 7: `^0.25.0` to
+  `^0.27.0 || ^0.28.0`), so `runtimes/esbuild-host-versions.patch` makes one binary serve hosts 0.19.0 to 0.28.x:
+  - it accepts `--service=0.M.P` for 19 <= M <= 28 and answers with the host's version, so the host's check passes;
+    other hosts get "Cannot start service: Host version ... is not supported" and exit;
+  - for hosts before 0.27.4 it sends a build's `metafile` as a string (0.27.4 changed it to bytes; older hosts
+    `JSON.parse` it: Vite's dependency optimizer and config loader use it), and for hosts before 0.25.0 it adds the
+    serve response's old `host` field next to `hosts`;
+  - `esbuild --version` prints the version of the esbuild package in the working directory when that is a supported
+    host (esbuild's postinstall runs it there and fails on any other answer), else the binary's own.
+- Why that is enough (checked in esbuild's source, `git diff v0.19.0 v0.28.2 -- cmd/esbuild/ lib/shared/ lib/npm/`):
+  the packet encoding (`stdio_protocol.go`/`.ts`) and the set of commands are unchanged; every request field added
+  since 0.19.0 is optional on the binary's side (`with`, `delay`, `corsOrigin`, `logStyle`); no CLI flag that a host
+  sends was removed; the binary has sent `on-start` to every plugin build since 0.23.1, which older hosts answer
+  (they always register it). The only responses older hosts read differently are the two the patch handles.
+- Limits: a project gets esbuild `ESBUILD_VERSION`'s compiler whatever version it pins: newer syntax support and bug
+  fixes, and the behaviour changes in esbuild's changelog for 0.20 to 0.28, so output can differ from what the pinned
+  version would produce. Hosts before 0.19.0 (Vite 4) and from 0.29.0 on are refused; later 0.28.x hosts are accepted
+  unaudited. npm still downloads `@esbuild/linux-arm64` (unused). esbuild-wasm is unaffected (it runs in Node).
+- Vite 8 does not use esbuild: it bundles with rolldown and minifies CSS with lightningcss, both napi `.node` addons
+  from `node_modules` (`@rolldown/binding-linux-arm64-gnu`, `lightningcss-linux-arm64-gnu`), which the pack's node maps
+  from `DATA` through its loader like any addon (Vite 5 to 7 load rollup's addon the same way). They pick the gnu
+  build because Node reports glibc (`process.report` `glibcVersionRuntime`) and Android has no `/usr/bin/ldd`.
+- Tested (Docker, linux/arm64): the JS API of esbuild 0.19.0 to 0.28.2 (transform, build with plugins and metafile,
+  context rebuild and serve, buildSync, formatMessages, analyzeMetafile; npm install with esbuild's postinstall);
+  `vite build` and the dev server (TypeScript, a pre-bundled CommonJS dependency, a TypeScript config) of Vite 5.4,
+  6.4, 7.3 and 8.3 through the real pack in the verify container (with a linux build of the same esbuild source:
+  the shipped one needs Android's linker); the shipped binary itself in termux/termux-docker (bionic). Not on a phone.
+- Updating `ESBUILD_VERSION`: diff the files above between the old and the new tag, extend the patch for any response
+  that changed, raise `newestHostMinor` in it, and regenerate it against the new tag.
+
+## Build (reproducible, not committed binaries)
+
+`android/engine/build-pack.sh` (Docker, linux/arm64; CI on GitHub's ubuntu-24.04-arm runner) produces
+`android/engine/out/{jniLibs/arm64-v8a, assets/engine}`, gitignored. Gradle adds those dirs when present.
+`scripts/verify-pack.sh` runs the result the way the app does (Alpine arm64 container: no glibc, no /bin/bash, real
+PREFIX). `scripts/source-bundle.sh` writes `out/pi-bolt-android-engine-sources.tar` (glibc + Termux patches + our
+scripts, git, curl, Debian sources of bash and busybox), published with each app release (LGPL-2.1/GPL).

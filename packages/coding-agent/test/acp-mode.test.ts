@@ -576,6 +576,29 @@ describe("ACP mode", () => {
 		expect(updates.at(-1)?.status).toBe("completed");
 	});
 
+	it("gives an extension a theme in session_start, as the terminal modes do", async () => {
+		const extensionPath = join(root, "theme-probe-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.on("session_start", async (_event, ctx) => {
+		try {
+			ctx.ui.theme.fg("accent", "probe");
+			console.error("THEME_PROBE_OK");
+		} catch (error) {
+			console.error("THEME_PROBE_ERROR", String(error));
+		}
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		await client.waitFor(() => client.stderr.includes("THEME_PROBE_"), 20_000);
+		expect(client.stderr).toContain("THEME_PROBE_OK");
+		expect(client.stderr).not.toContain("THEME_PROBE_ERROR");
+	}, 30_000);
+
 	it("connects the MCP servers the editor passes, with their environment as given", async () => {
 		const serverPath = join(root, "mcp-server.mjs");
 		const marker = join(root, "mcp-marker.json");

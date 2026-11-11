@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The offscreen diagram renderer (ui/diagram/MermaidRenderer.kt). Only this page's own scripts run; nothing is
+     fetched from outside the app (the WebView blocks network loads too). Mermaid injects its own <style> elements. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src data:; connect-src 'self'">
+<style>
+  @font-face { font-family: Inter; src: url("inter.ttf"); }
+  html, body { margin: 0; background: transparent; font-family: Inter, sans-serif; }
+  #stage { position: absolute; left: 0; top: 0; width: 4000px; }
+</style>
+<script src="mermaid.min.js"></script>
+<script src="render.js"></script>
+</head>
+<body><div id="stage"></div></body>
+</html>

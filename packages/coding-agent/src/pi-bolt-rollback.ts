@@ -8,8 +8,8 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import chalk from "chalk";
 import { PIBOLT, PIBOLT_INSTALL_URL, piBoltInstallDir, piBoltInstallMethod, piBoltPackageManager } from "./pi-bolt.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
 /** "Pi-Bolt 0.9.0 (Pi 1.2.0), linux-x64, JIT off, built ..." and what is compiled in, from a build's pi-bolt.txt. */
 function describe(folder: string): string {
@@ -130,7 +130,9 @@ export function rollbackPiBolt(): number {
 		console.error(
 			"This Pi-Bolt was installed with the npm package. Install the version you want with the package manager that installed it:",
 		);
-		console.error("  npm install -g pi-bolt@<version>      (the versions: npm view pi-bolt versions)");
+		console.error(
+			"  npm install -g --allow-scripts=pi-bolt pi-bolt@<version>      (the versions: npm view pi-bolt versions)",
+		);
 		return 1;
 	}
 	const manager = piBoltPackageManager(method);

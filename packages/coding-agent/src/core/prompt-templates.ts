@@ -18,6 +18,12 @@ export interface PromptTemplate {
 	filePath: string; // Absolute path to the template file
 }
 
+/** A prompt template file found but not read yet: what loading it needs, and what a listing of templates shows. */
+export type PromptTemplateFile = Pick<PromptTemplate, "name" | "filePath" | "sourceInfo">;
+
+/** The template files to load and the problems found on the way, in the order loading reports them. */
+export type PromptTemplateListing = Array<{ file: PromptTemplateFile } | { diagnostic: ResourceDiagnostic }>;
+
 /**
  * Parse command arguments respecting quoted strings (bash-style)
  * Returns array of arguments
@@ -28,18 +34,26 @@ export function parseCommandArgs(argsString: string): string[] {
 	// Tracks whether a token has started, so quoted empty strings ("" or '') are kept as arguments
 	let hasToken = false;
 	let inQuote: string | null = null;
+	// Where the open quote started, so an unclosed quote can be re-read as literal text
+	let quoteStart = 0;
 
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i];
 
 		if (inQuote) {
-			if (char === inQuote) {
+			if (char === "\\" && argsString[i + 1] === inQuote) {
+				// A backslash before the open quote's character keeps it as text: "say \"hi\"" gives say "hi"
+				current += inQuote;
+				i++;
+			} else if (char === inQuote) {
 				inQuote = null;
 			} else {
 				current += char;
 			}
-		} else if (char === '"' || char === "'") {
+		} else if ((char === '"' || char === "'") && !hasToken) {
+			// Quotes only open at the start of an argument, so apostrophes inside words stay literal
 			inQuote = char;
+			quoteStart = i;
 			hasToken = true;
 		} else if (/\s/.test(char)) {
 			if (hasToken) {
@@ -50,6 +64,14 @@ export function parseCommandArgs(argsString: string): string[] {
 		} else {
 			current += char;
 			hasToken = true;
+		}
+
+		if (inQuote && i === argsString.length - 1) {
+			// Unclosed quote: keep the quote character as text and parse the rest normally
+			// (current was empty when the quote opened, because quotes only open a new argument)
+			inQuote = null;
+			current = argsString[quoteStart];
+			i = quoteStart;
 		}
 	}
 
@@ -200,10 +222,10 @@ function replaceArgumentReferences(
 	return out + content.slice(copied);
 }
 
-function loadTemplateFromFile(
-	filePath: string,
-	sourceInfo: SourceInfo,
-): { template: PromptTemplate | null; diagnostics: ResourceDiagnostic[] } {
+function loadTemplateFromFile({ name, filePath, sourceInfo }: PromptTemplateFile): {
+	template: PromptTemplate | null;
+	diagnostics: ResourceDiagnostic[];
+} {
 	const diagnostics: ResourceDiagnostic[] = [];
 	let rawContent: string;
 	try {
@@ -223,8 +245,6 @@ function loadTemplateFromFile(
 		diagnostics.push({ type: "warning", message, path: filePath });
 		return { template: null, diagnostics };
 	}
-
-	const name = basename(filePath).replace(/\.md$/, "");
 
 	// Get description from frontmatter or first non-empty line
 	let description = typeof frontmatter.description === "string" ? frontmatter.description : "";
@@ -251,15 +271,18 @@ function loadTemplateFromFile(
 	};
 }
 
+function listTemplateFile(filePath: string, sourceInfo: SourceInfo): { file: PromptTemplateFile } {
+	return { file: { name: basename(filePath).replace(/\.md$/, ""), filePath, sourceInfo } };
+}
+
 /**
- * Scan a directory for .md files (non-recursive) and load them as prompt templates.
+ * Scan a directory for .md files (non-recursive): the prompt templates in it.
  */
-function loadTemplatesFromDir(dir: string, getSourceInfo: (filePath: string) => SourceInfo): LoadPromptTemplatesResult {
-	const templates: PromptTemplate[] = [];
-	const diagnostics: ResourceDiagnostic[] = [];
+function listTemplatesInDir(dir: string, getSourceInfo: (filePath: string) => SourceInfo): PromptTemplateListing {
+	const listing: PromptTemplateListing = [];
 
 	if (!existsSync(dir)) {
-		return { templates, diagnostics };
+		return listing;
 	}
 
 	try {
@@ -281,18 +304,14 @@ function loadTemplatesFromDir(dir: string, getSourceInfo: (filePath: string) => 
 			}
 
 			if (isFile && entry.name.endsWith(".md")) {
-				const result = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
-				if (result.template) {
-					templates.push(result.template);
-				}
-				diagnostics.push(...result.diagnostics);
+				listing.push(listTemplateFile(fullPath, getSourceInfo(fullPath)));
 			}
 		}
 	} catch {
-		return { templates, diagnostics };
+		return listing;
 	}
 
-	return { templates, diagnostics };
+	return listing;
 }
 
 export interface LoadPromptTemplatesOptions {
@@ -318,17 +337,37 @@ export interface LoadPromptTemplatesResult {
  * 3. Explicit prompt paths
  */
 export function loadPromptTemplates(options: LoadPromptTemplatesOptions): LoadPromptTemplatesResult {
+	return loadPromptTemplateFiles(listPromptTemplates(options));
+}
+
+/** Read the templates of a listing (see listPromptTemplates); a file that cannot be read or parsed gives a warning. */
+export function loadPromptTemplateFiles(listing: PromptTemplateListing): LoadPromptTemplatesResult {
+	const templates: PromptTemplate[] = [];
+	const diagnostics: ResourceDiagnostic[] = [];
+	for (const item of listing) {
+		if ("diagnostic" in item) {
+			diagnostics.push(item.diagnostic);
+			continue;
+		}
+		const result = loadTemplateFromFile(item.file);
+		if (result.template) {
+			templates.push(result.template);
+		}
+		diagnostics.push(...result.diagnostics);
+	}
+	return { templates, diagnostics };
+}
+
+/**
+ * The prompt template files loadPromptTemplates would read, with their names and sources, found without reading them.
+ */
+export function listPromptTemplates(options: LoadPromptTemplatesOptions): PromptTemplateListing {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
 	const promptPaths = options.promptPaths;
 	const includeDefaults = options.includeDefaults;
 
-	const templates: PromptTemplate[] = [];
-	const diagnostics: ResourceDiagnostic[] = [];
-	const addResult = (result: LoadPromptTemplatesResult): void => {
-		templates.push(...result.templates);
-		diagnostics.push(...result.diagnostics);
-	};
+	const listing: PromptTemplateListing = [];
 
 	const globalPromptsDir = join(resolvedAgentDir, "prompts");
 	const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
@@ -364,35 +403,31 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): LoadPr
 	};
 
 	if (includeDefaults) {
-		addResult(loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
-		addResult(loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
+		listing.push(...listTemplatesInDir(globalPromptsDir, getSourceInfo));
+		listing.push(...listTemplatesInDir(projectPromptsDir, getSourceInfo));
 	}
 
-	// 3. Load explicit prompt paths
+	// 3. Explicit prompt paths
 	for (const rawPath of promptPaths) {
 		const resolvedPath = resolvePath(rawPath, resolvedCwd, { trim: true });
-		if (!existsSync(resolvedPath)) {
-			continue;
-		}
-
 		try {
 			const stats = statSync(resolvedPath);
 			if (stats.isDirectory()) {
-				addResult(loadTemplatesFromDir(resolvedPath, getSourceInfo));
+				listing.push(...listTemplatesInDir(resolvedPath, getSourceInfo));
 			} else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-				const result = loadTemplateFromFile(resolvedPath, getSourceInfo(resolvedPath));
-				if (result.template) {
-					templates.push(result.template);
-				}
-				diagnostics.push(...result.diagnostics);
+				listing.push(listTemplateFile(resolvedPath, getSourceInfo(resolvedPath)));
 			}
 		} catch (error) {
+			// A path that does not exist is skipped without a warning (existsSync, asked only when stat fails).
+			if (!existsSync(resolvedPath)) {
+				continue;
+			}
 			const message = error instanceof Error ? error.message : "failed to read prompt template path";
-			diagnostics.push({ type: "warning", message, path: resolvedPath });
+			listing.push({ diagnostic: { type: "warning", message, path: resolvedPath } });
 		}
 	}
 
-	return { templates, diagnostics };
+	return listing;
 }
 
 /**

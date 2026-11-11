@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>A page &amp; more</title>
+  <!-- a comment
+       over lines -->
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .card > h2 { color: #333; }
+  </style>
+</head>
+<body class="home" data-id='42'>
+  <header>
+    <nav><a href="/">Home</a> | <a href="/about?x=1&amp;y=2">About</a></nav>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Title</h2>
+      <p>Some <strong>bold</strong> and <em>italic</em> text.</p>
+      <img src="a.png" alt="An image" />
+      <ul>
+        <li>One</li>
+        <li>Two</li>
+      </ul>
+    </section>
+    <form action="/submit" method="post">
+      <input type="text" name="q" placeholder="Search" required>
+      <button type="submit" disabled>Go</button>
+    </form>
+  </main>
+  <script>
+    document.querySelectorAll('a').forEach((a) => {
+      a.addEventListener('click', (e) => console.log(e.target.href));
+    });
+  </script>
+  <footer>&copy; 2026</footer>
+</body>
+</html>

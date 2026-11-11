@@ -1,5 +1,4 @@
 import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	type Dirent,
@@ -38,11 +37,11 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import type { Readable } from "node:stream";
 import ignore from "ignore";
 import { minimatch } from "minimatch";
-import { gt, maxSatisfying, rcompare, satisfies, valid, validRange } from "semver";
 import { CONFIG_DIR_NAME, isBunBinary } from "../config.ts";
 import { PIBOLT } from "../pi-bolt.ts";
 import { findExecutableOnPath, spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
+import { semver } from "../utils/lazy-packages.ts";
 import {
 	canonicalizePath,
 	getPathComparisonKey,
@@ -56,8 +55,9 @@ import { stripBom } from "../utils/text.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
 import { getPackageIdentity } from "./package-source.ts";
 import { type PiManifest, readPiManifest } from "./pi-manifest.ts";
+import { ResourcePathKeys } from "./resource-path-keys.ts";
 import type { PackageSource, Settings, SettingsManager } from "./settings-manager.ts";
-import { BUILTIN_PATH_PREFIX, getResourcePathKey } from "./source-info.ts";
+import { BUILTIN_PATH_PREFIX } from "./source-info.ts";
 
 /** How package installs run: argv-style, plus environment for the package manager process. */
 interface NpmCommand {
@@ -72,18 +72,19 @@ const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
-function isOfflineModeEnabled(): boolean {
+/** Whether PI_OFFLINE is set; package installs and updates then skip all network access. */
+export function isOfflineModeEnabled(): boolean {
 	const value = process.env.PI_OFFLINE;
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
 }
 
 function isExactNpmVersion(version: string | undefined): boolean {
-	return valid(version ?? "") !== null;
+	return semver().valid(version ?? "") !== null;
 }
 
 function getNpmVersionRange(version: string | undefined): string | undefined {
-	return version ? (validRange(version) ?? undefined) : undefined;
+	return version ? (semver().validRange(version) ?? undefined) : undefined;
 }
 
 export interface PathMetadata {
@@ -120,7 +121,13 @@ export interface PackageInstallFailure {
 export type MissingSourceAction = "install" | "skip" | "error";
 
 export interface ProgressEvent {
-	type: "start" | "progress" | "complete" | "error";
+	/**
+	 * `start` is followed by exactly one `complete` or `error` for the same source.
+	 * `progress` carries an intermediate message or warning.
+	 * `result` reports an outcome outside that pairing, e.g. one changed package
+	 * after update(): `npm:foo 1.2.0 -> 1.3.0`.
+	 */
+	type: "start" | "progress" | "complete" | "error" | "result";
 	action: "install" | "remove" | "update" | "clone" | "pull";
 	source: string;
 	message?: string;
@@ -226,6 +233,15 @@ interface GitUpdateTarget extends ConfiguredUpdateSource {
 	parsed: GitSource;
 }
 
+/** A configured package whose installed npm version or git commit changed during update(). */
+interface UpdatedPackage extends ConfiguredUpdateSource {
+	type: "npm" | "git";
+	/** npm version or git commit before the update; undefined if it was not installed. */
+	from?: string;
+	/** npm version or git commit after the update. */
+	to?: string;
+}
+
 interface ResourceAccumulator {
 	extensions: Map<string, { metadata: PathMetadata; enabled: boolean }>;
 	skills: Map<string, { metadata: PathMetadata; enabled: boolean }>;
@@ -314,11 +330,19 @@ function prefixIgnorePattern(line: string, prefix: string): string | null {
 	return negated ? `!${prefixed}` : prefixed;
 }
 
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
+// Matchers that hold a rule: one that holds none ignores nothing, so it is not asked (isIgnored), which saves the path
+// work of every entry.
+const matchersWithRules = new WeakSet<IgnoreMatcher>();
+
+/** Adds the rules of `dir`'s ignore files to `ig`, looking up only names that `entries` (dir's listing) has. */
+function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string, entries: Dirent[]): void {
 	const relativeDir = relative(rootDir, dir);
 	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
+	// In any case: existsSync finds a name in another case where the file system ignores case.
+	const names = new Set(entries.map((entry) => entry.name.toLowerCase()));
 
 	for (const filename of IGNORE_FILE_NAMES) {
+		if (!names.has(filename)) continue;
 		const ignorePath = join(dir, filename);
 		if (!existsSync(ignorePath)) continue;
 		try {
@@ -329,9 +353,34 @@ function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
 				.filter((line): line is string => Boolean(line));
 			if (patterns.length > 0) {
 				ig.add(patterns);
+				matchersWithRules.add(ig);
 			}
 		} catch {}
 	}
+}
+
+/**
+ * The entries of `dir` after adding its ignore rules to `ig`, or undefined when it cannot be listed (then its rules
+ * would apply to nothing). Listing first spares an existsSync for each ignore file name the folder does not have.
+ */
+function listWithIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): Dirent[] | undefined {
+	// (A missing folder is common, and the error readdirSync would throw costs more than the existsSync.)
+	if (!existsSync(dir)) return undefined;
+	let entries: Dirent[];
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return undefined;
+	}
+	addIgnoreRules(ig, dir, rootDir, entries);
+	return entries;
+}
+
+/** Whether `ig` ignores `fullPath` (as a folder when `isDir`), taken relative to `root`. */
+function isIgnored(ig: IgnoreMatcher, root: string, fullPath: string, isDir: boolean): boolean {
+	if (!matchersWithRules.has(ig)) return false;
+	const relPath = toPosixPath(relative(root, fullPath));
+	return ig.ignores(isDir ? `${relPath}/` : relPath);
 }
 
 function isPattern(s: string): boolean {
@@ -379,14 +428,12 @@ function collectFiles(
 	rootDir?: string,
 ): string[] {
 	const files: string[] = [];
-	if (!existsSync(dir)) return files;
-
 	const root = rootDir ?? dir;
 	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const entries = listWithIgnoreRules(ig, dir, root);
+	if (!entries) return files;
 
 	try {
-		const entries = readdirSync(dir, { withFileTypes: true });
 		for (const entry of entries) {
 			if (entry.name.startsWith(".")) continue;
 			if (skipNodeModules && entry.name === "node_modules") continue;
@@ -405,9 +452,7 @@ function collectFiles(
 				}
 			}
 
-			const relPath = toPosixPath(relative(root, fullPath));
-			const ignorePath = isDir ? `${relPath}/` : relPath;
-			if (ig.ignores(ignorePath)) continue;
+			if (isIgnored(ig, root, fullPath, isDir)) continue;
 
 			if (isDir) {
 				files.push(...collectFiles(fullPath, filePattern, skipNodeModules, ig, root));
@@ -424,22 +469,25 @@ function collectFiles(
 
 type SkillDiscoveryMode = "pi" | "agents";
 
+/**
+ * `pathKeys` learns the entries reached from the root through no symbolic link (`plainPath`: so far, none), whose real
+ * paths follow from the root's.
+ */
 function collectSkillEntries(
 	dir: string,
 	mode: SkillDiscoveryMode,
 	ignoreMatcher?: IgnoreMatcher,
 	rootDir?: string,
+	pathKeys?: ResourcePathKeys,
+	plainPath = true,
 ): string[] {
 	const entries: string[] = [];
-	if (!existsSync(dir)) return entries;
-
 	const root = rootDir ?? dir;
 	const ig = ignoreMatcher ?? ignore();
-	addIgnoreRules(ig, dir, root);
+	const dirEntries = listWithIgnoreRules(ig, dir, root);
+	if (!dirEntries) return entries;
 
 	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
-
 		for (const entry of dirEntries) {
 			if (entry.name !== "SKILL.md") {
 				continue;
@@ -455,9 +503,9 @@ function collectSkillEntries(
 				}
 			}
 
-			const relPath = toPosixPath(relative(root, fullPath));
-			if (isFile && !ig.ignores(relPath)) {
+			if (isFile && !isIgnored(ig, root, fullPath, false)) {
 				entries.push(fullPath);
+				if (plainPath && !entry.isSymbolicLink()) pathKeys?.notePlainEntry(root, fullPath);
 				return entries;
 			}
 		}
@@ -480,21 +528,21 @@ function collectSkillEntries(
 				}
 			}
 
-			const relPath = toPosixPath(relative(root, fullPath));
 			const shouldIncludeMarkdownFile =
 				isFile &&
 				entry.name.endsWith(".md") &&
-				!ig.ignores(relPath) &&
+				!isIgnored(ig, root, fullPath, false) &&
 				((mode === "pi" && dir === root) || (mode === "agents" && dir !== root));
 			if (shouldIncludeMarkdownFile) {
 				entries.push(fullPath);
+				if (plainPath && !entry.isSymbolicLink()) pathKeys?.notePlainEntry(root, fullPath);
 				continue;
 			}
 
 			if (!isDir) continue;
-			if (ig.ignores(`${relPath}/`)) continue;
+			if (isIgnored(ig, root, fullPath, true)) continue;
 
-			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
+			entries.push(...collectSkillEntries(fullPath, mode, ig, root, pathKeys, plainPath && !entry.isSymbolicLink()));
 		}
 	} catch {
 		// Ignore errors
@@ -503,8 +551,8 @@ function collectSkillEntries(
 	return entries;
 }
 
-function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode): string[] {
-	return collectSkillEntries(dir, mode);
+function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode, pathKeys: ResourcePathKeys): string[] {
+	return collectSkillEntries(dir, mode, undefined, undefined, pathKeys);
 }
 
 function findGitRepoRoot(startDir: string): string | null {
@@ -542,15 +590,14 @@ function collectAncestorAgentsSkillDirs(startDir: string): string[] {
 	return skillDirs;
 }
 
-function collectAutoPromptEntries(dir: string): string[] {
+/** `pathKeys` learns the entries that are not symbolic links, whose real paths follow from the folder's. */
+function collectAutoPromptEntries(dir: string, pathKeys: ResourcePathKeys): string[] {
 	const entries: string[] = [];
-	if (!existsSync(dir)) return entries;
-
 	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const dirEntries = listWithIgnoreRules(ig, dir, dir);
+	if (!dirEntries) return entries;
 
 	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
 		for (const entry of dirEntries) {
 			if (entry.name.startsWith(".")) continue;
 			if (entry.name === "node_modules") continue;
@@ -565,11 +612,11 @@ function collectAutoPromptEntries(dir: string): string[] {
 				}
 			}
 
-			const relPath = toPosixPath(relative(dir, fullPath));
-			if (ig.ignores(relPath)) continue;
+			if (isIgnored(ig, dir, fullPath, false)) continue;
 
 			if (isFile && entry.name.endsWith(".md")) {
 				entries.push(fullPath);
+				if (!entry.isSymbolicLink()) pathKeys.notePlainEntry(dir, fullPath);
 			}
 		}
 	} catch {
@@ -579,15 +626,14 @@ function collectAutoPromptEntries(dir: string): string[] {
 	return entries;
 }
 
-function collectAutoThemeEntries(dir: string): string[] {
+/** `pathKeys` learns the entries that are not symbolic links, whose real paths follow from the folder's. */
+function collectAutoThemeEntries(dir: string, pathKeys: ResourcePathKeys): string[] {
 	const entries: string[] = [];
-	if (!existsSync(dir)) return entries;
-
 	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const dirEntries = listWithIgnoreRules(ig, dir, dir);
+	if (!dirEntries) return entries;
 
 	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
 		for (const entry of dirEntries) {
 			if (entry.name.startsWith(".")) continue;
 			if (entry.name === "node_modules") continue;
@@ -602,11 +648,11 @@ function collectAutoThemeEntries(dir: string): string[] {
 				}
 			}
 
-			const relPath = toPosixPath(relative(dir, fullPath));
-			if (ig.ignores(relPath)) continue;
+			if (isIgnored(ig, dir, fullPath, false)) continue;
 
 			if (isFile && entry.name.endsWith(".json")) {
 				entries.push(fullPath);
+				if (!entry.isSymbolicLink()) pathKeys.notePlainEntry(dir, fullPath);
 			}
 		}
 	} catch {
@@ -658,10 +704,10 @@ export function collectAutoExtensionEntries(dir: string): string[] {
 
 	// Otherwise, discover extensions from directory contents
 	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
+	const dirEntries = listWithIgnoreRules(ig, dir, dir);
+	if (!dirEntries) return entries;
 
 	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
 		for (const entry of dirEntries) {
 			if (entry.name.startsWith(".")) continue;
 			if (entry.name === "node_modules") continue;
@@ -680,9 +726,7 @@ export function collectAutoExtensionEntries(dir: string): string[] {
 				}
 			}
 
-			const relPath = toPosixPath(relative(dir, fullPath));
-			const ignorePath = isDir ? `${relPath}/` : relPath;
-			if (ig.ignores(ignorePath)) continue;
+			if (isIgnored(ig, dir, fullPath, isDir)) continue;
 
 			if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
 				entries.push(fullPath);
@@ -1096,7 +1140,11 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	async resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths> {
+	/** `pathKeys`: dedupe keys to compute the paths' keys with and to share with the caller's own pass. */
+	async resolve(
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+		pathKeys = new ResourcePathKeys(),
+	): Promise<ResolvedPaths> {
 		const accumulator = this.createAccumulator();
 		const globalSettings = this.settingsManager.getGlobalSettings();
 		const projectSettings = this.settingsManager.getProjectSettings();
@@ -1145,7 +1193,14 @@ export class DefaultPackageManager implements PackageManager {
 			);
 		}
 
-		this.addAutoDiscoveredResources(accumulator, globalSettings, projectSettings, globalBaseDir, projectBaseDir);
+		this.addAutoDiscoveredResources(
+			accumulator,
+			globalSettings,
+			projectSettings,
+			globalBaseDir,
+			projectBaseDir,
+			pathKeys,
+		);
 
 		// Built-in extensions are enabled unless the user `extensions` setting excludes them, for example
 		// with `-builtin:mcp`. A matching `+`, `-`, or `!` entry in the project setting overrides that.
@@ -1164,12 +1219,12 @@ export class DefaultPackageManager implements PackageManager {
 			);
 		}
 
-		return { ...this.toResolvedPaths(accumulator), installFailures };
+		return { ...this.toResolvedPaths(accumulator, pathKeys), installFailures };
 	}
 
 	async resolveExtensionSources(
 		sources: string[],
-		options?: { local?: boolean; temporary?: boolean },
+		options?: { local?: boolean; temporary?: boolean; pathKeys?: ResourcePathKeys },
 	): Promise<ResolvedPaths> {
 		const accumulator = this.createAccumulator();
 		const scope: SourceScope = options?.temporary ? "temporary" : options?.local ? "project" : "user";
@@ -1181,7 +1236,7 @@ export class DefaultPackageManager implements PackageManager {
 			.filter((source) => !source.startsWith(BUILTIN_PATH_PREFIX))
 			.map((source) => ({ pkg: source as PackageSource, scope }));
 		const installFailures = await this.resolvePackageSources(packageSources, accumulator);
-		return { ...this.toResolvedPaths(accumulator), installFailures };
+		return { ...this.toResolvedPaths(accumulator, options?.pathKeys ?? new ResourcePathKeys()), installFailures };
 	}
 
 	listConfiguredPackages(): ConfiguredPackage[] {
@@ -1341,10 +1396,8 @@ export class DefaultPackageManager implements PackageManager {
 		const npmCheckResults = await this.runWithConcurrency(npmCheckTasks, UPDATE_CHECK_CONCURRENCY);
 		const userNpmUpdates: NpmUpdateTarget[] = [];
 		const projectNpmUpdates: NpmUpdateTarget[] = [];
-		for (const result of npmCheckResults) {
-			if (!result.shouldUpdate) {
-				continue;
-			}
+		const npmUpdates = npmCheckResults.filter((result) => result.shouldUpdate);
+		for (const result of npmUpdates) {
 			if (result.entry.scope === "user") {
 				userNpmUpdates.push(result.entry);
 			} else {
@@ -1359,17 +1412,64 @@ export class DefaultPackageManager implements PackageManager {
 		if (projectNpmUpdates.length > 0) {
 			tasks.push(this.updateNpmBatch(projectNpmUpdates, "project"));
 		}
+		const gitUpdates: UpdatedPackage[] = [];
 		if (gitCandidates.length > 0) {
 			const gitTasks = gitCandidates.map(
 				(entry) => async () =>
 					this.withProgress("update", entry.source, `Updating ${entry.source}...`, async () => {
+						const targetDir = this.getGitInstallPath(entry.parsed, entry.scope);
+						const from = await this.getGitHead(targetDir);
 						await this.updateGit(entry.parsed, entry.scope);
+						const to = await this.getGitHead(targetDir);
+						if (from !== to) {
+							gitUpdates.push({ source: entry.source, type: "git", scope: entry.scope, from, to });
+						}
 					}),
 			);
 			tasks.push(this.runWithConcurrency(gitTasks, GIT_UPDATE_CONCURRENCY).then(() => {}));
 		}
 
 		await Promise.all(tasks);
+
+		const updated: UpdatedPackage[] = [];
+		for (const { entry } of npmUpdates) {
+			const installedPath = this.getManagedNpmInstallPath(entry.parsed, entry.scope);
+			const to = existsSync(installedPath) ? this.getInstalledNpmVersion(installedPath) : undefined;
+			if (to !== entry.installedVersion) {
+				updated.push({ source: entry.source, type: "npm", scope: entry.scope, from: entry.installedVersion, to });
+			}
+		}
+		// Keep git results in configured order, independent of completion order.
+		for (const entry of gitCandidates) {
+			const update = gitUpdates.find((u) => u.source === entry.source && u.scope === entry.scope);
+			if (update) updated.push(update);
+		}
+
+		// Report each changed package, e.g. "npm:foo 1.2.0 -> 1.3.0".
+		for (const pkg of updated) {
+			const format = (value: string | undefined) =>
+				value === undefined ? "(none)" : pkg.type === "git" ? value.slice(0, 7) : value;
+			const scope = pkg.scope === "project" ? " (project)" : "";
+			this.emitProgress({
+				type: "result",
+				action: "update",
+				source: pkg.source,
+				message: `${pkg.source}${scope} ${format(pkg.from)} -> ${format(pkg.to)}`,
+			});
+		}
+	}
+
+	private async getGitHead(targetDir: string): Promise<string | undefined> {
+		if (!existsSync(targetDir)) return undefined;
+		try {
+			const head = await this.runCommandCapture("git", ["rev-parse", "HEAD"], {
+				cwd: targetDir,
+				timeoutMs: NETWORK_TIMEOUT_MS,
+			});
+			return head.trim() || undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	private async shouldUpdateNpmSource(
@@ -1388,7 +1488,7 @@ export class DefaultPackageManager implements PackageManager {
 				source.range,
 				scope,
 			);
-			return { shouldUpdate: gt(targetVersion, installedVersion), installedVersion, targetVersion };
+			return { shouldUpdate: semver().gt(targetVersion, installedVersion), installedVersion, targetVersion };
 		} catch {
 			// Preserve existing update behavior when version lookup fails.
 			return { shouldUpdate: true, installedVersion };
@@ -1760,7 +1860,7 @@ export class DefaultPackageManager implements PackageManager {
 		if (!installedVersion) {
 			return false;
 		}
-		return source.range ? satisfies(installedVersion, source.range) : true;
+		return source.range ? semver().satisfies(installedVersion, source.range) : true;
 	}
 
 	private async npmHasAvailableUpdate(
@@ -1783,7 +1883,7 @@ export class DefaultPackageManager implements PackageManager {
 				source.range,
 				scope,
 			);
-			return gt(targetVersion, installedVersion);
+			return semver().gt(targetVersion, installedVersion);
 		} catch {
 			return false;
 		}
@@ -1830,7 +1930,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 		if (Array.isArray(parsed)) {
 			const versions = parsed.filter((value): value is string => typeof value === "string" && value.length > 0);
-			const latest = range ? maxSatisfying(versions, range) : [...versions].sort(rcompare)[0];
+			const latest = range ? semver().maxSatisfying(versions, range) : [...versions].sort(semver().rcompare)[0];
 			if (latest) return latest;
 		}
 		throw new Error("Unexpected response from npm view");
@@ -2641,7 +2741,10 @@ export class DefaultPackageManager implements PackageManager {
 
 	private getTemporaryDir(prefix: string, suffix?: string, ref?: string): string {
 		const root = this.resolveManagedPath(getExtensionTempFolder(this.agentDir), prefix);
-		const hash = createHash("sha256")
+		// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+		const hash = process
+			.getBuiltinModule("node:crypto")
+			.createHash("sha256")
 			.update(`${prefix}-${suffix ?? ""}${ref ? `@${ref}` : ""}`)
 			.digest("hex")
 			.slice(0, 8);
@@ -2888,6 +2991,7 @@ export class DefaultPackageManager implements PackageManager {
 		projectSettings: ReturnType<SettingsManager["getProjectSettings"]>,
 		globalBaseDir: string,
 		projectBaseDir: string,
+		pathKeys: ResourcePathKeys,
 	): void {
 		const userMetadata: PathMetadata = {
 			source: "auto",
@@ -2960,7 +3064,7 @@ export class DefaultPackageManager implements PackageManager {
 			// Project skills from .pi/
 			addResources(
 				"skills",
-				collectAutoSkillEntries(projectDirs.skills, "pi"),
+				collectAutoSkillEntries(projectDirs.skills, "pi", pathKeys),
 				projectMetadata,
 				projectOverrides.skills,
 				projectBaseDir,
@@ -2976,7 +3080,7 @@ export class DefaultPackageManager implements PackageManager {
 			};
 			addResources(
 				"skills",
-				collectAutoSkillEntries(agentsSkillsDir, "agents"),
+				collectAutoSkillEntries(agentsSkillsDir, "agents", pathKeys),
 				agentsMetadata,
 				projectOverrides.skills,
 				agentsBaseDir,
@@ -2986,14 +3090,14 @@ export class DefaultPackageManager implements PackageManager {
 		if (projectTrusted) {
 			addResources(
 				"prompts",
-				collectAutoPromptEntries(projectDirs.prompts),
+				collectAutoPromptEntries(projectDirs.prompts, pathKeys),
 				projectMetadata,
 				projectOverrides.prompts,
 				projectBaseDir,
 			);
 			addResources(
 				"themes",
-				collectAutoThemeEntries(projectDirs.themes),
+				collectAutoThemeEntries(projectDirs.themes, pathKeys),
 				projectMetadata,
 				projectOverrides.themes,
 				projectBaseDir,
@@ -3012,7 +3116,7 @@ export class DefaultPackageManager implements PackageManager {
 		// User skills from ~/.pi/agent/
 		addResources(
 			"skills",
-			collectAutoSkillEntries(userDirs.skills, "pi"),
+			collectAutoSkillEntries(userDirs.skills, "pi", pathKeys),
 			userMetadata,
 			userOverrides.skills,
 			globalBaseDir,
@@ -3026,7 +3130,7 @@ export class DefaultPackageManager implements PackageManager {
 		};
 		addResources(
 			"skills",
-			collectAutoSkillEntries(userAgentsSkillsDir, "agents"),
+			collectAutoSkillEntries(userAgentsSkillsDir, "agents", pathKeys),
 			userAgentsMetadata,
 			userOverrides.skills,
 			userAgentsBaseDir,
@@ -3034,14 +3138,14 @@ export class DefaultPackageManager implements PackageManager {
 
 		addResources(
 			"prompts",
-			collectAutoPromptEntries(userDirs.prompts),
+			collectAutoPromptEntries(userDirs.prompts, pathKeys),
 			userMetadata,
 			userOverrides.prompts,
 			globalBaseDir,
 		);
 		addResources(
 			"themes",
-			collectAutoThemeEntries(userDirs.themes),
+			collectAutoThemeEntries(userDirs.themes, pathKeys),
 			userMetadata,
 			userOverrides.themes,
 			globalBaseDir,
@@ -3106,7 +3210,7 @@ export class DefaultPackageManager implements PackageManager {
 		};
 	}
 
-	private toResolvedPaths(accumulator: ResourceAccumulator): ResolvedPaths {
+	private toResolvedPaths(accumulator: ResourceAccumulator, pathKeys: ResourcePathKeys): ResolvedPaths {
 		const mapToResolved = (
 			entries: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		): ResolvedResource[] => {
@@ -3117,9 +3221,10 @@ export class DefaultPackageManager implements PackageManager {
 			}));
 			resolved.sort((a, b) => resourcePrecedenceRank(a.metadata) - resourcePrecedenceRank(b.metadata));
 
+			pathKeys.prepare(entries.keys());
 			const seen = new Set<string>();
 			return resolved.filter((entry) => {
-				const pathKey = getResourcePathKey(entry.path);
+				const pathKey = pathKeys.keyOf(entry.path);
 				if (seen.has(pathKey)) return false;
 				seen.add(pathKey);
 				return true;

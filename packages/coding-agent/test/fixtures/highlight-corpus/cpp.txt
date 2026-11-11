@@ -1,0 +1,44 @@
+#include <iostream>
+#include <memory>
+#include <vector>
+
+namespace geo {
+
+template <typename T>
+class Vector {
+public:
+    explicit Vector(std::size_t n) : data_(n) {}
+    T& operator[](std::size_t i) { return data_[i]; }
+    const T& operator[](std::size_t i) const { return data_[i]; }
+    std::size_t size() const noexcept { return data_.size(); }
+    virtual ~Vector() = default;
+
+private:
+    std::vector<T> data_;
+};
+
+}  // namespace geo
+
+auto make_shared_vector(int n) -> std::shared_ptr<geo::Vector<int>> {
+    return std::make_shared<geo::Vector<int>>(n);
+}
+
+static const char* raw = R"delim(a raw
+string with "quotes")delim";
+
+int main() {
+    auto v = make_shared_vector(3);
+    for (std::size_t i = 0; i < v->size(); ++i) {
+        (*v)[i] = static_cast<int>(i * i);
+    }
+    std::cout << "size: " << v->size() << '\n';
+    constexpr double pi = 3.14159;
+    std::unique_ptr<int[]> buffer{new int[16]{}};
+    [&](int x) mutable { return x + 1; }(2);
+    /* a block
+       comment */
+    if (v->size() > 2 && pi < 4.0) {
+        throw std::runtime_error("bad");
+    }
+    return 0;
+}

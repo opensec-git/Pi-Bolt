@@ -1,7 +1,6 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ScrollViewScrollbar, TerminalCapabilities, WheelScrollLines } from "@earendil-works/pi-tui";
-import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
@@ -21,6 +20,7 @@ import type {
 	MermaidRenderingMode,
 	PackageSource,
 	QuietStartup,
+	RemoteControlSettings,
 	SessionShareDestination,
 	Settings,
 	ThinkingBudgetsSettings,
@@ -1046,6 +1046,44 @@ export class SettingsManager {
 			: SETTINGS_DEFAULTS.sessionShareDestination;
 	}
 
+	getRemoteControlSettings(): RemoteControlSettings {
+		const value = this.settings.remoteControl;
+		return value && typeof value === "object" ? value : {};
+	}
+
+	/** `remoteControl.enabled`, from the global settings only: a project's settings cannot turn remote control on. */
+	getRemoteControlEnabled(): boolean {
+		const value = this.globalSettings.remoteControl;
+		return value !== null && typeof value === "object" && value.enabled === true;
+	}
+
+	setRemoteControlEnabled(enabled: boolean): void {
+		const current = this.globalSettings.remoteControl;
+		this.globalSettings.remoteControl = { ...(current && typeof current === "object" ? current : {}), enabled };
+		this.markModified("remoteControl", "enabled");
+		this.save();
+	}
+
+	/** "Don't ask again" for /remote-control's offer to install cloudflared. */
+	setRemoteControlAskCloudflared(ask: boolean): void {
+		const current = this.globalSettings.remoteControl;
+		this.globalSettings.remoteControl = {
+			...(current && typeof current === "object" ? current : {}),
+			askCloudflared: ask,
+		};
+		this.markModified("remoteControl", "askCloudflared");
+		this.save();
+	}
+
+	/** The background service's tunnel (`pi-bolt service install --no-tunnel` sets "off"). */
+	setRemoteControlServiceTunnel(tunnel: NonNullable<RemoteControlSettings["tunnel"]>): void {
+		const current = this.globalSettings.remoteControl;
+		const remoteControl = current && typeof current === "object" ? current : {};
+		this.globalSettings.remoteControl = { ...remoteControl, service: { ...remoteControl.service, tunnel } };
+		this.markModified("remoteControl", "service");
+		this.save();
+	}
+
 	setSessionShareDestination(destination: SessionShareDestination): void {
 		this.globalSettings.sessionShareDestination = destination;
 		this.markModified("sessionShareDestination");
@@ -1341,7 +1379,7 @@ export class SettingsManager {
 		this.globalSettings.enableAnalytics = enabled;
 		this.markModified("enableAnalytics");
 		if (enabled && !this.globalSettings.trackingId) {
-			this.globalSettings.trackingId = randomUUID();
+			this.globalSettings.trackingId = crypto.randomUUID();
 			this.markModified("trackingId");
 		}
 		this.save();
@@ -1354,7 +1392,7 @@ export class SettingsManager {
 	 */
 	getOrCreateDeviceId(): string {
 		if (!this.globalSettings.deviceId) {
-			this.globalSettings.deviceId = randomUUID();
+			this.globalSettings.deviceId = crypto.randomUUID();
 			this.markModified("deviceId");
 			this.save();
 		}

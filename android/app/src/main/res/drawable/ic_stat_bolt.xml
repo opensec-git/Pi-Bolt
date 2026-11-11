@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icon: the logo's bolt as one outline (no seams between its facets), filling a 24dp status icon
+     with 2dp to spare. Status bar icons are single-colour; the shade tints it with notification_accent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="700"
+    android:viewportHeight="700">
+    <group android:translateX="-60" android:translateY="-50">
+        <path android:fillColor="#FFFFFFFF" android:pathData="M540,100L220,460L390,460L300,700L600,320L430,320Z" />
+    </group>
+</vector>

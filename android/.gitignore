@@ -1,0 +1,14 @@
+.gradle/
+.kotlin/
+build/
+# CMake/NDK intermediates of the native build (app/src/main/jni).
+.cxx/
+local.properties
+*.keystore
+*.jks
+captures/
+.idea/
+*.iml
+# On-device engine pack: build output and download cache (android/engine/build-pack.sh). Never committed.
+/engine/out
+/engine/.work

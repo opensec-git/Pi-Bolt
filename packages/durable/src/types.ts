@@ -1,5 +1,7 @@
-import type { Context, Draft, JsonValue, WatchCall, WatchEnd, WatchHandle } from "@earendil-works/chord";
-import type { Op } from "@earendil-works/chord/delta";
+import type { Context } from "@earendil-works/chord/context";
+import type { Draft, Op } from "@earendil-works/chord/delta";
+import type { JsonValue } from "@earendil-works/chord/json";
+import type { WatchCall, WatchEnd, WatchHandle } from "@earendil-works/chord/watch";
 import type { Message, Models } from "@earendil-works/pi-ai";
 import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
 import type { ExecutionEnv } from "./env/index.ts";
@@ -1005,6 +1007,8 @@ export interface Tx {
 		limit: number,
 		cursor?: Cursor,
 	): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
+	/** Committed submission record, such as one of `pi.live.run.inputs`; a placed input's `entry` is its transcript entry. */
+	submission(id: SubmissionId): Promise<SubmissionRecord | undefined>;
 	/** Committed submission with a conversation-scoped request ID. */
 	submissionByRequest(conversationId: ConversationId, requestId: string): Promise<SubmissionRecord | undefined>;
 

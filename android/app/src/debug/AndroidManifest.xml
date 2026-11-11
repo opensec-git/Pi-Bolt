@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: drive the on-device engine from adb (see EngineDebugActivity). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <activity
+            android:name="opensec.pibolt.app.engine.EngineDebugActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.PiBolt"
+            android:windowSoftInputMode="adjustResize"
+            tools:ignore="ExportedActivity" />
+    </application>
+</manifest>

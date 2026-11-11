@@ -70,6 +70,10 @@
             {
               "title": "Run Pi on Android",
               "path": "termux.md"
+            },
+            {
+              "title": "Control Pi from your phone",
+              "path": "remote-control.md"
             }
           ]
         },
@@ -120,6 +124,10 @@
             {
               "title": "Build Terminal UI Components",
               "path": "tui.md"
+            },
+            {
+              "title": "Build Mobile UI for Extensions",
+              "path": "mobile-ui.md"
             },
             {
               "title": "Integrate with the CLI",

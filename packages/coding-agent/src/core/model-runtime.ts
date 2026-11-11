@@ -209,6 +209,20 @@ function mergeHeaders(
 	return merged;
 }
 
+/**
+ * Whether two loads of models.json configure the same providers: the same load (ModelConfig.load() returns the previous
+ * one while the file is unchanged), or two that configure none and report no error (no models.json at all).
+ */
+function sameModelConfig(a: ModelConfig, b: ModelConfig): boolean {
+	if (a === b) return true;
+	return (
+		a.getProviderIds().length === 0 &&
+		b.getProviderIds().length === 0 &&
+		a.getError() === undefined &&
+		b.getError() === undefined
+	);
+}
+
 /** Configured pi-ai Models collection used by coding-agent and SDK consumers. */
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
@@ -223,6 +237,8 @@ export class ModelRuntime implements Models {
 	private readonly modelsPath: string | undefined;
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
+	/** The models.json load the providers were last all composed from (rebuildProviders()). */
+	private composedConfig: ModelConfig | undefined;
 	private snapshot: ModelRuntimeSnapshot = {
 		all: new ChatModelsSnapshot([]),
 		available: [],
@@ -371,10 +387,25 @@ export class ModelRuntime implements Models {
 	}
 
 	private rebuildProviders(): void {
+		this.composedConfig = this.config;
 		this.models.clearProviders();
 		this.compositionErrors.clear();
 		for (const providerId of this.providerIds()) this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
+	}
+
+	/**
+	 * Whether the providers are held in the order rebuildProviders() would give them (providerIds(), less the ids that
+	 * compose to no provider): a registration since the last rebuild adds its provider at the end.
+	 */
+	private providersInCompositionOrder(): boolean {
+		const held = this.models.getProviders();
+		let index = 0;
+		for (const providerId of this.providerIds()) {
+			if (held[index]?.id === providerId) index++;
+			else if (this.models.getProvider(providerId)) return false;
+		}
+		return index === held.length;
 	}
 
 	private updateModelSnapshot(): void {
@@ -386,14 +417,22 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
+	/** `callerSignal`: the caller's own signal, if any (`signal` is made from it). */
+	private async runAvailabilityRefresh(
+		seq: number,
+		errorSeq: number,
+		signal: AbortSignal,
+		callerSignal: AbortSignal | undefined,
+	): Promise<void> {
 		const providers = this.models.getProviders();
+		// (Without a caller's signal, nothing can abort the checks: none is passed for them to wait on.)
+		const checkOptions = callerSignal ? { signal } : undefined;
 		const [checks, credentials] = await Promise.all([
 			Promise.all(
 				providers.map(
 					async (provider): Promise<[string, AuthCheck | undefined]> => [
 						provider.id,
-						await this.models.checkAuth(provider.id, { signal }),
+						await this.models.checkAuth(provider.id, checkOptions),
 					],
 				),
 			),
@@ -436,7 +475,7 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
+		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal, signal).catch((error) => {
 			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
 				this.availabilityError = error instanceof Error ? error.message : String(error);
 			}
@@ -627,6 +666,19 @@ export class ModelRuntime implements Models {
 		return this.nativeExtensionProviders.get(providerId);
 	}
 
+	/**
+	 * Where a provider comes from: Pi's built-in catalog (also when an extension or models.json changes it), an
+	 * extension, models.json, or only virtual models. Undefined for an unknown id.
+	 */
+	getProviderOrigin(providerId: string): "builtin" | "extension" | "models_json" | "virtual" | undefined {
+		if (this.defaultBuiltins.has(providerId)) return "builtin";
+		if (this.nativeExtensionProviders.has(providerId) || this.extensionProviders.has(providerId)) return "extension";
+		// A radius gateway in models.json is composed as a built-in provider.
+		if (this.config.getProvider(providerId) || this.builtins.has(providerId)) return "models_json";
+		if (this.virtualModels.has(providerId)) return "virtual";
+		return undefined;
+	}
+
 	/** @internal Compatibility fallback for ModelRegistry when provider auth is unconfigured. */
 	getCompatibilityRequestConfig(model: Model<Api>): CompatibilityRequestConfig {
 		return resolveCompatibilityRequestConfig(
@@ -735,6 +787,14 @@ export class ModelRuntime implements Models {
 		});
 	}
 
+	/**
+	 * Wait until credential writes already in progress finish, such as an OAuth refresh started by a
+	 * background catalog refresh. Call before the process exits so a rotated token is not lost.
+	 */
+	settleCredentialWrites(): Promise<void> {
+		return this.credentials.settled();
+	}
+
 	listCredentials(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
 		return this.credentials.list(options);
 	}
@@ -815,14 +875,19 @@ export class ModelRuntime implements Models {
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			const prepared = await this.prepareRequest(
-				model,
-				options as (StreamOptions & ModelsRequestTransforms) | undefined,
-			);
-			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				const prepared = await this.prepareRequest(
+					model,
+					options as (StreamOptions & ModelsRequestTransforms) | undefined,
+				);
+				return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	complete<TApi extends Api>(
@@ -838,27 +903,38 @@ export class ModelRuntime implements Models {
 		if (isVirtualModel(model)) {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
 			// cap the output budget to the routed model.
-			return lazyStream(model, async () => {
-				const route = await this.resolveModel(model, transcript.messages, {
-					reason: "direct",
-					thinkingLevel: options?.reasoning ?? "off",
-					signal: options?.signal,
-				});
-				const { maxTokens: limit } = route.model;
-				const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
-				const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
-				// Caller credentials were resolved for the virtual model's provider. Another provider
-				// resolves its own, so they are not sent to the wrong vendor.
-				const { apiKey, headers, env, ...rest } = options ?? {};
-				const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
-				return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
-			});
+			return lazyStream(
+				model,
+				async () => {
+					const route = await this.resolveModel(model, transcript.messages, {
+						reason: "direct",
+						thinkingLevel: options?.reasoning ?? "off",
+						signal: options?.signal,
+					});
+					const { maxTokens: limit } = route.model;
+					const maxTokens =
+						options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
+					const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
+					// Caller credentials were resolved for the virtual model's provider. Another provider
+					// resolves its own, so they are not sent to the wrong vendor.
+					const { apiKey, headers, env, ...rest } = options ?? {};
+					const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
+					return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
+				},
+				undefined,
+				options?.signal,
+			);
 		}
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			const prepared = await this.prepareRequest(model, options);
-			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				const prepared = await this.prepareRequest(model, options);
+				return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
@@ -870,14 +946,19 @@ export class ModelRuntime implements Models {
 		handle: DeferredHandle,
 		options?: ModelsDeferredFetchOptions,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			const prepared = await this.prepareRequest(model, options);
-			if (!prepared.provider.fetchDeferred) {
-				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
-			}
-			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				const prepared = await this.prepareRequest(model, options);
+				if (!prepared.provider.fetchDeferred) {
+					throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+				}
+				return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	async fetchDeferred(
@@ -960,13 +1041,20 @@ export class ModelRuntime implements Models {
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
 		this.config = await ModelConfig.load(this.modelsPath);
-		this.configureRadiusProviders();
 		if (options.providers) {
+			this.configureRadiusProviders();
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
 			this.updateModelSnapshot();
-		} else {
+		} else if (
+			!this.composedConfig ||
+			!sameModelConfig(this.composedConfig, this.config) ||
+			!this.providersInCompositionOrder()
+		) {
+			this.configureRadiusProviders();
 			this.rebuildProviders();
 		}
+		// (Otherwise the providers are composed from this models.json already, in the order a rebuild gives them: every
+		// registration since recomposed its own.)
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,

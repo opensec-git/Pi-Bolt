@@ -10,6 +10,9 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { PromptDisposition, QueuedInputDisposition, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { RegisteredPage } from "../../core/extensions/types.ts";
+import type { ViewSetRequest, ViewShowRequest, ViewUpdateRequest } from "../../core/mobile-ui/host.ts";
+import type { MobileViewIcon, MobileViewValue, ViewEventKind } from "../../core/mobile-ui/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
@@ -33,6 +36,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_providers" }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -71,7 +75,48 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Subagents: follow one run's own session (read-only)
+	| { id?: string; type: "subagent_subscribe"; runId: string }
+	| { id?: string; type: "subagent_unsubscribe"; runId: string }
+
+	// Client features: optional parts of the protocol the client implements (docs/mobile-ui.md#capability-negotiation)
+	| { id?: string; type: "set_client_features"; features: string[] }
+
+	// Package pages and Home tiles (docs/mobile-ui.md#package-pages-and-home-tiles)
+	| { id?: string; type: "get_pages" }
+	| { id?: string; type: "open_page"; key: string }
+	| { id?: string; type: "close_page"; key: string };
+
+// ============================================================================
+// RPC Page (for get_pages response)
+// ============================================================================
+
+/** A page or Home tile a package registered. */
+export interface RpcPageInfo {
+	key: string;
+	kind: "page" | "tile";
+	title: string;
+	icon?: MobileViewIcon;
+	description?: string;
+	/** Tiles: the page a tap opens. */
+	page?: string;
+	sourceInfo: SourceInfo;
+}
+
+/** The `get_pages` list of a runner's registered pages and tiles. */
+export function rpcPages(pages: readonly RegisteredPage[]): RpcPageInfo[] {
+	return pages.map(({ key, kind, definition, sourceInfo }) => ({
+		key,
+		kind,
+		title: definition.title,
+		...(definition.icon ? { icon: definition.icon } : {}),
+		...(definition.description ? { description: definition.description } : {}),
+		...(kind === "tile" && definition.page ? { page: definition.page } : {}),
+		sourceInfo,
+	}));
+}
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -87,6 +132,44 @@ export interface RpcSlashCommand {
 	source: "extension" | "prompt" | "skill";
 	/** Source metadata for the owning resource */
 	sourceInfo: SourceInfo;
+}
+
+// ============================================================================
+// RPC Providers (for get_providers response)
+// ============================================================================
+
+/** A chat model of a provider, as `get_providers` lists it */
+export interface RpcProviderModel {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	input: ("text" | "image")[];
+	contextWindow: number;
+}
+
+/** A provider the session's model runtime knows. Never carries credential values. */
+export interface RpcProviderInfo {
+	id: string;
+	/** Display name */
+	name: string;
+	/** Pi's built-in catalog (also when changed by an extension or models.json), an extension, models.json, or only virtual models */
+	origin: "builtin" | "extension" | "models_json" | "virtual";
+	/** An extension registered this provider or changes it */
+	extension: boolean;
+	/** Its auth works now, so its available models can be used */
+	configured: boolean;
+	/** The kind of credential stored in auth.json for it, if any */
+	credential?: "api_key" | "oauth";
+	/** Where configured auth comes from ("stored", "environment", ...) */
+	authSource?: string;
+	/** It takes an API key (stored in auth.json under the provider id). `env`: variables it reads instead, when known */
+	apiKey?: { name: string; env: string[] };
+	/** It has an OAuth login flow */
+	oauth?: { name: string; loginLabel?: string; subscription?: boolean };
+	/** Every chat model it lists */
+	models: RpcProviderModel[];
+	/** Ids of the models that work now */
+	available: string[];
 }
 
 // ============================================================================
@@ -158,6 +241,13 @@ export type RpcResponse =
 			command: "get_available_models";
 			success: true;
 			data: { models: Model<any>[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_providers";
+			success: true;
+			data: { providers: RpcProviderInfo[] };
 	  }
 
 	// Thinking
@@ -241,6 +331,24 @@ export type RpcResponse =
 			data: { commands: RpcSlashCommand[] };
 	  }
 
+	// Pages
+	| { id?: string; type: "response"; command: "get_pages"; success: true; data: { pages: RpcPageInfo[] } }
+	| { id?: string; type: "response"; command: "open_page"; success: true; data: { viewKey: string } }
+	| { id?: string; type: "response"; command: "close_page"; success: true }
+
+	// Subagents
+	| { id?: string; type: "response"; command: "subagent_subscribe"; success: true }
+	| { id?: string; type: "response"; command: "subagent_unsubscribe"; success: true }
+
+	// Client features
+	| {
+			id?: string;
+			type: "response";
+			command: "set_client_features";
+			success: true;
+			data: { features: string[] };
+	  }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
 
@@ -284,7 +392,11 @@ export type RpcExtensionUIRequest =
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
-	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string }
+	// The mobile UI kit (docs/mobile-ui.md#protocol), to clients that declared "views"
+	| ({ type: "extension_ui_request"; id: string } & ViewSetRequest)
+	| ({ type: "extension_ui_request"; id: string } & ViewUpdateRequest)
+	| ({ type: "extension_ui_request"; id: string } & ViewShowRequest);
 
 // ============================================================================
 // Extension UI Commands (stdin)
@@ -294,7 +406,19 @@ export type RpcExtensionUIRequest =
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; cancelled: true };
+	| { type: "extension_ui_response"; id: string; cancelled: true }
+	// A sheet (showView): the submitted form or pressed action, with the sheet's field values
+	| { type: "extension_ui_response"; id: string; nodeId: string; values?: Record<string, MobileViewValue> };
+
+/** A tap, committed field value or form submit in a view (docs/mobile-ui.md#events). No response. */
+export interface RpcExtensionUIEvent {
+	type: "extension_ui_event";
+	viewKey: string;
+	nodeId: string;
+	kind: ViewEventKind;
+	value?: MobileViewValue;
+	values?: Record<string, MobileViewValue>;
+}
 
 // ============================================================================
 // Helper type for extracting command types

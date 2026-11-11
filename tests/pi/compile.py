@@ -196,7 +196,9 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             for line in r.stdout.splitlines():
                 message = json.loads(line) if line.startswith("{") else {}
                 if message.get("command") == "get_commands":
-                    return sorted(c["name"] for c in message["data"]["commands"] if c["source"] in ("skill", "prompt"))
+                    # Only the probe's own.
+                    return sorted(c["name"] for c in message["data"]["commands"]
+                                  if c["source"] in ("skill", "prompt") and "probe" in c["name"])
             return f"no answer: {r.stderr[-300:]}"
 
         r, loaded = session()
@@ -240,7 +242,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               r.stderr[-800:])
         print(f"     (compile took {took:.1f} s)")
         record = json.loads((install / "compile.json").read_text()) if (install / "compile.json").exists() else {}
-        check("compile.json keeps the extensions for the next update",
+        check("compile.json keeps the extensions for the next compile",
               sorted(record.get("extensions", []))
               == ["file-ext", "folder-ext", "old-names-ext", "optional-ext", "parity-ext", "tsc-cjs"], str(record))
         check("the build it replaced is kept as .previous", (install / f"{build.name}.previous" / "pi").exists())

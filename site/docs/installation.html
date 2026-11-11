@@ -74,7 +74,8 @@
 <h2 id="requirements">Requirements<a class="anchor" href="#requirements" aria-label="Link to this section">#</a></h2>
 <ul>
   <li><strong>Linux</strong> on x86-64 or ARM64 with glibc 2.17 or later (Raspberry Pi 3 and later, AWS Graviton and Ampere
-    included). musl distributions such as Alpine are not supported.</li>
+    included), or on x86-64 with musl (Alpine 3.23 or later, with <code>apk add libstdc++</code>): the installer picks the musl
+    builds there by itself.</li>
   <li><strong>macOS</strong> 13 or later on Apple silicon. There is no build for Intel Macs.</li>
   <li><strong>Windows</strong> 10 (1809) or later, or Windows 11, on x64. Windows on ARM64 runs the x64 build, in Windows 11's
     x64 emulation.</li>
@@ -219,13 +220,20 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
 <span class="p">$ </span>pi-bolt update --rollback       <span class="c"># back to the build the last update replaced</span>
 <span class="p">$ </span>pi-bolt update --channel beta   <span class="c"># take pre-releases too (stable: the latest release only)</span></pre>
 <p>An update keeps the build it replaces; <code>pi-bolt update --rollback</code> puts it back without downloading anything, and
-  running it again goes forward again. The channel is kept for the installation. With npm, run <code>npm update -g pi-bolt</code>;
-  the next run downloads the new release. With Homebrew, run <code>brew upgrade pi-bolt</code>; <code>pi-bolt update</code>
+  running it again goes forward again. The channel is kept for the installation. With Homebrew, run <code>brew upgrade pi-bolt</code>; <code>pi-bolt update</code>
   says so and changes nothing, and <code>--rollback</code> is not available. With Scoop, run <code>scoop update pi-bolt</code>,
   and <code>scoop reset pi-bolt@&lt;version&gt;</code> to go back to a version Scoop still keeps. With mise, run
   <code>mise upgrade --bump github:opensec-git/Pi-Bolt</code>, and <code>mise use -g github:opensec-git/Pi-Bolt@&lt;version&gt;</code>
   for another version. <code>pi-bolt update</code> and <code>--rollback</code> give these commands for a Pi-Bolt that Scoop or
   mise installed, and change nothing. Running the installer again also updates.</p>
+<p>An npm install is updated with npm: <code>npm install -g --allow-scripts=pi-bolt pi-bolt@latest</code> (with Bun,
+  <code>bun add -g --trust pi-bolt@latest</code>). For it, <code>pi-bolt update</code> asks the npm registry for the version of
+  <code>pi-bolt@latest</code> (GitHub when the registry does not answer), says whether a newer one is out, and prints that
+  command; it installs nothing. To go back to an earlier version, install it the same way,
+  <code>npm install -g --allow-scripts=pi-bolt pi-bolt@&lt;version&gt;</code> (<code>npm view pi-bolt versions</code> lists
+  them); <code>pi-bolt update --rollback</code> says so and changes nothing. On macOS and Linux, the first run of a new version
+  downloads its release into <code>~/.pi-bolt/npm/&lt;version&gt;</code> and deletes the folders of the versions before it,
+  except one that a running session still uses: delete that one yourself once the session has ended.</p>
 
 <h2 id="uninstall">Uninstall<a class="anchor" href="#uninstall" aria-label="Link to this section">#</a></h2>
 <p>Run the installer again and choose <strong>uninstall</strong>. It removes the Pi-Bolt builds from <code>~/.pi-bolt</code>, the

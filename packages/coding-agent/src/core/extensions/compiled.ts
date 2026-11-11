@@ -11,7 +11,6 @@
  * which is gone) is loaded from its files, as Pi loads it, with a warning; it then works,
  * or fails with Pi's own error. With nothing compiled in (every other build), nothing here is used.
  */
-import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "./types.ts";
@@ -103,7 +102,8 @@ export function extensionFingerprint(
 ): string | undefined {
 	try {
 		if (source.files) {
-			const hash = createHash("sha256");
+			// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+			const hash = process.getBuiltinModule("node:crypto").createHash("sha256");
 			for (const file of source.files) hash.update(`${statPart(file)}\n`);
 			return `files:${source.files.length}:${hash.digest("hex").slice(0, 32)}`;
 		}
@@ -176,8 +176,8 @@ export function compiledExtensionFor(
 
 /**
  * What `pi-bolt compile --status` and `pi-bolt doctor` say of the extensions compiled in: one line each that is not used as
- * compiled in (changed or removed since), and, when compile.json records a compile but this build has none (the installer
- * replaced it, or a switch to or from the JIT build), how to compile them in again. `record`: compile.json's extensions.
+ * compiled in (changed or removed since), and, when compile.json records a compile but this build has none (an update or the
+ * installer replaced it, or a switch to or from the JIT build), how to compile them in again. `record`: compile.json's extensions.
  */
 export function compiledStateLines(
 	extensions: ReadonlyArray<Pick<CompiledExtension, "name" | "entry" | "scope" | "root" | "fingerprint">>,
@@ -187,7 +187,7 @@ export function compiledStateLines(
 		const recorded = Array.isArray(record?.extensions) ? record.extensions.join(", ") : "";
 		return record
 			? [
-					`compile.json records extensions compiled in (${recorded || "none"}), but this build has none: the installer, or a switch to or from the JIT build, replaced the build they were compiled into. Run \`pi-bolt compile\` to compile them in again.`,
+					`compile.json records extensions compiled in (${recorded || "none"}), but this build has none: an update, the installer, or a switch to or from the JIT build replaced the build they were compiled into, and they load from their files. Run \`pi-bolt compile\` to compile them in again.`,
 				]
 			: [];
 	}

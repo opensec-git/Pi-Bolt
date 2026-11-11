@@ -94,6 +94,8 @@ export type {
 	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
+	ExtensionViewUI,
 	ExtensionVirtualModel,
 	ExtensionWidgetOptions,
 	FindToolCallEvent,
@@ -114,8 +116,11 @@ export type {
 	LoadExtensionsResult,
 	LsToolCallEvent,
 	LsToolResultEvent,
+	MarkdownMessageType,
 	MarkdownTransformContext,
 	MarkdownTransformer,
+	MarkdownTransformerOptions,
+	MarkdownTransformerRegistration,
 	McpServersChangeEvent,
 	// Events - Message
 	MessageEndEvent,
@@ -142,6 +147,7 @@ export type {
 	ReadToolResultEvent,
 	// Commands
 	RegisteredCommand,
+	RegisteredPage,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,

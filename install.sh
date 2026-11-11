@@ -13,6 +13,7 @@
 #   PIBOLT_CHANNEL   stable (the latest release; the default) or beta (the newest release, pre-releases included), for this
 #                    installation and its updates (`pi-bolt update --channel` changes it)
 #   PIBOLT_VARIANT   on Linux x86-64, x64, x64-baseline or x64-jit (default: x64 on CPUs with AVX2, x64-baseline otherwise);
+#                    with musl (Alpine), x64-musl, x64-musl-baseline or x64-musl-jit (the same default);
 #                    on Linux ARM64 and in Termux, arm64 or arm64-jit (default arm64); on macOS arm64 or arm64-jit (Apple
 #                    silicon; default arm64)
 #   PIBOLT_INSTALL   where to install (default: ~/.pi-bolt)
@@ -54,6 +55,10 @@ main() {
 	INSTALL="${PIBOLT_INSTALL:-$HOME/.pi-bolt}"
 	TERMUX=""
 	if is_termux; then TERMUX=1; fi
+	# "-musl" on a musl-based Linux such as Alpine: its builds are named so (pi-bolt-linux-x64-musl). Not in Termux, which runs
+	# the glibc builds with Termux's glibc.
+	MUSL=""
+	if [ "$PLATFORM" = linux ] && [ -z "$TERMUX" ] && is_musl; then MUSL=-musl; fi
 	if [ -n "$TERMUX" ]; then BIN_DIR="${PIBOLT_BIN_DIR:-$PREFIX/bin}"; else BIN_DIR="${PIBOLT_BIN_DIR:-$HOME/.local/bin}"; fi
 	LAUNCHER="${PIBOLT_LAUNCHER:-0}"
 	setup_style
@@ -109,14 +114,19 @@ main() {
 	VARIANT="${PIBOLT_VARIANT:-}"
 	if [ -z "$VARIANT" ]; then
 		if [ "$PLATFORM" = darwin ] || is_arm64; then VARIANT=arm64
-		elif grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64; else VARIANT=x64-baseline; fi
+		elif grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$MUSL; else VARIANT=x64$MUSL-baseline; fi
 	fi
 	case "$PLATFORM-$VARIANT" in
 	darwin-arm64 | darwin-arm64-jit) ;;
 	darwin-*) fail "PIBOLT_VARIANT must be arm64 or arm64-jit on macOS" ;;
-	linux-arm64 | linux-arm64-jit) is_arm64 || fail "PIBOLT_VARIANT must be x64, x64-baseline or x64-jit on x86-64" ;;
-	linux-x64 | linux-x64-baseline | linux-x64-jit) ! is_arm64 || fail "PIBOLT_VARIANT must be arm64 or arm64-jit on ARM64" ;;
-	*) if is_arm64; then fail "PIBOLT_VARIANT must be arm64 or arm64-jit on ARM64"; else fail "PIBOLT_VARIANT must be x64, x64-baseline or x64-jit"; fi ;;
+	linux-arm64 | linux-arm64-jit) is_arm64 || fail "PIBOLT_VARIANT must be x64$MUSL, x64$MUSL-baseline or x64$MUSL-jit on x86-64" ;;
+	# (A musl build needs musl's loader, a glibc build glibc's: neither runs on the other.)
+	linux-x64 | linux-x64-baseline | linux-x64-jit | linux-x64-musl | linux-x64-musl-baseline | linux-x64-musl-jit)
+		! is_arm64 || fail "PIBOLT_VARIANT must be arm64 or arm64-jit on ARM64"
+		case "$VARIANT" in x64-musl*) [ -n "$MUSL" ] || fail "PIBOLT_VARIANT $VARIANT is for musl systems such as Alpine: this one has glibc (x64, x64-baseline or x64-jit)" ;;
+		*) [ -z "$MUSL" ] || fail "PIBOLT_VARIANT must be x64-musl, x64-musl-baseline or x64-musl-jit on a musl system such as this one" ;;
+		esac ;;
+	*) if is_arm64; then fail "PIBOLT_VARIANT must be arm64 or arm64-jit on ARM64"; else fail "PIBOLT_VARIANT must be x64$MUSL, x64$MUSL-baseline or x64$MUSL-jit"; fi ;;
 	esac
 	[ -z "$TERMUX" ] || setup_termux
 	case "${PIBOLT_SOURCE:-auto}" in
@@ -134,6 +144,8 @@ main() {
 
 	EXISTING=""
 	if [ -x "$INSTALL/$NAME/pi" ]; then EXISTING="$INSTALL/$NAME"; fi
+	COMPILED_BEFORE=""
+	if [ -n "$EXISTING" ] && has_compiled_extensions "$EXISTING"; then COMPILED_BEFORE=1; fi
 	choose_action
 	case "$ACTION" in
 	none) exit 0 ;;
@@ -155,14 +167,13 @@ main() {
 	# Pi-Bolt keeps the packages only it runs (OpenSec's extensions) out of Pi's list, which it does as it starts: once now, so
 	# that Pi, if it is started before Pi-Bolt, does not find them (an earlier installer put them there).
 	(cd "$INSTALL" && "$INSTALL/$NAME/pi" list >/dev/null 2>&1) || true
+	# A remote control service that runs (an earlier version's) is restarted, so it runs this version; nothing when none runs.
+	(cd "$INSTALL" && "$INSTALL/$NAME/pi" service restart >/dev/null 2>&1) || true
 	if [ "$ACTION" = reinstall ] && [ -n "${installed:-}" ] && [ "${installed:-}" != "$SHOWN_VERSION" ]; then word=updated
 	elif [ "$ACTION" = reinstall ]; then word=reinstalled
 	else word=installed; fi
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
-	# `pi-bolt compile` compiled extensions into a build here: this one, the release's, has none (they load from their files).
-	if [ -f "$INSTALL/compile.json" ]; then
-		printf 'Extensions were compiled into the build this replaced: run %spi-bolt compile%s to compile them into this one.\n' "$bold" "$reset"
-	fi
+	compiled_extensions_note "$COMPILED_BEFORE"
 	offer_extensions
 	if [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
 		printf '\nRun it with: %spi-bolt%s\n' "$bold" "$reset"
@@ -170,6 +181,20 @@ main() {
 		path_hint
 	fi
 	offer_start
+}
+
+# has_compiled_extensions DIR: whether the build in DIR has extensions `pi-bolt compile` compiled in (its pi-bolt.txt names them).
+has_compiled_extensions() {
+	grep -q '^Extensions compiled in' "$1/pi-bolt.txt" 2>/dev/null
+}
+
+# compiled_extensions_note COMPILED_BEFORE: after an install that replaced a build with extensions compiled in (COMPILED_BEFORE
+# is 1), says they load from their files now: this build, the release's, has none, and an install compiles nothing. Not when
+# compile.json is gone: `pi-bolt compile --off` sets it aside while it installs the release again, to have none.
+compiled_extensions_note() {
+	if [ "$1" = 1 ] && [ -f "$INSTALL/compile.json" ]; then
+		printf 'Extensions were compiled into the build this replaced: they load from their files now; run %spi-bolt compile%s to compile them into this one.\n' "$bold" "$reset"
+	fi
 }
 
 # --- Look -------------------------------------------------------------------------------------------------------------
@@ -389,9 +414,13 @@ preflight_linux() {
 			{ printf "error: Termux's glibc is needed, and there is no pkg to install it with.\n"; status=1; }
 		return 0
 	fi
-	if ldd --version 2>&1 | grep -qi musl; then
-		printf 'error: Pi-Bolt needs glibc; musl-based systems such as Alpine are not supported.\n'
-		status=1
+	if [ -n "$MUSL" ]; then
+		# The musl builds are for x86-64, and link libstdc++ and libgcc (apk add libstdc++, which brings libgcc).
+		if is_arm64; then printf 'error: on musl-based systems such as Alpine, Pi-Bolt runs on x86-64 only (this is %s).\n' "$(uname -m)"; status=1; fi
+		if [ ! -e /usr/lib/libstdc++.so.6 ] && [ ! -e /lib/libstdc++.so.6 ]; then
+			printf 'error: Pi-Bolt needs libstdc++ (on Alpine: apk add libstdc++).\n'
+			status=1
+		fi
 	fi
 	glibc=$(ldd --version 2>/dev/null | sed -n '1s/.* \([0-9][0-9]*\)\.\([0-9][0-9]*\)$/\1 \2/p')
 	if [ -n "$glibc" ] && [ "$(echo "$glibc" | awk '{ print ($1 < 2 || ($1 == 2 && $2 < 17)) }')" = 1 ]; then
@@ -411,7 +440,8 @@ preflight_linux() {
 check_sum() {
 	line=$(grep " $1\$" SHA256SUMS) && [ -n "$line" ] || return 1
 	if command -v sha256sum >/dev/null 2>&1; then
-		printf '%s\n' "$line" | sha256sum -c --quiet - >/dev/null 2>&1
+		# (Not --quiet: BusyBox's sha256sum (Alpine) has no such option. The status is all that counts.)
+		printf '%s\n' "$line" | sha256sum -c - >/dev/null 2>&1
 	else
 		printf '%s\n' "$line" | shasum -a 256 -c --status - 2>/dev/null
 	fi
@@ -907,7 +937,8 @@ choose_action() {
 	fi
 	case "$VARIANT" in
 	x64) cpu="for CPUs with AVX2" ;;
-	x64-baseline) cpu="for any x86-64 CPU" ;;
+	x64-baseline | x64-musl-baseline) cpu="for any x86-64 CPU" ;;
+	x64-musl) cpu="for CPUs with AVX2" ;;
 	arm64) if [ "$PLATFORM" = darwin ]; then cpu="for Apple silicon"; else cpu="for any ARM64 CPU"; fi ;;
 	*) cpu="with the JIT on" ;;
 	esac
@@ -1117,6 +1148,8 @@ offer_start() {
 # --- Linux on ARM64, and Termux ---------------------------------------------------------------------------------------
 
 is_arm64() { case "$(uname -m)" in aarch64 | arm64) return 0 ;; *) return 1 ;; esac; }
+# (ldd is musl's own on a musl system, and says so; glibc's prints its version.)
+is_musl() { case "$(ldd --version 2>&1 || true)" in *musl*) return 0 ;; *) return 1 ;; esac; }
 
 # Termux, the Linux environment of Android: TERMUX_VERSION is set in its shells, and its prefix is where it always is.
 is_termux() {

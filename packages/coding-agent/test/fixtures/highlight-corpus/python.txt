@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""Module docstring
+spanning several lines.
+"""
+from __future__ import annotations
+
+import asyncio
+import re
+from dataclasses import dataclass, field
+from typing import Iterable
+
+PATTERN = re.compile(r"^(?P<name>\w+)=(?P<value>.*)$")
+
+
+@dataclass
+class Config:
+    name: str
+    values: dict[str, int] = field(default_factory=dict)
+    debug: bool = False
+
+    def get(self, key: str, default: int | None = None) -> int | None:
+        '''Return the value of key.'''
+        return self.values.get(key, default)
+
+    @property
+    def size(self) -> int:
+        return len(self.values)
+
+
+def parse(lines: Iterable[str]) -> Config:
+    config = Config(name="default")
+    for number, line in enumerate(lines, start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = PATTERN.match(line)
+        if match is None:
+            raise ValueError(f"line {number}: cannot parse {line!r}")
+        config.values[match["name"]] = int(match["value"], 0)
+    return config
+
+
+async def fetch_all(urls: list[str], *, limit: int = 4, **kwargs) -> list[bytes]:
+    semaphore = asyncio.Semaphore(limit)
+
+    async def one(url):
+        async with semaphore:
+            return await download(url, **kwargs)
+
+    return await asyncio.gather(*(one(u) for u in urls))
+
+
+text = """
+a triple quoted
+string with "quotes" and 'apostrophes'
+"""
+data = b"\x00\x01" + rb"\d+"
+numbers = [1, 2.5, 3e10, 0x1F, 0o17, 0b1010, 1_000_000, 4j]
+squares = {n: n ** 2 for n in range(10) if n % 2 == 0}
+lambda_ = lambda x, y=2: (x + y) / 2
+print(f"{config.name!r:>10} {total:.2f}", end="")
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))

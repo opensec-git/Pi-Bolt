@@ -1,5 +1,4 @@
 import { getNativeClipboard } from "@earendil-works/pi-tui";
-import { randomUUID } from "crypto";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -116,7 +115,7 @@ async function readClipboardImageViaWlPaste(): Promise<ClipboardImage | null | u
  * directly, so we use it as a fallback.
  */
 async function readClipboardImageViaPowerShell(): Promise<ClipboardImage | null> {
-	const tmpFile = join(tmpdir(), `pi-wsl-clip-${randomUUID()}.png`);
+	const tmpFile = join(tmpdir(), `pi-wsl-clip-${crypto.randomUUID()}.png`);
 
 	try {
 		const winPathResult = await runClipboardCommand("wslpath", ["-w", tmpFile], {
@@ -254,7 +253,7 @@ export function writePastedImage(image: ClipboardImage): string {
 	}
 	const path = join(
 		pastedImageDir,
-		`pi-clipboard-${randomUUID()}.${extensionForImageMimeType(image.mimeType) ?? "png"}`,
+		`pi-clipboard-${crypto.randomUUID()}.${extensionForImageMimeType(image.mimeType) ?? "png"}`,
 	);
 	writeFileSync(path, image.bytes, { mode: 0o600, flag: "wx" });
 	return path;

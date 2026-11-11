@@ -32,6 +32,7 @@ import type { OPENROUTER_CLASSIFIER_MODELS, OPENROUTER_IMAGE_MODELS, OPENROUTER_
 import type { QWEN_TOKEN_PLAN_CLASSIFIER_MODELS, QWEN_TOKEN_PLAN_IMAGE_MODELS, QWEN_TOKEN_PLAN_MODELS } from "./providers/qwen-token-plan.models.ts";
 import type { QWEN_TOKEN_PLAN_CN_CLASSIFIER_MODELS, QWEN_TOKEN_PLAN_CN_IMAGE_MODELS, QWEN_TOKEN_PLAN_CN_MODELS } from "./providers/qwen-token-plan-cn.models.ts";
 import type { QWEN_TOKEN_PLAN_INDIVIDUAL_CLASSIFIER_MODELS, QWEN_TOKEN_PLAN_INDIVIDUAL_IMAGE_MODELS, QWEN_TOKEN_PLAN_INDIVIDUAL_MODELS } from "./providers/qwen-token-plan-individual.models.ts";
+import type { QWEN_TOKEN_PLAN_INDIVIDUAL_CN_CLASSIFIER_MODELS, QWEN_TOKEN_PLAN_INDIVIDUAL_CN_IMAGE_MODELS, QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODELS } from "./providers/qwen-token-plan-individual-cn.models.ts";
 import type { RADIUS_CLASSIFIER_MODELS, RADIUS_IMAGE_MODELS, RADIUS_MODELS } from "./providers/radius.models.ts";
 import type { TOGETHER_CLASSIFIER_MODELS, TOGETHER_IMAGE_MODELS, TOGETHER_MODELS } from "./providers/together.models.ts";
 import type { TYPESAFE_CLASSIFIER_MODELS, TYPESAFE_IMAGE_MODELS, TYPESAFE_MODELS } from "./providers/typesafe.models.ts";
@@ -74,6 +75,7 @@ import { OPENROUTER_MODEL_CATALOG } from "./providers/openrouter.catalog.generat
 import { QWEN_TOKEN_PLAN_MODEL_CATALOG } from "./providers/qwen-token-plan.catalog.generated.ts";
 import { QWEN_TOKEN_PLAN_CN_MODEL_CATALOG } from "./providers/qwen-token-plan-cn.catalog.generated.ts";
 import { QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_CATALOG } from "./providers/qwen-token-plan-individual.catalog.generated.ts";
+import { QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODEL_CATALOG } from "./providers/qwen-token-plan-individual-cn.catalog.generated.ts";
 import { RADIUS_MODEL_CATALOG } from "./providers/radius.catalog.generated.ts";
 import { TOGETHER_MODEL_CATALOG } from "./providers/together.catalog.generated.ts";
 import { TYPESAFE_MODEL_CATALOG } from "./providers/typesafe.catalog.generated.ts";
@@ -118,6 +120,7 @@ export const MODELS: {
 	readonly "qwen-token-plan": typeof QWEN_TOKEN_PLAN_MODELS;
 	readonly "qwen-token-plan-cn": typeof QWEN_TOKEN_PLAN_CN_MODELS;
 	readonly "qwen-token-plan-individual": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_MODELS;
+	readonly "qwen-token-plan-individual-cn": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODELS;
 	readonly "radius": typeof RADIUS_MODELS;
 	readonly "together": typeof TOGETHER_MODELS;
 	readonly "typesafe": typeof TYPESAFE_MODELS;
@@ -223,6 +226,9 @@ export const MODELS: {
 	get "qwen-token-plan-individual"() {
 		return QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_CATALOG.chat();
 	},
+	get "qwen-token-plan-individual-cn"() {
+		return QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODEL_CATALOG.chat();
+	},
 	get "radius"() {
 		return RADIUS_MODEL_CATALOG.chat();
 	},
@@ -290,6 +296,7 @@ export const IMAGE_MODELS: {
 	readonly "qwen-token-plan": typeof QWEN_TOKEN_PLAN_IMAGE_MODELS;
 	readonly "qwen-token-plan-cn": typeof QWEN_TOKEN_PLAN_CN_IMAGE_MODELS;
 	readonly "qwen-token-plan-individual": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_IMAGE_MODELS;
+	readonly "qwen-token-plan-individual-cn": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_CN_IMAGE_MODELS;
 	readonly "radius": typeof RADIUS_IMAGE_MODELS;
 	readonly "together": typeof TOGETHER_IMAGE_MODELS;
 	readonly "typesafe": typeof TYPESAFE_IMAGE_MODELS;
@@ -395,6 +402,9 @@ export const IMAGE_MODELS: {
 	get "qwen-token-plan-individual"() {
 		return QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_CATALOG.image();
 	},
+	get "qwen-token-plan-individual-cn"() {
+		return QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODEL_CATALOG.image();
+	},
 	get "radius"() {
 		return RADIUS_MODEL_CATALOG.image();
 	},
@@ -462,6 +472,7 @@ export const CLASSIFIER_MODELS: {
 	readonly "qwen-token-plan": typeof QWEN_TOKEN_PLAN_CLASSIFIER_MODELS;
 	readonly "qwen-token-plan-cn": typeof QWEN_TOKEN_PLAN_CN_CLASSIFIER_MODELS;
 	readonly "qwen-token-plan-individual": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_CLASSIFIER_MODELS;
+	readonly "qwen-token-plan-individual-cn": typeof QWEN_TOKEN_PLAN_INDIVIDUAL_CN_CLASSIFIER_MODELS;
 	readonly "radius": typeof RADIUS_CLASSIFIER_MODELS;
 	readonly "together": typeof TOGETHER_CLASSIFIER_MODELS;
 	readonly "typesafe": typeof TYPESAFE_CLASSIFIER_MODELS;
@@ -567,6 +578,9 @@ export const CLASSIFIER_MODELS: {
 	get "qwen-token-plan-individual"() {
 		return QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_CATALOG.classifier();
 	},
+	get "qwen-token-plan-individual-cn"() {
+		return QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODEL_CATALOG.classifier();
+	},
 	get "radius"() {
 		return RADIUS_MODEL_CATALOG.classifier();
 	},
@@ -635,6 +649,7 @@ export const MODEL_CATALOGS = [
 	QWEN_TOKEN_PLAN_MODEL_CATALOG,
 	QWEN_TOKEN_PLAN_CN_MODEL_CATALOG,
 	QWEN_TOKEN_PLAN_INDIVIDUAL_MODEL_CATALOG,
+	QWEN_TOKEN_PLAN_INDIVIDUAL_CN_MODEL_CATALOG,
 	RADIUS_MODEL_CATALOG,
 	TOGETHER_MODEL_CATALOG,
 	TYPESAFE_MODEL_CATALOG,

@@ -1,0 +1,74 @@
+#!/usr/bin/env node
+import { readFile } from "node:fs/promises";
+import type { Request, Response } from "./types";
+
+/**
+ * A handler.
+ * @param req the request
+ */
+export async function handler<T extends Item>(
+	req: Request,
+	ctx: Context<T>,
+): Promise<Response> {
+	const items = await ctx.db.query<Item>("select * from items where id > $1", [1]);
+	if (items.length === 0) return new Response("not found", { status: 404 });
+	// map each item to its view model
+	const view = items.map((item) => ({ id: item.id, name: `item-${item.name}`, total: item.price * 4 }));
+	const pattern = /^[a-z]+\/(\d+)$/gi;
+	const a = 1, b = 2;
+	if (a < b && b > a) console.log(a / b, b / a);
+	return Response.json({ view, count: view.length });
+}
+
+@Component({ selector: "app-root" })
+export class Store<K, V> implements Map<K, V> {
+	private readonly entries = new Map<K, V>();
+	static create(): Store<string, number> { return new Store(); }
+	get size(): number {
+		return this.entries.size;
+	}
+	async *keysOf(filter: (key: K) => boolean = () => true): AsyncGenerator<K> {
+		for (const key of this.entries.keys()) if (filter(key)) yield key;
+	}
+}
+
+const options = {
+	// a comment before a key
+	retries: 3,
+	/* block comment
+	   over lines */ timeout: 1_000,
+	nested: { deep: [1, 2.5e3, 0x1f, 0b101n] },
+};
+
+type Shape =
+	| { kind: "circle"; radius: number }
+	| { kind: "square"; size: number };
+
+function area(shape: Shape): number {
+	switch (shape.kind) {
+		case "circle":
+			return Math.PI * shape.radius ** 2;
+		default:
+			return shape.size * shape.size;
+	}
+}
+
+const render = (props: Props) => (
+	<div className="box" onClick={() => props.onClick(1)}>
+		<span>{props.label}</span>
+	</div>
+);
+
+const html = `
+<p>${options.retries} retries</p>
+`;
+export default { handler, Store, area, render, html };
+const x = a
+	? b
+	: c;
+const fn = function named(
+	first,
+	second
+) {
+	return first + second;
+};

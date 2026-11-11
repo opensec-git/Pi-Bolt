@@ -299,13 +299,26 @@ describe("applyEditsToNormalizedContent with shared normalization", () => {
 			const edits = randomEdits(random, content);
 			const label = JSON.stringify({ i, content, edits });
 			const expected = captureResult(() => reference.applyEditsToNormalizedContent(content, edits, "f.ts"));
+			// (The reference predates `replacements`, which upstream's windowed edit diff added; they are checked to give
+			// newContent.)
+			const applied = (text: string) => {
+				const { baseContent, newContent, replacements } = applyEditsToNormalizedContent(text, edits, "f.ts");
+				let replaced = "";
+				let at = 0;
+				for (const replacement of replacements) {
+					replaced += baseContent.slice(at, replacement.matchIndex) + replacement.newText;
+					at = replacement.matchIndex + replacement.matchLength;
+				}
+				expect(replaced + baseContent.slice(at), label).toBe(newContent);
+				return { baseContent, newContent };
+			};
 			expect(
-				captureResult(() => applyEditsToNormalizedContent(content, edits, "f.ts")),
+				captureResult(() => applied(content)),
 				label,
 			).toEqual(expected);
 			// Same content again, as the edit preview and the edit itself do.
 			expect(
-				captureResult(() => applyEditsToNormalizedContent(content.slice(0), edits, "f.ts")),
+				captureResult(() => applied(content.slice(0))),
 				label,
 			).toEqual(expected);
 			for (const edit of edits) {

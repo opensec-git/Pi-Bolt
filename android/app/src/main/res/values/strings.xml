@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pi-Bolt</string>
+    <string name="channel_session">Active session</string>
+    <string name="channel_session_desc">Keeps Pi working in the background</string>
+    <string name="channel_alerts">Session updates</string>
+    <string name="channel_alerts_desc">Pi finished, or needs an answer</string>
+    <string name="channel_terminal">Terminals</string>
+    <string name="channel_terminal_desc">Keeps terminals running in the background</string>
+    <string name="channel_updates">App updates</string>
+    <string name="channel_updates_desc">Update downloads</string>
+</resources>

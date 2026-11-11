@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { unlinkSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +31,7 @@ function emitOsc52(text: string): boolean {
  * decode piped bytes with the console code page, which mangles non-ASCII UTF-8.
  */
 async function copyViaWindowsClipboard(text: string): Promise<boolean> {
-	const tmpFile = join(tmpdir(), `pi-wsl-clip-${randomUUID()}.txt`);
+	const tmpFile = join(tmpdir(), `pi-wsl-clip-${crypto.randomUUID()}.txt`);
 	try {
 		writeFileSync(tmpFile, text, { encoding: "utf8", mode: 0o600 });
 		const winPath = (await runClipboardCommand("wslpath", ["-w", tmpFile], { timeoutMs: 1000 }))

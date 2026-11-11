@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The default theme's canvas (Pi-Bolt, pure black): the window behind the first frame (the app is dark only). -->
+    <color name="splash_bg">#1C1B19</color>
+    <!-- Notifications: the small bolt and the app name in the shade, in the logo's amber. -->
+    <color name="notification_accent">#FFE9A42C</color>
+</resources>

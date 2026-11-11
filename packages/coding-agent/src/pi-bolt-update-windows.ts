@@ -14,7 +14,6 @@
  * SHA256SUMS before it runs (pi-bolt-installer.ts).
  */
 import { spawnSync } from "node:child_process";
-import { createHash, createPublicKey, verify } from "node:crypto";
 import {
 	copyFileSync,
 	cpSync,
@@ -31,8 +30,9 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import chalk from "chalk";
 import { PIBOLT_RELEASE_KEY } from "./pi-bolt.ts";
+import { downloadWithRetry } from "./pi-bolt-download.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
 const REPO = "https://github.com/opensec-git/Pi-Bolt";
 const ASIDE = /\.pibolt-(old|new)$/;
@@ -52,6 +52,8 @@ export function sumsSignatureValid(
 	publicKeyPem: string = PIBOLT_RELEASE_KEY,
 ): boolean {
 	try {
+		// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+		const { createPublicKey, verify } = process.getBuiltinModule("node:crypto");
 		return verify(null, sums, createPublicKey(publicKeyPem), signature);
 	} catch {
 		return false;
@@ -73,7 +75,7 @@ export function sumsEntry(sums: string, name: string): string | undefined {
 }
 
 export function sha256(data: Buffer): string {
-	return createHash("sha256").update(data).digest("hex");
+	return process.getBuiltinModule("node:crypto").createHash("sha256").update(data).digest("hex");
 }
 
 /**
@@ -129,6 +131,19 @@ function filesIn(dir: string): string[] {
 	return files;
 }
 
+/**
+ * Deletes `path` if it can be. A file a running Pi-Bolt has mapped (its executable, a native module) can be renamed on Windows
+ * but not deleted until that process exits, which may be days: it stays for a later install to delete, and never stops this one
+ * (#316).
+ */
+function removeIfPossible(path: string, options: { recursive?: boolean } = {}): void {
+	try {
+		rmSync(path, { force: true, ...options });
+	} catch {
+		// Still in use: a later install deletes it.
+	}
+}
+
 /** Moves a file, copying it when it is on another drive (as %TEMP% may be). */
 function moveFile(from: string, to: string): void {
 	try {
@@ -136,7 +151,8 @@ function moveFile(from: string, to: string): void {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
 		copyFileSync(from, to);
-		rmSync(from, { force: true });
+		// (The copy is in place; the temporary folder it came from is removed after the update.)
+		removeIfPossible(from);
 	}
 }
 
@@ -145,11 +161,12 @@ function moveFile(from: string, to: string): void {
  * its executable and DLLs open, and Windows lets those be renamed but not replaced or deleted. Each new file is first moved
  * next to its target, then the old one renamed aside, then the new one renamed into place (if that fails, the old one is put
  * back); pi-bolt.exe last, so that until it is in place the one that runs is the old one. What was renamed aside is deleted
- * now if it can be, or by the next install.
+ * now if it can be, or by the next install: what an earlier install left aside and an older Pi-Bolt still has open is left for
+ * a later one, and does not stop this install (#316). Only a file that cannot be put in place stops it.
  */
 export function installFiles(from: string, to: string, stamp: number = Date.now()): void {
 	if (existsSync(to)) {
-		for (const file of filesIn(to)) if (ASIDE.test(file)) rmSync(join(to, file), { force: true });
+		for (const file of filesIn(to)) if (ASIDE.test(file)) removeIfPossible(join(to, file));
 	}
 	mkdirSync(to, { recursive: true });
 	const files = filesIn(from).sort(
@@ -169,18 +186,20 @@ export function installFiles(from: string, to: string, stamp: number = Date.now(
 				if (existsSync(aside) && !existsSync(target)) renameSync(aside, target);
 				throw error;
 			}
-			try {
-				rmSync(aside, { force: true });
-			} catch {
-				// Still running (this executable): the next install deletes it.
-			}
+			// (Still running, this executable or an older Pi-Bolt: the next install deletes it.)
+			removeIfPossible(aside);
 		} catch (error) {
-			rmSync(staged, { force: true });
+			// (A .pibolt-new left behind is deleted by the next install: the error says which file could not be put in place.)
+			removeIfPossible(staged);
 			throw new Error(
 				`could not put ${target} in place (${(error as Error).message}). Close Pi-Bolt and anything that has its files open, then run \`pi-bolt update\` again.`,
 			);
 		}
 	}
+	// No build ships the mobile UI skill: the copy an earlier build left in this folder goes (when a file of it is open, at a
+	// later install: the new build is in place by now).
+	if (!existsSync(join(from, "skills", "pibolt-mobile-ui")))
+		removeIfPossible(join(to, "skills", "pibolt-mobile-ui"), { recursive: true });
 }
 
 /**
@@ -209,34 +228,40 @@ export function keepPrevious(dir: string, incoming: string, note: (text: string)
 	}
 }
 
-/** A file over HTTPS, or undefined if it could not be downloaded whole; with `what`, a progress line on a terminal. */
-export async function download(url: string, what: string | undefined): Promise<Buffer | undefined> {
-	let response: Response;
+/**
+ * A file over HTTPS, or undefined if it could not be downloaded whole; with `what`, a progress line on a terminal. A dropped
+ * connection, a timeout or a 5xx is tried again, from where it stopped when the server can, with a line that says so
+ * (pi-bolt-download.ts); a 404 is not.
+ */
+export async function download(
+	url: string,
+	what: string | undefined,
+	options: { retryDelayMs?: number } = {},
+): Promise<Buffer | undefined> {
+	let shown = 0;
+	const clear = () => {
+		if (what && process.stdout.isTTY) process.stdout.write("\r\x1b[K");
+	};
 	try {
-		response = await fetch(url, { headers: { "user-agent": "pi-bolt-updater" }, redirect: "follow" });
+		return await downloadWithRetry(url, {
+			headers: { "user-agent": "pi-bolt-updater" },
+			retryDelayMs: options.retryDelayMs,
+			onProgress: (got, total) => {
+				if (!what || !process.stdout.isTTY || Date.now() - shown < 100) return;
+				shown = Date.now();
+				const mb = (n: number) => (n / 1048576).toFixed(1);
+				process.stdout.write(`\r\x1b[K  ${chalk.dim(`${what} ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB`)}`);
+			},
+			onRetry: (line) => {
+				clear();
+				console.log(chalk.yellow(`  ${url}: ${line}`));
+			},
+		});
 	} catch {
 		return undefined;
+	} finally {
+		clear();
 	}
-	if (!response.ok || !response.body) return undefined;
-	const total = Number(response.headers.get("content-length")) || 0;
-	const chunks: Buffer[] = [];
-	let got = 0;
-	let shown = 0;
-	const reader = response.body.getReader();
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		chunks.push(Buffer.from(value));
-		got += value.length;
-		if (what && process.stdout.isTTY && Date.now() - shown >= 100) {
-			shown = Date.now();
-			const mb = (n: number) => (n / 1048576).toFixed(1);
-			process.stdout.write(`\r\x1b[K  ${chalk.dim(`${what} ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB`)}`);
-		}
-	}
-	if (what && process.stdout.isTTY) process.stdout.write("\r\x1b[K");
-	if (total && got !== total) return undefined;
-	return Buffer.concat(chunks);
 }
 
 /** Where release `version`'s files are downloaded from. */
@@ -317,8 +342,11 @@ export async function updatePiBoltWindows(version: string, installDir: string, v
 			`  ${chalk.green("ok")} install complete ${chalk.dim(`(win32-${variant}, ${(statSync(zipFile).size / 1048576).toFixed(1)} MB from ${from}, signature verified)`)}`,
 		);
 	} finally {
-		rmSync(tmp, { recursive: true, force: true });
+		// (A temporary folder that cannot be removed yet, a file in it still being scanned, does not fail an update that is done.)
+		removeIfPossible(tmp, { recursive: true });
 	}
 	// Pi-Bolt keeps the packages only it runs out of Pi's list as it starts: once now, as install.ps1 does after an install.
 	spawnSync(join(dir, "pi-bolt.exe"), ["list"], { cwd: dir, stdio: "ignore" });
+	// A remote control service that runs is restarted, so it runs this version (as install.ps1 does); its result is ignored.
+	spawnSync(join(dir, "pi-bolt.exe"), ["service", "restart"], { cwd: dir, stdio: "ignore" });
 }

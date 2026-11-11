@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dependency verification for the artifacts that do not come from Google Maven or Maven Central: Termux's terminal
+     libraries, built by JitPack from the termux-app tag. Everything else is trusted as before (exact pins in
+     libs.versions.toml); every termux file must match the sha256 below or the build fails. -->
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="https://schema.gradle.org/dependency-verification https://schema.gradle.org/dependency-verification/dependency-verification-1.3.xsd">
+   <configuration>
+      <verify-metadata>true</verify-metadata>
+      <verify-signatures>false</verify-signatures>
+      <trusted-artifacts>
+         <trust group="^(?!com[.]github[.]termux).*$" regex="true"/>
+      </trusted-artifacts>
+   </configuration>
+   <components>
+      <component group="com.github.termux.termux-app" name="terminal-emulator" version="v0.118.3">
+         <artifact name="terminal-emulator-v0.118.3.aar">
+            <sha256 value="cbb915c4d7c51883f85397b46b74bf4b82fd32a8bbf0baeba1e0bc6d990d3e8a" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+         <artifact name="terminal-emulator-v0.118.3.module">
+            <sha256 value="fac270d63ed22060256d2e28721d127aa439cd40444106636071efa3230112d0" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+         <artifact name="terminal-emulator-v0.118.3.pom">
+            <sha256 value="62420648b63ed7f1297faf8ca76650d1e56f89168870eee231282c13d11b59c4" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+      </component>
+      <component group="com.github.termux.termux-app" name="terminal-view" version="v0.118.3">
+         <artifact name="terminal-view-v0.118.3.aar">
+            <sha256 value="adb476c5002fa4a1c99f324d9e3b48846e0cb132434e9000d065f8a8f3aea441" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+         <artifact name="terminal-view-v0.118.3.module">
+            <sha256 value="a302566eb0e921073263380ea2c27b13af08df0013008d900516c45dddac853f" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+         <artifact name="terminal-view-v0.118.3.pom">
+            <sha256 value="a232e6b166f271e2b8389cdc008e96c274120387abb8df4a7b4e01d2d00d49c2" origin="JitPack build of termux-app v0.118.3"/>
+         </artifact>
+      </component>
+   </components>
+</verification-metadata>

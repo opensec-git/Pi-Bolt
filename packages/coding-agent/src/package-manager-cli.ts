@@ -8,10 +8,9 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { ModelsError } from "@earendil-works/pi-ai";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import lockfile from "proper-lockfile";
 import { parseArgs } from "./cli/args.ts";
 import { selectConfig } from "./cli/config-selector.ts";
@@ -36,7 +35,7 @@ import {
 } from "./config.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
-import { DefaultPackageManager } from "./core/package-manager.ts";
+import { DefaultPackageManager, isOfflineModeEnabled } from "./core/package-manager.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader, formatPackageInstallWarning, isBuiltinExtension } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
@@ -45,6 +44,7 @@ import {
 	isPiBoltChannel,
 	PIBOLT,
 	PIBOLT_INSTALL_COMMAND,
+	PIBOLT_NPM_UPDATE_COMMAND,
 	type PiBoltChannel,
 	piBoltChannel,
 	piBoltExecutableIn,
@@ -54,11 +54,12 @@ import {
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
-import { piBoltCompileWanted, runPiBoltCompile } from "./pi-bolt-compile.ts";
+import { runPiBoltCompile } from "./pi-bolt-compile.ts";
 import { fetchReleaseInstaller, type ReleaseInstaller, runReleaseInstaller } from "./pi-bolt-installer.ts";
 import { rollbackPiBolt } from "./pi-bolt-rollback.ts";
 import { isInProfile, updatePiBoltWindows } from "./pi-bolt-update-windows.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { getPiUserAgent } from "./utils/pi-user-agent.ts";
 import { stripBom } from "./utils/text.ts";
@@ -726,9 +727,21 @@ async function refreshModelCatalogs(agentDir: string): Promise<void> {
 		if (result.aborted) {
 			throw new Error("Model catalog refresh timed out.");
 		}
-		if (result.errors.size > 0) {
-			const details = Array.from(result.errors, ([provider, error]) => `${provider}: ${error.message}`).join("; ");
-			throw new Error(`Could not refresh model catalogs: ${details}`);
+		const failures: string[] = [];
+		for (const [provider, error] of result.errors) {
+			// A stale login only affects that provider's catalog; the others are still worth refreshing.
+			if (error instanceof ModelsError && error.code === "oauth") {
+				console.warn(
+					chalk.yellow(
+						`Warning: skipped model catalog for ${provider}: ${error.message}\nLog in again with \`${COMMAND_NAME} auth login ${provider}\` to refresh it.`,
+					),
+				);
+			} else {
+				failures.push(`${provider}: ${error.message}`);
+			}
+		}
+		if (failures.length > 0) {
+			throw new Error(`Could not refresh model catalogs: ${failures.join("; ")}`);
 		}
 	} finally {
 		clearTimeout(timeout);
@@ -798,13 +811,14 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	const fallback =
 		method === undefined
 			? ""
-			: ` You can update without it: ${method === "npm" ? "npm install -g pi-bolt@latest" : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
+			: ` You can update without it: ${method === "npm" ? PIBOLT_NPM_UPDATE_COMMAND : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
 	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
 	try {
 		latestRelease = await getLatestPiRelease(currentVersion, { retry: true });
 	} catch (error: unknown) {
 		throw new Error(
-			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error)}.${fallback}`,
+			// (The reasons may end with a period already: "The operation timed out.")
+			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error).replace(/\.+$/, "")}.${fallback}`,
 			{ cause: error },
 		);
 	}
@@ -837,16 +851,13 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
  * variant, same folder). One installed with the npm package, Homebrew, Scoop or mise is updated with the package manager
  * instead.
  */
-async function runPiBoltSelfUpdate(
-	version: string,
-	options: { reinstall?: boolean; recompile?: boolean } = {},
-): Promise<boolean> {
+async function runPiBoltSelfUpdate(version: string, options: { reinstall?: boolean } = {}): Promise<boolean> {
 	const method = piBoltInstallMethod();
 	if (method === "npm") {
 		console.log(
-			`This Pi-Bolt was installed with the npm package. Update it with the package manager that installed it:`,
+			`Pi-Bolt ${version} is out. This Pi-Bolt was installed with the npm package: update it with the package manager that installed it:`,
 		);
-		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
+		console.log(`  ${PIBOLT_NPM_UPDATE_COMMAND}      (or: bun add -g --trust pi-bolt@latest)`);
 		return false;
 	}
 	// (Homebrew, Scoop and mise own the folder: the installer would replace files they keep track of.)
@@ -905,23 +916,8 @@ async function runPiBoltSelfUpdate(
 				: `Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`,
 		),
 	);
-	// Extensions `pi-bolt compile` compiled in before are compiled into this release too, by the release itself.
-	const installDir = piBoltUpdateEnvironment(version).PIBOLT_INSTALL;
-	if (options.recompile !== false && installDir && piBoltCompileWanted(installDir)) {
-		console.log(chalk.dim(`Compiling the extensions compiled in before into Pi-Bolt ${version}...`));
-		const compiled = spawnProcessSync(installed, ["compile", "--after-update"], {
-			cwd: homedir(),
-			encoding: "utf8",
-			stdio: "inherit",
-		});
-		if (compiled.status !== 0) {
-			console.error(
-				chalk.yellow(
-					`The extensions were not compiled into ${version}: they load from their files until \`pi-bolt compile\` compiles them in.`,
-				),
-			);
-		}
-	}
+	// (Extensions compiled into the build it replaced load from their files now: the installer said so, and how to compile
+	// them in again. An update compiles nothing.)
 	return true;
 }
 
@@ -929,7 +925,7 @@ async function runPiBoltSelfUpdate(
 async function runPiBoltWindowsUpdate(
 	version: string,
 	installDir: string,
-	options: { reinstall?: boolean; recompile?: boolean },
+	options: { reinstall?: boolean },
 ): Promise<boolean> {
 	console.log(chalk.dim(`Updating Pi-Bolt to ${version}...`));
 	try {
@@ -955,21 +951,7 @@ async function runPiBoltWindowsUpdate(
 				: `Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`,
 		),
 	);
-	if (options.recompile !== false && piBoltCompileWanted(installDir)) {
-		console.log(chalk.dim(`Compiling the extensions compiled in before into Pi-Bolt ${version}...`));
-		const compiled = spawnProcessSync(installed, ["compile", "--after-update"], {
-			cwd: homedir(),
-			encoding: "utf8",
-			stdio: "inherit",
-		});
-		if (compiled.status !== 0) {
-			console.error(
-				chalk.yellow(
-					`The extensions were not compiled into ${version}: they load from their files until \`pi-bolt compile\` compiles them in.`,
-				),
-			);
-		}
-	}
+	// (Nothing is compiled: Windows builds have no extensions compiled in.)
 	return true;
 }
 
@@ -1215,7 +1197,7 @@ export async function handlePackageCommand(
 	if (PIBOLT && args[0] === "compile") {
 		const build = PIBOLT;
 		process.exitCode = await runPiBoltCompile(args.slice(1), () =>
-			runPiBoltSelfUpdate(build.version, { reinstall: true, recompile: false }),
+			runPiBoltSelfUpdate(build.version, { reinstall: true }),
 		);
 		return true;
 	}
@@ -1309,10 +1291,17 @@ export async function handlePackageCommand(
 
 	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
 
+	// Update result events describe a changed package, e.g. "npm:foo 1.2.0 -> 1.3.0".
+	const updatedPackages: string[] = [];
+	// Progress messages are warnings, e.g. npm reinstalled the old version from stale registry metadata.
+	let warningCount = 0;
 	packageManager.setProgressCallback((event) => {
-		if (event.type === "start") {
+		if (event.type === "result" && event.action === "update" && event.message) {
+			updatedPackages.push(event.message);
+		} else if (event.type === "start") {
 			process.stdout.write(chalk.dim(`${event.message}\n`));
 		} else if (event.type === "progress" && event.message) {
+			warningCount++;
 			process.stdout.write(chalk.yellow(`${event.message}\n`));
 		}
 	});
@@ -1389,10 +1378,29 @@ export async function handlePackageCommand(
 				if (updateTargetIncludesExtensions(target)) {
 					const updateSource = target.type === "extensions" ? target.source : undefined;
 					await packageManager.update(updateSource);
-					if (updateSource) {
-						console.log(chalk.green(`Updated ${updateSource}`));
+					// Only claim "up to date" when the update actually checked and nothing warned.
+					if (isOfflineModeEnabled()) {
+						console.log(chalk.yellow("Skipped package updates (offline mode)"));
+					} else if (updatedPackages.length === 0 && warningCount > 0) {
+						console.log(
+							chalk.yellow(
+								updateSource
+									? `${updateSource} was not updated, see the warnings above`
+									: "No packages were updated, see the warnings above",
+							),
+						);
+					} else if (updatedPackages.length === 0) {
+						console.log(
+							chalk.green(
+								updateSource ? `${updateSource} is already up to date` : "Packages are already up to date",
+							),
+						);
 					} else {
-						console.log(chalk.green("Updated packages"));
+						const count = updatedPackages.length;
+						console.log(chalk.green(`Updated ${count} package${count === 1 ? "" : "s"}:`));
+						for (const message of updatedPackages) {
+							console.log(`  ${message}`);
+						}
 					}
 				}
 				if (options.channel) {

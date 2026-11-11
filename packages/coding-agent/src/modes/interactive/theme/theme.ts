@@ -22,11 +22,16 @@ import {
 	type TerminalColors,
 	type TextAttributes,
 } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
-import { getHighlightLanguageCount, highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
+import { loadChalk } from "../../../utils/lazy-packages.ts";
+import {
+	GrowingHighlighter,
+	getHighlightLanguageCount,
+	highlight,
+	supportsLanguage,
+} from "../../../utils/syntax-highlight.ts";
 import { stripBom } from "../../../utils/text.ts";
 import { generateSystemThemeColors, SYSTEM_THEME_NAME, terminalAppearance } from "./system-theme.ts";
 import {
@@ -312,23 +317,23 @@ export class Theme {
 	}
 
 	bold(text: string): string {
-		return chalk.bold(text);
+		return loadChalk().bold(text);
 	}
 
 	italic(text: string): string {
-		return chalk.italic(text);
+		return loadChalk().italic(text);
 	}
 
 	underline(text: string): string {
-		return chalk.underline(text);
+		return loadChalk().underline(text);
 	}
 
 	inverse(text: string): string {
-		return chalk.inverse(text);
+		return loadChalk().inverse(text);
 	}
 
 	strikethrough(text: string): string {
-		return chalk.strikethrough(text);
+		return loadChalk().strikethrough(text);
 	}
 
 	/** Opening escape sequence for a foreground token. Faint tokens include SGR 2, which `\x1b[22m` closes. */
@@ -1005,6 +1010,12 @@ function rememberHighlightedCode(key: string, lines: string[]): void {
 	}
 }
 
+// The code block being written (a reply streaming in has it grow at its end each time it is drawn), highlighted from what
+// was highlighted of it before: only its last lines are highlighted again (GrowingHighlighter). It is followed from the
+// second time code that extends the code highlighted before is asked for.
+let growingCode: { lang: string; code: string; lines: string[]; highlighter: GrowingHighlighter } | undefined;
+let lastHighlightedCode: { lang: string; code: string } | undefined;
+
 /**
  * The lines of `code` highlighted as `lang`, a language that is supported, from what is kept or highlighted now and kept.
  * Throws what highlight() throws.
@@ -1020,20 +1031,49 @@ function highlightedLines(code: string, lang: string): string[] {
 		highlightedCode.clear();
 		highlightedCodeLength = 0;
 		lastHighlightedKey = undefined;
+		growingCode = undefined;
+		lastHighlightedCode = undefined;
 	}
+	const growing = growingCode;
+	const extendsGrowing = growing !== undefined && growing.lang === lang && extendsCode(code, growing.code);
+	if (extendsGrowing && code.length === growing.code.length) return growing.lines.slice();
+	// The same text highlighted before (the same reply streamed again) is taken as it was, unless the block being written
+	// has final lines already: its next lines then cost less than looking the whole text up.
 	const key = `${lang}\n${code}`;
-	const known = highlightedCode.get(key);
+	const known = extendsGrowing && growing.highlighter.finalLength > 0 ? undefined : highlightedCode.get(key);
 	if (known) {
 		// (Most recent last.)
 		highlightedCode.delete(key);
 		highlightedCode.set(key, known);
 		return known.slice();
 	}
+	if (extendsGrowing) {
+		growing.lines = growing.highlighter.lines(code);
+		growing.code = code;
+		return growing.lines.slice();
+	}
+	const last = lastHighlightedCode;
+	if (last !== undefined && last.lang === lang && code.length > last.code.length && extendsCode(code, last.code)) {
+		// The code highlighted before, grown: from now on only what changes is highlighted again. The block followed
+		// before is kept with the rest.
+		if (growing !== undefined) rememberHighlightedCode(`${growing.lang}\n${growing.code}`, growing.lines);
+		const highlighter = new GrowingHighlighter(lang, getCliHighlightTheme(theme));
+		const lines = highlighter.lines(code);
+		growingCode = { lang, code, lines, highlighter };
+		lastHighlightedCode = undefined;
+		return lines.slice();
+	}
 	const lines = highlight(code, { language: lang, ignoreIllegals: true, theme: getCliHighlightTheme(theme) }).split(
 		"\n",
 	);
 	rememberHighlightedCode(key, lines);
+	lastHighlightedCode = { lang, code };
 	return lines.slice();
+}
+
+/** Whether `code` is `before` with text added at its end, or `before` itself. */
+function extendsCode(code: string, before: string): boolean {
+	return code.length >= before.length && code.startsWith(before);
 }
 
 /**
@@ -1112,6 +1152,10 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 		java: "java",
 		kt: "kotlin",
 		swift: "swift",
+		dart: "dart",
+		groovy: "groovy",
+		gradle: "groovy",
+		nix: "nix",
 		c: "c",
 		h: "c",
 		cpp: "cpp",

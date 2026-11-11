@@ -1,16 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-	type MiddleTruncationResult,
 	type TruncationOptions,
 	type TruncationResult,
 	truncateHead,
-	truncateMiddle,
 	truncateTail,
 } from "../src/core/tools/truncate.ts";
 
-// Reference implementations: verbatim copies of truncate.ts before truncateHead, truncateTail and truncateMiddle stopped
-// slicing and joining every line and building an array of every removed character. The current ones must return
-// deep-equal results.
+// Reference implementations: verbatim copies of truncate.ts before truncateHead and truncateTail stopped slicing and
+// joining every line. The current ones must return deep-equal results. (truncateMiddle moved to pi-mcp's output-limit.ts,
+// tested there.)
 
 const DEFAULT_MAX_LINES = 2000;
 const DEFAULT_MAX_BYTES = 50 * 1024;
@@ -207,30 +205,6 @@ function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 	return buf.slice(start).toString("utf-8");
 }
 
-function referenceTruncateMiddle(content: string, maxBytes: number): MiddleTruncationResult {
-	const buf = Buffer.from(content, "utf-8");
-	const totalLines = countLines(content);
-	if (buf.length <= maxBytes) {
-		return { content, truncated: false, removedChars: 0, totalBytes: buf.length, totalLines };
-	}
-	// Continuation bytes (10xxxxxx) are not character starts.
-	const isBoundary = (index: number) => index >= buf.length || (buf[index] & 0xc0) !== 0x80;
-	let headEnd = Math.floor(maxBytes / 2);
-	while (headEnd > 0 && !isBoundary(headEnd)) headEnd--;
-	let tailStart = buf.length - (maxBytes - Math.floor(maxBytes / 2));
-	while (tailStart < buf.length && !isBoundary(tailStart)) tailStart++;
-	const head = buf.subarray(0, headEnd).toString("utf-8");
-	const tail = buf.subarray(tailStart).toString("utf-8");
-	const removedChars = Array.from(buf.subarray(headEnd, tailStart).toString("utf-8")).length;
-	return {
-		content: `${head}…${removedChars} chars truncated…${tail}`,
-		truncated: true,
-		removedChars,
-		totalBytes: buf.length,
-		totalLines,
-	};
-}
-
 /** Seeded PRNG (mulberry32), so a failure reproduces. */
 function createRandom(seed: number): () => number {
 	let state = seed >>> 0;
@@ -361,31 +335,6 @@ describe("truncation fast paths match the reference implementations", () => {
 				expect(truncateHead(text, options)).toEqual(referenceTruncateHead(text, options));
 				expect(truncateTail(text, options)).toEqual(referenceTruncateTail(text, options));
 			}
-		}
-	});
-
-	it("truncateMiddle on fixed edge cases and random text", () => {
-		for (const text of FIXED_TEXTS) {
-			for (let maxBytes = 0; maxBytes <= 20; maxBytes++) {
-				expect(truncateMiddle(text, maxBytes)).toEqual(referenceTruncateMiddle(text, maxBytes));
-			}
-		}
-		const random = createRandom(0x3a1d);
-		for (let i = 0; i < 20000; i++) {
-			const text = randomText(random, 80);
-			const totalBytes = Buffer.byteLength(text, "utf-8");
-			const maxBytes = pick(random, [
-				0,
-				1,
-				2,
-				3,
-				Math.floor(random() * (totalBytes + 10)),
-				Math.max(0, totalBytes - 1),
-				totalBytes,
-			]);
-			expect(truncateMiddle(text, maxBytes), JSON.stringify({ i, text, maxBytes })).toEqual(
-				referenceTruncateMiddle(text, maxBytes),
-			);
 		}
 	});
 });

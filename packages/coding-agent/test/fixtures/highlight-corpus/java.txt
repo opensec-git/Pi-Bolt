@@ -1,0 +1,56 @@
+package com.example.app;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Javadoc for the class.
+ * @author someone
+ */
+@SuppressWarnings("unchecked")
+public final class Inventory<T extends Comparable<T>> implements Iterable<T> {
+    private static final int DEFAULT_CAPACITY = 16;
+    private final List<T> items = new ArrayList<>(DEFAULT_CAPACITY);
+
+    public Inventory() {
+        super();
+    }
+
+    public record Entry(String name, int count) {}
+
+    @Override
+    public java.util.Iterator<T> iterator() {
+        return items.iterator();
+    }
+
+    public synchronized void add(T item) throws IllegalArgumentException {
+        if (item == null) {
+            throw new IllegalArgumentException("item must not be null");
+        }
+        items.add(item);
+    }
+
+    public static <K, V> Map<K, List<V>> group(
+            List<V> values,
+            java.util.function.Function<V, K> key) {
+        Map<K, List<V>> out = new java.util.HashMap<>();
+        for (V value : values) {
+            out.computeIfAbsent(key.apply(value), k -> new ArrayList<>()).add(value);
+        }
+        return out;
+    }
+
+    /* block comment
+       over lines */
+    public int total() {
+        int sum = 0;
+        for (int i = 0; i < items.size(); i++) sum += i;
+        long big = 0xFFL + 1_000L;
+        char c = '\'';
+        String text = """
+            a text block
+            """;
+        return sum + (int) big + c + text.length();
+    }
+}

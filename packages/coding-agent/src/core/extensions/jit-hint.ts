@@ -16,6 +16,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, sep } from "node:path";
 import { PIBOLT, piBoltJitSwitchCommand } from "../../pi-bolt.ts";
+import { canonicalizePath } from "../../utils/paths.ts";
 
 /** The engine's message (patches/bun.patch): a TypeError from the bun:ffi functions that make native code. */
 export const JIT_REQUIRED_MESSAGE = "bun:ffi requires the JIT";
@@ -92,10 +93,23 @@ function stackFiles(stack: string): string[] {
 /** Which of `extensionPaths` the code that made `stack` belongs to (the innermost frame that is an extension's). */
 export function extensionOfStack(stack: string | undefined, extensionPaths: readonly string[]): string | undefined {
 	if (!stack) return undefined;
-	const roots = extensionPaths.filter((path) => isAbsolute(path)).map((path) => ({ path, root: extensionRoot(path) }));
+	// Each extension by its path and by its real path, which the loader imports it by (#8112: /var is /private/var on macOS).
+	const named = extensionPaths
+		.filter((path) => isAbsolute(path))
+		.flatMap((path) => {
+			const real = canonicalizePath(path);
+			return real === path
+				? [{ path, file: path }]
+				: [
+						{ path, file: path },
+						{ path, file: real },
+					];
+		});
+	const roots = named.map(({ path, file }) => ({ path, root: extensionRoot(file) }));
 	for (const file of stackFiles(stack)) {
 		// The extension's own file first: single-file extensions in one folder share it as their root.
-		if (extensionPaths.includes(file)) return file;
+		const own = named.find((entry) => entry.file === file);
+		if (own) return own.path;
 		const owner = roots
 			.filter(({ root }) => file.startsWith(root + sep))
 			.sort((a, b) => b.root.length - a.root.length)[0];

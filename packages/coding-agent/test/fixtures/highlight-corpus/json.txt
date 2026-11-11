@@ -1,0 +1,26 @@
+{
+  "name": "@scope/package",
+  "version": "1.2.3",
+  "private": true,
+  "description": "A package with \"quotes\" and \\ backslashes",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "chalk": "5.3.0",
+    "marked": "^15.0.0"
+  },
+  "nested": {
+    "array": [1, -2.5, 3e8, true, false, null, "string", {"k": "v"}],
+    "empty": {},
+    "list": [],
+    "unicode": "é中"
+  },
+  "matrix": [
+    [1, 2, 3],
+    [4, 5, 6]
+  ],
+  "files": ["dist", "README.md"],
+  "engines": { "node": ">=20" }
+}

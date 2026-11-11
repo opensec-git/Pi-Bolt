@@ -8,7 +8,6 @@
 import { basename } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { type Args, type Mode, missingExtensionPaths, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import {
 	type AuthCheckResult,
@@ -26,12 +25,17 @@ import {
 	printAuthCommandHelp,
 	validateAuthCommandArgs,
 } from "./cli/auth-command.ts";
+import { runAuthLogin } from "./cli/auth-login.ts";
+import { runAuthLogout } from "./cli/auth-logout.ts";
+import { createProcessLoginTerminal } from "./cli/auth-terminal.ts";
 import { resolveCredentialForPrint } from "./cli/credential-print.ts";
 import { loadDoctor } from "./cli/doctor.lazy.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { loadMobileUiCommand } from "./cli/mobile-ui.lazy.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
+import { loadRemoteControlSettingCommand } from "./cli/remote-control-setting.lazy.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { COMMAND_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
@@ -55,8 +59,8 @@ import type { CreateAgentSessionOptions } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
+	getMissingSessionCwdOptions,
 	MissingSessionCwdError,
-	type SessionCwdIssue,
 } from "./core/session-cwd.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
 import { collectSettingsDiagnostics, deduplicateDiagnostics } from "./core/settings-diagnostics.ts";
@@ -82,6 +86,8 @@ import {
 	handlePackageCommand,
 } from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
+import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
@@ -146,9 +152,53 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
 	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
 }
 
+async function runAuthLoginCommand(args: string[]): Promise<number> {
+	const cwd = process.cwd();
+	const agentDir = getAgentDir();
+	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
+	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
+	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal: AbortSignal.timeout(15_000) });
+
+	const controller = new AbortController();
+	const interrupt = () => controller.abort();
+	process.on("SIGINT", interrupt);
+	try {
+		return await runAuthLogin(args, {
+			modelRuntime,
+			terminal: createProcessLoginTerminal(interrupt),
+			agentDir,
+			cwd,
+			getDeviceId: () => settingsManager.getOrCreateDeviceId(),
+			signal: controller.signal,
+		});
+	} finally {
+		process.off("SIGINT", interrupt);
+	}
+}
+
+async function runAuthLogoutCommand(args: string[]): Promise<number> {
+	const signal = AbortSignal.timeout(15_000);
+	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });
+	return runAuthLogout(args, {
+		modelRuntime,
+		terminal: { write: (line) => console.log(line), error: (line) => console.error(line) },
+		signal,
+	});
+}
+
 async function runAuthCommand(args: string[]): Promise<boolean> {
 	if (isAuthCommandHelp(args)) {
 		printAuthCommandHelp();
+		return true;
+	}
+	if (args[0] === "auth" && args[1] === "login") {
+		// main() already applied --offline.
+		process.exitCode = await runAuthLoginCommand(args.slice(2).filter((arg) => arg !== "--offline"));
+		return true;
+	}
+	if (args[0] === "auth" && args[1] === "logout") {
+		process.exitCode = await runAuthLogoutCommand(args.slice(2).filter((arg) => arg !== "--offline"));
 		return true;
 	}
 
@@ -573,16 +623,6 @@ function resolveCliPaths(cwd: string, paths: string[] | undefined): string[] | u
 	return paths?.map((value) => (isLocalPath(value) ? resolvePath(value, cwd) : value));
 }
 
-async function promptForMissingSessionCwd(
-	issue: SessionCwdIssue,
-	settingsManager: SettingsManager,
-): Promise<string | undefined> {
-	return showStartupSelector(settingsManager, formatMissingSessionCwdPrompt(issue), [
-		{ label: "Continue", value: issue.fallbackCwd },
-		{ label: "Cancel", value: undefined },
-	]);
-}
-
 export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 	/** Pi-Bolt: the extensions `pi-bolt compile` built into this executable (core/extensions/compiled.ts). */
@@ -659,13 +699,30 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(await runDoctor(args.slice(1), { cwd, agentDir, extensionFactories }));
 	}
 
+	if (args[0] === "mobile-ui") {
+		const { runMobileUiCommand } = await loadMobileUiCommand();
+		process.exit(await runMobileUiCommand(args.slice(1)));
+	}
+
 	if (args[0] === "mcp") {
 		const { runMcpCommand } = await loadMcpCommand();
 		process.exitCode = await runMcpCommand(args.slice(1), { cwd, agentDir });
 		return;
 	}
 
-	const parsed = parseArgs(args);
+	if (args[0] === "remote-control") {
+		const { runRemoteControlSettingCommand } = await loadRemoteControlSettingCommand();
+		process.exit(await runRemoteControlSettingCommand(args.slice(1), { agentDir, cwd }));
+	}
+
+	// `service run` is the background service itself (it needs the runtime factory below); the rest manage it.
+	const serviceHost = args[0] === "service" && args[1] === "run";
+	if (args[0] === "service" && !serviceHost) {
+		const { runServiceCommand } = await loadRemoteControl();
+		process.exit(await runServiceCommand(args.slice(1), { agentDir }));
+	}
+
+	const parsed = parseArgs(serviceHost ? args.slice(2) : args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -714,7 +771,8 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// The service runs headless as RPC does, whether or not it was started from a terminal.
+	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
 	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`.
 	// Re-exec with `pi` as argv[0] before the TUI (and its session) starts; the flag stays in args so the restored command
 	// re-enters Pi-integration mode. Outside Herdr there is nothing to report to, and no reason to change the name.
@@ -798,11 +856,23 @@ export async function main(args: string[], options?: MainOptions) {
 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
-			const selectedCwd = await promptForMissingSessionCwd(missingSessionCwdIssue, startupSettingsManager);
-			if (!selectedCwd) {
-				process.exit(0);
+			const sessionFile = missingSessionCwdIssue.sessionFile!;
+			const choice = await showStartupSelector(
+				startupSettingsManager,
+				formatMissingSessionCwdPrompt(missingSessionCwdIssue),
+				getMissingSessionCwdOptions(missingSessionCwdIssue),
+			);
+			switch (choice) {
+				case "continue":
+					sessionManager = SessionManager.open(sessionFile, sessionDir, cwd);
+					break;
+				// Fork like `--session <id>` from another project, so the choice sticks without rewriting history (#11060).
+				case "fork":
+					sessionManager = forkSessionOrExit(sessionFile, cwd, sessionDir);
+					break;
+				case undefined:
+					process.exit(0);
 			}
-			sessionManager = SessionManager.open(missingSessionCwdIssue.sessionFile!, sessionDir, selectedCwd);
 		} else {
 			console.error(chalk.red(new MissingSessionCwdError(missingSessionCwdIssue).message));
 			process.exit(1);
@@ -847,11 +917,12 @@ export async function main(args: string[], options?: MainOptions) {
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.
 	const acp = parsed.mode === "acp" ? await loadAcpMode() : undefined;
 	const mcp = parsed.mode === "mcp" ? await loadMcpMode() : undefined;
+	const service = serviceHost ? await loadRemoteControl() : undefined;
 	const runtimeExtensionFactories = acp ? [...extensionFactories, acp.acpExtension] : extensionFactories;
 	// Only the runtime this process starts with uses the startup check. ACP and MCP create every runtime later, on the
 	// client's request, and without a session_start event; the directory may have changed by then (a pull, a branch switch),
 	// so each of their runtimes checks again.
-	let startupRuntimePending = !acp && !mcp;
+	let startupRuntimePending = !acp && !mcp && !service;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -990,6 +1061,10 @@ export async function main(args: string[], options?: MainOptions) {
 	};
 	time("createRuntime");
 	if (acp) {
+		// ACP hands extensions a UI context whose `theme` is the shared live theme, and the terminal modes only
+		// set it later, after their own startup. Without this the first extension to draw in ACP throws
+		// "Theme not initialized" instead of rendering, which upstream pi-acp does not do.
+		initTheme(startupSettingsManager.getTheme());
 		// The editor chooses each session's directory, so ACP creates its runtimes itself, one per session.
 		await acp.runAcpMode({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode });
 		return;
@@ -997,6 +1072,11 @@ export async function main(args: string[], options?: MainOptions) {
 	if (mcp) {
 		// Each call names its session and directory, so MCP creates its runtimes itself, one per session.
 		await mcp.runMcpMode({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode, cwd });
+		return;
+	}
+	if (service) {
+		// Phones choose the sessions and their projects, so the service creates its runtimes itself.
+		await service.runServiceHost({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode });
 		return;
 	}
 	const runtime = await createAgentSessionRuntime(createRuntime, {
@@ -1109,6 +1189,7 @@ export async function main(args: string[], options?: MainOptions) {
 			// (Kitty keyboard protocol, device attributes, cell size) before restoring the terminal.
 			await new Promise((resolve) => setTimeout(resolve, 150));
 			interactiveMode.stop();
+			await runtime.dispose();
 			stopThemeWatcher();
 			printTimings();
 			if (process.stdout.writableLength > 0) {

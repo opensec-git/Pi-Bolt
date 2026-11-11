@@ -43,6 +43,7 @@ import type {
 	TextContent,
 	ToolResultMessage,
 	Usage,
+	UserMessage,
 } from "@earendil-works/pi-ai/compat";
 import {
 	clampThinkingLevel,
@@ -93,7 +94,7 @@ import {
 	type ExtensionErrorListener,
 	type ExtensionMode,
 	ExtensionRunner,
-	type ExtensionUIContext,
+	type ExtensionUIHost,
 	type InputSource,
 	type MessageEndEvent,
 	type MessageStartEvent,
@@ -117,8 +118,10 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { registerLiveSession, unregisterLiveSession } from "./live-sessions.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
+import type { ViewChannel } from "./mobile-ui/host.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
@@ -341,8 +344,10 @@ export interface AgentSessionConfig {
 }
 
 export interface ExtensionBindings {
-	uiContext?: ExtensionUIContext;
+	uiContext?: ExtensionUIHost;
 	mode?: ExtensionMode;
+	/** The clients of the mode that render views (the mobile UI kit, docs/mobile-ui.md); text only without. */
+	viewChannel?: ViewChannel;
 	commandContextActions?: ExtensionCommandContextActions;
 	abortHandler?: () => void;
 	shutdownHandler?: ShutdownHandler;
@@ -440,6 +445,22 @@ function getOverflowRecoveryStep(
 // AgentSession Class
 // ============================================================================
 
+/**
+ * Index of the model to cycle to, or undefined when there is nothing to switch to.
+ * When the current model is not in the list (currentIndex -1), forward picks the first
+ * entry and backward the last, so a one-entry list still selects its only model.
+ */
+function getNextCycleIndex(
+	currentIndex: number,
+	length: number,
+	direction: "forward" | "backward",
+): number | undefined {
+	if (length === 0) return undefined;
+	if (currentIndex === -1) return direction === "forward" ? 0 : length - 1;
+	if (length === 1) return undefined;
+	return direction === "forward" ? (currentIndex + 1) % length : (currentIndex - 1 + length) % length;
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -451,6 +472,7 @@ export class AgentSession {
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
+	private _promptPreflightCount = 0;
 	private _agentRunAbortRequested = false;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
@@ -459,6 +481,8 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
+	/** Queued user messages whose images are normalized when they are delivered. */
+	private _queuedMessagesWithImages = new WeakSet<AgentMessage>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -525,7 +549,8 @@ export class AgentSession {
 	private _excludedTools?: (name: string) => boolean;
 	private _baseToolsOverride?: Record<string, AgentTool>;
 	private _sessionStartEvent: SessionStartEvent;
-	private _extensionUIContext?: ExtensionUIContext;
+	private _extensionUIContext?: ExtensionUIHost;
+	private _extensionViewChannel?: ViewChannel;
 	private _extensionMode: ExtensionMode = "print";
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
@@ -593,6 +618,7 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 		if (this._usesDefaultTools) this._restoreToolsFromTranscript(this._defaultToolModifiers);
+		registerLiveSession(this);
 	}
 
 	get modelRuntime(): ModelRuntime {
@@ -691,22 +717,47 @@ export class AgentSession {
 		return model?.provider === message.provider && model.id === message.model ? model : undefined;
 	}
 
-	/**
-	 * Record the selection on the current branch when the branch implies another one, so a resume
-	 * restores it. Tree navigation can leave the latest `model_change` on another branch; responses
-	 * cannot record a virtual selection because they name physical models. Responses do record a
-	 * physical selection unless the branch holds a virtual one; checking a physical selection against
-	 * responses would record it on every prompt while `prepareRequest` redirects to another model.
-	 */
+	/** Record the live model and thinking level on the current branch, so a resume restores them. */
 	private _recordSelection(): void {
+		const branch = this.sessionManager.getBranch();
+		this._recordModelSelection(branch);
+		this._recordThinkingLevel(branch);
+	}
+
+	/**
+	 * Record the model on the current branch when the branch implies another one. Tree navigation
+	 * can leave the latest `model_change` on another branch; responses cannot record a virtual
+	 * selection because they name physical models. Responses do record a physical selection unless
+	 * the branch holds a virtual one; checking a physical selection against responses would record
+	 * it on every prompt while `prepareRequest` redirects to another model.
+	 */
+	private _recordModelSelection(branch: SessionEntry[]): void {
 		const model = this.model;
 		if (!model) return;
 		const getModel = (provider: string, modelId: string) => this._modelRuntime.getModel(provider, modelId);
-		const recorded = getBranchSelection(this.sessionManager.getBranch(), getModel);
+		const recorded = getBranchSelection(branch, getModel);
 		if (!recorded || (recorded.provider === model.provider && recorded.modelId === model.id)) return;
 		const recordedModel = getModel(recorded.provider, recorded.modelId);
 		if (!isVirtualModel(model) && !(recordedModel && isVirtualModel(recordedModel))) return;
 		this.sessionManager.appendModelChange(model.provider, model.id);
+	}
+
+	/**
+	 * Record the thinking level on the current branch when the branch implies another one (#11451).
+	 * Tree navigation can leave the latest `thinking_level_change` on another branch. The recorded
+	 * level is compared after clamping to the current model, so a level clamped on resume (e.g.
+	 * `xhigh` running as `high`) is not recorded over the requested one.
+	 */
+	private _recordThinkingLevel(branch: SessionEntry[]): void {
+		const recorded = branch.findLast((entry) => entry.type === "thinking_level_change");
+		if (!recorded) return;
+		const recordedLevel = recorded.thinkingLevel as ThinkingLevel;
+		const availableLevels = this.getAvailableThinkingLevels();
+		const effective = availableLevels.includes(recordedLevel)
+			? recordedLevel
+			: this._clampThinkingLevel(recordedLevel, availableLevels);
+		if (effective === this.thinkingLevel) return;
+		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel);
 	}
 
 	/** The model whose limits apply to the conversation. */
@@ -1254,29 +1305,36 @@ export class AgentSession {
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempts = 0;
 			const messageText = contentText(event.message.content, "");
-			if (messageText) {
-				// Check steering queue first
-				const steeringIndex = this._steeringMessages.indexOf(messageText);
-				if (steeringIndex !== -1) {
-					this._steeringMessages.splice(steeringIndex, 1);
+			// Check steering queue first
+			const steeringIndex = this._steeringMessages.indexOf(messageText);
+			if (steeringIndex !== -1) {
+				this._steeringMessages.splice(steeringIndex, 1);
+				this._emitQueueUpdate();
+			} else {
+				// Check follow-up queue
+				const followUpIndex = this._followUpMessages.indexOf(messageText);
+				if (followUpIndex !== -1) {
+					this._followUpMessages.splice(followUpIndex, 1);
 					this._emitQueueUpdate();
-				} else {
-					// Check follow-up queue
-					const followUpIndex = this._followUpMessages.indexOf(messageText);
-					if (followUpIndex !== -1) {
-						this._followUpMessages.splice(followUpIndex, 1);
-						this._emitQueueUpdate();
-					}
 				}
 			}
+			// Normalize queued images at delivery, before events and persistence see the message,
+			// so they get the same resize as idle prompts with the current model's limits (#11738).
+			if (this._queuedMessagesWithImages.has(event.message)) {
+				this._queuedMessagesWithImages.delete(event.message);
+				return this._normalizeQueuedMessageImages(event.message).then(() => this._dispatchAgentEvent(event));
+			}
 		}
+		return this._dispatchAgentEvent(event);
+	};
 
-		// Emit to extensions first, then notify public listeners.
+	/** Emits an agent event to extensions first, then notifies public listeners: synchronously when no extension handles it. */
+	private _dispatchAgentEvent(event: AgentEvent): Promise<void> | undefined {
 		const extensionDispatch = this._emitExtensionEvent(event);
 		if (extensionDispatch) return extensionDispatch.then(() => this._finishAgentEvent(event));
 		this._finishAgentEvent(event);
 		return undefined;
-	};
+	}
 
 	/** The part of `_handleAgentEvent` after the extension handlers: public listeners, persistence, turn bookkeeping. */
 	private _finishAgentEvent(event: AgentEvent): void {
@@ -1585,6 +1643,7 @@ export class AgentSession {
 			this._cacheWarmer.cancel();
 		}
 		cleanupSessionResources(this.sessionId);
+		unregisterLiveSession(this);
 	}
 
 	// =========================================================================
@@ -1682,6 +1741,11 @@ export class AgentSession {
 
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
+	}
+
+	/** Where the tool `name` comes from: Pi's own tools have the source "builtin". */
+	getToolSourceInfo(name: string): SourceInfo | undefined {
+		return this._toolDefinitions.get(name)?.sourceInfo;
 	}
 
 	/**
@@ -2267,11 +2331,31 @@ export class AgentSession {
 			}
 		}
 
-		if (this._compactionAbortController !== undefined) {
+		if (this._compactionAbortController !== undefined || this._branchSummaryAbortController !== undefined) {
 			throw new Error(
 				"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
 			);
 		}
+
+		// Reserve the context through async input hooks and auth checks so tree navigation cannot
+		// start meanwhile (#9154). _startRun marks the run active synchronously, so there is no gap.
+		this._promptPreflightCount++;
+		let trigger: BeforeAgentStartTrigger | undefined;
+		try {
+			trigger = await this._preparePrompt(text, options);
+		} finally {
+			this._promptPreflightCount--;
+		}
+		if (trigger) await this._startRun(trigger, () => preflightResult?.("started"));
+	}
+
+	/**
+	 * Run input hooks, expand templates, queue while streaming, and validate model and auth.
+	 * Returns the run trigger, or undefined when the prompt was handled or queued.
+	 */
+	private async _preparePrompt(text: string, options?: PromptOptions): Promise<BeforeAgentStartTrigger | undefined> {
+		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+		const preflightResult = options?.preflightResult;
 
 		// Emit input event for extension interception (before skill/template expansion)
 		const processedInput = await this._runInputHandlers(
@@ -2282,7 +2366,7 @@ export class AgentSession {
 		);
 		if (!processedInput) {
 			preflightResult?.("handled");
-			return;
+			return undefined;
 		}
 		const { text: currentText, images: currentImages } = processedInput;
 
@@ -2290,7 +2374,8 @@ export class AgentSession {
 		let expandedText = currentText;
 		if (expandPromptTemplates) {
 			expandedText = this._expandSkillCommand(expandedText);
-			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+			// (Only text starting with "/" can name a template: other text does not load them.)
+			if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -2306,7 +2391,7 @@ export class AgentSession {
 				await this._queueSteer(expandedText, currentImages);
 			}
 			preflightResult?.("queued");
-			return;
+			return undefined;
 		}
 
 		// Validate model
@@ -2329,9 +2414,7 @@ export class AgentSession {
 			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 		}
 
-		await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () =>
-			preflightResult?.("started"),
-		);
+		return { messageType: "user", prompt: expandedText, images: currentImages };
 	}
 
 	/**
@@ -2413,7 +2496,7 @@ export class AgentSession {
 		if (!processedInput) return "handled";
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
 		if (behavior === "steer") {
 			await this._queueSteer(expandedText, processedInput.images);
@@ -2466,11 +2549,9 @@ export class AgentSession {
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.steer({
-			role: "user",
-			content,
-			timestamp: Date.now(),
-		});
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (images?.length) this._queuedMessagesWithImages.add(message);
+		this.agent.steer(message);
 	}
 
 	/**
@@ -2483,7 +2564,24 @@ export class AgentSession {
 		if (images) {
 			content.push(...images);
 		}
-		this.agent.followUp({ role: "user", content, timestamp: Date.now() });
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		if (images?.length) this._queuedMessagesWithImages.add(message);
+		this.agent.followUp(message);
+	}
+
+	/** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
+	private async _normalizeQueuedMessageImages(message: UserMessage): Promise<void> {
+		if (typeof message.content === "string") return;
+		const [first, ...rest] = message.content;
+		if (first?.type !== "text") return;
+		const images = rest.filter((block): block is ImageContent => block.type === "image");
+		const normalized = await this._normalizePromptImages(images);
+		const text = normalized.hints.length > 0 ? `${first.text}\n\n${normalized.hints.join("\n")}` : first.text;
+		message.content = [
+			{ type: "text", text },
+			...rest.filter((block) => block.type !== "image"),
+			...normalized.images,
+		];
 	}
 
 	/**
@@ -2760,14 +2858,10 @@ export class AgentSession {
 		const scopedModels = this._scopedModels.filter((scoped) =>
 			availableIds.has(`${scoped.model.provider}\0${scoped.model.id}`),
 		);
-		if (scopedModels.length <= 1) return undefined;
-
 		const currentModel = this.model;
-		let currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = scopedModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
+		const currentIndex = scopedModels.findIndex((sm) => modelsAreEqual(sm.model, currentModel));
+		const nextIndex = getNextCycleIndex(currentIndex, scopedModels.length, direction);
+		if (nextIndex === undefined) return undefined;
 		const next = scopedModels[nextIndex];
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(next.model, next.thinkingLevel);
 
@@ -2796,14 +2890,10 @@ export class AgentSession {
 		options: ModelMutationOptions,
 	): Promise<ModelCycleResult | undefined> {
 		const availableModels = this._modelRuntime.getAvailableSnapshot();
-		if (availableModels.length <= 1) return undefined;
-
 		const currentModel = this.model;
-		let currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
-
-		if (currentIndex === -1) currentIndex = 0;
-		const len = availableModels.length;
-		const nextIndex = direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
+		const currentIndex = availableModels.findIndex((m) => modelsAreEqual(m, currentModel));
+		const nextIndex = getNextCycleIndex(currentIndex, availableModels.length, direction);
+		if (nextIndex === undefined) return undefined;
 		const nextModel = availableModels[nextIndex];
 
 		const thinkingLevel = this._getThinkingLevelForModelSwitch(nextModel);
@@ -3553,6 +3643,9 @@ export class AgentSession {
 		if (bindings.mode !== undefined) {
 			this._extensionMode = bindings.mode;
 		}
+		if (bindings.viewChannel !== undefined) {
+			this._extensionViewChannel = bindings.viewChannel;
+		}
 		if (bindings.commandContextActions !== undefined) {
 			this._extensionCommandContextActions = bindings.commandContextActions;
 		}
@@ -3625,7 +3718,7 @@ export class AgentSession {
 	}
 
 	private _applyExtensionBindings(runner: ExtensionRunner): void {
-		runner.setUIContext(this._extensionUIContext, this._extensionMode);
+		runner.setUIContext(this._extensionUIContext, this._extensionMode, this._extensionViewChannel);
 		runner.bindCommandContext(this._extensionCommandContextActions);
 
 		this._extensionErrorUnsubscriber?.();
@@ -3957,6 +4050,13 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
+		if (this.isStreaming) {
+			throw new Error("Wait for the current response to finish before reloading.");
+		}
+		if (this.isCompacting) {
+			throw new Error("Wait for compaction to finish before reloading.");
+		}
+
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
@@ -4268,7 +4368,7 @@ export class AgentSession {
 		targetId: string,
 		options: { summarize?: boolean; customInstructions?: string; replaceInstructions?: boolean; label?: string } = {},
 	): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean; summaryEntry?: BranchSummaryEntry }> {
-		if (this.isStreaming) {
+		if (this.isStreaming || this._promptPreflightCount > 0) {
 			throw new Error("Wait for the current response to finish before navigating the session tree.");
 		}
 		if (this.isCompacting) {
@@ -4318,7 +4418,8 @@ export class AgentSession {
 		};
 
 		// Set up abort controller for summarization
-		this._branchSummaryAbortController = new AbortController();
+		const abortController = new AbortController();
+		this._branchSummaryAbortController = abortController;
 
 		try {
 			let extensionSummary: { summary: string; details?: unknown; usage?: Usage } | undefined;
@@ -4329,7 +4430,7 @@ export class AgentSession {
 				const result = (await this._extensionRunner.emit({
 					type: "session_before_tree",
 					preparation,
-					signal: this._branchSummaryAbortController.signal,
+					signal: abortController.signal,
 				})) as SessionBeforeTreeResult | undefined;
 
 				if (result?.cancel) {
@@ -4358,7 +4459,7 @@ export class AgentSession {
 			let summaryDetails: unknown;
 			let summaryUsage: Usage | undefined;
 			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
-				const signal = this._branchSummaryAbortController.signal;
+				const signal = abortController.signal;
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
 				const result = await generateBranchSummary(entriesToSummarize, {
 					...(await this._getSummarizationRequestAuth(this.model!, signal)),
@@ -4440,7 +4541,8 @@ export class AgentSession {
 			this._refreshFinalizedContext();
 			this._restoreToolsFromTranscript();
 
-			// Emit session_tree event
+			// The selected context is installed; session_tree handlers may now prompt or navigate again.
+			this._branchSummaryAbortController = undefined;
 			await this._extensionRunner.emit({
 				type: "session_tree",
 				newLeafId: this.sessionManager.getLeafId(),
@@ -4453,7 +4555,10 @@ export class AgentSession {
 
 			return { editorText, cancelled: false, summaryEntry };
 		} finally {
-			this._branchSummaryAbortController = undefined;
+			// A navigation started from session_tree owns the controller now; do not clear it.
+			if (this._branchSummaryAbortController === abortController) {
+				this._branchSummaryAbortController = undefined;
+			}
 			this._resolveIdleWaitIfIdle();
 		}
 	}

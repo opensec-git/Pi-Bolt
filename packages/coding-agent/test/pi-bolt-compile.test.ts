@@ -18,6 +18,7 @@ import { loadExtensions } from "../src/core/extensions/loader.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
 	buildFailureReason,
+	buildFilesToCopy,
 	bundleErrorReason,
 	bundlePieces,
 	bundlerErrorAdvice,
@@ -266,7 +267,7 @@ describe("pi-bolt compile --status and doctor say what is not used as compiled i
 	test("a build with none while compile.json records some, a changed one, a removed one", () => {
 		expect(compiledStateLines([], undefined)).toEqual([]);
 		expect(compiledStateLines([], { extensions: ["hello", "word-tools"] })).toEqual([
-			"compile.json records extensions compiled in (hello, word-tools), but this build has none: the installer, or a switch to or from the JIT build, replaced the build they were compiled into. Run `pi-bolt compile` to compile them in again.",
+			"compile.json records extensions compiled in (hello, word-tools), but this build has none: an update, the installer, or a switch to or from the JIT build replaced the build they were compiled into, and they load from their files. Run `pi-bolt compile` to compile them in again.",
 		]);
 		const kept = join(dir, "kept.ts");
 		const changed = join(dir, "changed.ts");
@@ -434,8 +435,8 @@ describe("pi-bolt compile leaves out what compile.json records as excluded", () 
 		return { only, exclude, recorded };
 	};
 
-	test("a compile that names no extensions takes the recorded exclusions, as an update does (#108)", () => {
-		for (const options of [{}, { noPackages: true }, { afterUpdate: true }]) {
+	test("a compile that names no extensions takes the recorded exclusions (#108)", () => {
+		for (const options of [{}, { noPackages: true }, { again: true }]) {
 			expect(chosen(options)).toEqual({ exclude: ["pi-web-access"], recorded: ["pi-web-access"] });
 		}
 	});
@@ -475,10 +476,10 @@ describe("pi-bolt compile leaves out what compile.json records as excluded", () 
 		expect(selection.exclude).toEqual(["word-count"]);
 	});
 
-	test("an update's --only, compile.json's, leaves out a name no longer there; one given on the command line is an error", () => {
+	test("compile.json's --only, taken by a compile without options, leaves out a name no longer there; one given on the command line is an error", () => {
 		const update = chooseExtensions(
 			found,
-			{ afterUpdate: true, only: ["word-count", "gone"] },
+			{ again: true, only: ["word-count", "gone"] },
 			{ only: ["word-count", "gone"] },
 		);
 		expect(update).toMatchObject({ only: ["word-count"], staleOnly: ["gone"], unknown: [] });
@@ -812,7 +813,7 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 			"That function is big's.",
 			"Leave it out.",
 		]);
-		expect(buildFailureReason(log)).toContain("compile.json keeps for `pi-bolt update`");
+		expect(buildFailureReason(log)).toContain("compile.json keeps for later compiles");
 	});
 });
 
@@ -1220,5 +1221,21 @@ describe("pi-bolt compile and Pi's other names for its modules (#174)", () => {
 			expect(code).toContain(`"${name}"`);
 		}
 		expect(code).not.toMatch(/@mariozechner|@sinclair|"@earendil-works\/pi-ai"/);
+	});
+});
+
+describe("buildFilesToCopy", () => {
+	test("takes the build's files but its executables, and never a skills folder an earlier build left", () => {
+		const names = ["pi", "pi-bin", "pi-bin.hot", "pi-spawn", "docs", "theme", "skills", "native", "pi-bolt.txt"];
+		expect(buildFilesToCopy(names, true)).toEqual(["pi", "pi-spawn", "docs", "theme", "native", "pi-bolt.txt"]);
+		expect(buildFilesToCopy(names, false)).toEqual([
+			"pi-bin",
+			"pi-bin.hot",
+			"pi-spawn",
+			"docs",
+			"theme",
+			"native",
+			"pi-bolt.txt",
+		]);
 	});
 });

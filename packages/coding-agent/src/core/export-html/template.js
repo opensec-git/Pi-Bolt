@@ -1752,7 +1752,11 @@
           link(token) {
             const href = sanitizeMarkdownUrl(token.href);
             if (href === null) {
-              return this.parser.parseInline(token.tokens);
+              // Not a link (a local file, another scheme): its text, and where it goes as text, as the terminal shows it.
+              const label = this.parser.parseInline(token.tokens);
+              return token.text === token.href
+                ? label
+                : label + ' <span class="markdown-link-url">(' + escapeHtml(token.href) + ')</span>';
             }
             let out = '<a href="' + escapeHtml(href) + '"';
             if (token.title) {

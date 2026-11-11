@@ -107,7 +107,13 @@ each as it is, and that `extensions.txt` pins at least one extension and has no 
 gives it, for that release's version (releases before 0.8.0 did not sign it, so their runtimes are not reused). Runtimes
 uploaded to the draft are hashed by `release`'s first job and checked again by each build job before it uses one.
 
-When it changed, the four runtimes are built before tagging, by the `runtime` workflow, from `pi-bolt` once the change is
+The musl runtime (`pi-bolt-runtime-linux-x64-musl.tar.gz`) has a stamp of its own, `scripts/runtime-stamp.sh musl`, kept in
+its archive: the engine's stamp with `scripts/build-runtime-musl.sh`. `release` takes it from the draft when one is attached
+there, else from the previous release while its archive has the same stamp, and stops otherwise. A change to the musl build
+alone then needs only that runtime: `gh workflow run runtime.yml -R opensec-git/Pi-Bolt -f tag=bolt-vX.Y.Z -f
+platforms=linux-x64-musl`. The first release with musl builds needs it too.
+
+When it changed, the five runtimes are built before tagging, by the `runtime` workflow, from `pi-bolt` once the change is
 merged:
 
 ```bash

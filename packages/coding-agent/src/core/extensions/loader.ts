@@ -8,16 +8,23 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Provider } from "@earendil-works/pi-ai";
+import { mcpNamespace } from "@earendil-works/pi-mcp";
 import type { KeyId } from "@earendil-works/pi-tui";
 import type { createJiti } from "jiti";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode } from "../../config.ts";
 import { isHerdrPiIntegration } from "../../extensions/herdr/integration-file.ts";
 import { PIBOLT } from "../../pi-bolt.ts";
-import { pathsEqual, resolvePath } from "../../utils/paths.ts";
+import { canonicalizePath, pathsEqual, resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
-import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
+import { type McpServerConfig, McpServerRegistry, validateMcpServerConfig } from "../mcp-servers.ts";
+import {
+	MOBILE_VIEW_ICONS,
+	MOBILE_VIEW_ID_PATTERN,
+	type MobilePageDefinition,
+	type MobileTileDefinition,
+} from "../mobile-ui/types.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
@@ -25,15 +32,19 @@ import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-model
 import { compiledExtensionFor, firstLineOf } from "./compiled.ts";
 import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
+import { loadJitiBunLoader } from "./jiti-bun-loader.lazy.ts";
 import type {
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionVirtualModel,
 	LoadExtensionsResult,
+	MarkdownMessageType,
 	MarkdownTransformer,
+	MarkdownTransformerOptions,
 	MessageRenderer,
 	ProviderConfig,
 	RegisteredCommand,
@@ -52,9 +63,14 @@ const usesEmbeddedModules = isBunBinary || isNodeSeaBinary || isBundledNode;
 let createJitiPromise: Promise<typeof createJiti> | undefined;
 
 function getCreateJiti(): Promise<typeof createJiti> {
-	createJitiPromise ??= (usesEmbeddedModules ? import("./jiti-static-loader.ts") : import("./jiti-loader.ts")).then(
-		(module) => module.createJiti,
-	);
+	// (A compiled Bun binary evaluates jiti's embedded Babel only when jiti has a file to transform: jiti-bun-loader.ts.)
+	createJitiPromise ??= (
+		isBunBinary
+			? loadJitiBunLoader()
+			: usesEmbeddedModules
+				? import("./jiti-static-loader.ts")
+				: import("./jiti-loader.ts")
+	).then((module) => module.createJiti);
 	return createJitiPromise;
 }
 
@@ -275,6 +291,8 @@ export function createExtensionRuntime(): ExtensionRuntime {
  * Registration methods write to the extension object.
  * Action methods delegate to the shared runtime.
  */
+const DEFAULT_MARKDOWN_MESSAGE_TYPES: readonly MarkdownMessageType[] = ["user", "assistant", "assistant-thinking"];
+
 function createExtensionAPI(
 	extension: Extension,
 	runtime: ExtensionRuntime,
@@ -351,6 +369,16 @@ function createExtensionAPI(
 			});
 		},
 
+		registerPage(key: string, page: MobilePageDefinition<ExtensionContext>): void {
+			assertActive();
+			registerPage(extension, key, "page", page);
+		},
+
+		registerTile(key: string, tile: MobileTileDefinition<ExtensionContext>): void {
+			assertActive();
+			registerPage(extension, key, "tile", tile);
+		},
+
 		registerShortcut(
 			shortcut: KeyId,
 			options: {
@@ -387,9 +415,12 @@ function createExtensionAPI(
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 
-		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
+		registerMarkdownTransformer(transformer: MarkdownTransformer, options?: MarkdownTransformerOptions): void {
 			assertActive();
-			extension.markdownTransformer = transformer;
+			extension.markdownTransformer = {
+				transformer,
+				messageTypes: new Set(options?.messageTypes ?? DEFAULT_MARKDOWN_MESSAGE_TYPES),
+			};
 		},
 
 		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
@@ -627,7 +658,7 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		...extensionTransformCache(),
 	});
 
-	const module = await jiti.import(extensionPath, { default: true });
+	const module = await jiti.import(canonicalizePath(extensionPath), { default: true });
 	const factory = module as ExtensionFactory;
 	if (typeof factory !== "function") {
 		return undefined;
@@ -636,6 +667,48 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		extensionCache.set(extensionPath, factory);
 	}
 	return factory;
+}
+
+/** Checks and stores a `registerPage` / `registerTile`. */
+function registerPage(
+	extension: Extension,
+	key: string,
+	kind: "page" | "tile",
+	definition: MobileTileDefinition<ExtensionContext>,
+): void {
+	const what = kind === "page" ? "Page" : "Tile";
+	if (typeof key !== "string" || !MOBILE_VIEW_ID_PATTERN.test(key)) {
+		throw new Error(
+			`${what} registered by extension "${extension.path}" needs a key of 1 to 64 of A-Z a-z 0-9 _ . : -`,
+		);
+	}
+	if (typeof definition?.title !== "string" || definition.title.trim() === "" || definition.title.length > 200) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}" needs a title of at most 200 characters`,
+		);
+	}
+	if (typeof definition.open !== "function") {
+		throw new Error(`${what} "${key}" registered by extension "${extension.path}" must define open()`);
+	}
+	if (definition.icon !== undefined && !(MOBILE_VIEW_ICONS as readonly string[]).includes(definition.icon)) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}": unknown icon "${definition.icon}"`,
+		);
+	}
+	if (
+		definition.description !== undefined &&
+		(typeof definition.description !== "string" || definition.description.length > 200)
+	) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}": description: at most 200 characters`,
+		);
+	}
+	const page = (definition as { page?: unknown }).page;
+	if (kind === "tile" && page !== undefined && (typeof page !== "string" || !MOBILE_VIEW_ID_PATTERN.test(page))) {
+		throw new Error(`Tile "${key}" registered by extension "${extension.path}": page: expected a page key`);
+	}
+	extension.pages ??= new Map();
+	extension.pages.set(key, { key, kind, definition, sourceInfo: extension.sourceInfo });
 }
 
 /**

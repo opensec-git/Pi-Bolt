@@ -1,0 +1,249 @@
+name: android
+
+# The Android app (android/): the on-device engine pack (android/engine, built and run in Docker on an arm64 runner), then
+# protocol and app unit tests, lint, debug and release builds with the pack inside. A pull request uploads the debug
+# APK as an artifact. An `android-vX.Y.Z` tag on a pi-bolt commit builds the unsigned release APK, signs it with apksigner
+# and the keystore from the ANDROID_KEYSTORE_B64 secret (environment `release`), checks the signature and publishes it
+# as a GitHub release of its own, then points pi-bolt.opensec.in/android at it (android.json on gh-pages). That release is
+# never marked latest, so
+# the Pi-Bolt installers (which read the latest release) and its release-files.txt check never see it. GitHub-hosted
+# runners only.
+on:
+  push:
+    branches: [pi-bolt]
+    tags: ["android-v*"]
+    paths:
+      - "android/**"
+      - "extensions.txt"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "extensions.txt"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The GitHub OAuth App client id for device-flow sign-in (android/README.md, "GitHub"): a repository variable, not a
+# secret (client ids are public). Empty or unset builds an app that offers only personal access tokens.
+env:
+  PIBOLT_GITHUB_CLIENT_ID: ${{ vars.PIBOLT_GITHUB_CLIENT_ID }}
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  pack:
+    name: Engine pack (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    # glibc, curl and git, CPython from source; verify-pack.sh installs npm and pip packages over HTTPS.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: android/engine/.work/dl
+          key: engine-dl-${{ hashFiles('android/engine/versions.env', 'android/engine/userland/debs.lock', 'extensions.txt') }}
+          restore-keys: engine-dl-
+      - name: Build the pack
+        run: engine/build-pack.sh
+      - name: Run the pack the way the app does (Alpine container, real prefix; node, npm, python3, pip)
+        run: engine/scripts/verify-pack.sh
+      - name: Corresponding source of the GPL/LGPL parts
+        if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
+        run: engine/scripts/source-bundle.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engine-pack
+          path: |
+            android/engine/out/jniLibs
+            android/engine/out/assets
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
+        with:
+          name: engine-sources
+          path: android/engine/out/pi-bolt-android-engine-sources.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    name: Test, lint and build
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-pack
+          path: android/engine/out
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
+      - name: Tests, lint, debug build
+        run: ./gradlew :protocol:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - name: Release build (unsigned)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: ./gradlew :app:assembleRelease
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: pi-bolt-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/
+            android/protocol/build/reports/
+          retention-days: 7
+
+  release:
+    name: Signed release APK
+    needs: [pack, build]
+    if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The environment holds the signing secrets and can require approval; only this job can read them.
+    environment: release
+    permissions:
+      contents: write
+      # android.json and android.html go to gh-pages in one commit; a Pages build is requested if the site does not update.
+      pages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The tag is on pi-bolt
+        run: |
+          git fetch --no-tags origin +refs/heads/pi-bolt:refs/remotes/origin/pi-bolt
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/pi-bolt || {
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on pi-bolt; only commits on pi-bolt are released"
+            exit 1
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-pack
+          path: android/engine/out
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: engine-sources
+          path: ${{ runner.temp }}/engine-sources
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
+      # Gradle and its plugins never see the signing secrets: it builds the unsigned APK, and apksigner signs it in
+      # the next step.
+      - name: Build the unsigned release
+        env:
+          PIBOLT_APP_VERSION: ${{ github.ref_name }}
+        run: ./gradlew :app:assembleRelease
+      - name: Sign the release
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          [ -n "$KEYSTORE_B64" ] || { echo "::error::the ANDROID_KEYSTORE_B64 secret is not set"; exit 1; }
+          unsigned=app/build/outputs/apk/release/app-release-unsigned.apk
+          [ -f "$unsigned" ] || { echo "::error::no unsigned release APK"; ls app/build/outputs/apk/release; exit 1; }
+          tools="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          keystore="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          (umask 077 && printenv KEYSTORE_B64 | base64 -d > "$keystore")
+          "$tools/zipalign" -P 16 -f 4 "$unsigned" "$RUNNER_TEMP/aligned.apk"
+          "$tools/apksigner" sign --ks "$keystore" --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" --key-pass env:ANDROID_KEY_PASSWORD \
+            --out "$RUNNER_TEMP/signed.apk" "$RUNNER_TEMP/aligned.apk"
+      - name: Check the signature
+        run: |
+          apk="$RUNNER_TEMP/signed.apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)/apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          version="${GITHUB_REF_NAME#android-v}"
+          cp "$apk" "$RUNNER_TEMP/pi-bolt-android-$version.apk"
+          (cd "$RUNNER_TEMP" && sha256sum "pi-bolt-android-$version.apk" > "pi-bolt-android-$version.apk.sha256")
+          "$apksigner" verify --print-certs "$apk" | grep -i "SHA-256 digest" > "$RUNNER_TEMP/signing-cert.txt"
+      - name: Publish the app release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#android-v}"
+          {
+            echo "Pi-Bolt Android app $version: Pi-Bolt running on the phone, and remote control for Pi-Bolt (/remote-control)."
+            echo
+            echo "pi-bolt-android-engine-sources.tar: the corresponding source of the GPL/LGPL parts of the on-device"
+            echo "engine (glibc with Termux's Android patches, bash, busybox, git) and the scripts that build it."
+            echo
+            echo "Signing certificate:"
+            echo '```'
+            cat "$RUNNER_TEMP/signing-cert.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "Pi-Bolt Android $version" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$RUNNER_TEMP/pi-bolt-android-$version.apk" "$RUNNER_TEMP/pi-bolt-android-$version.apk.sha256" \
+            "$RUNNER_TEMP/engine-sources/pi-bolt-android-engine-sources.tar"
+      # pi-bolt.opensec.in/android and the home page's Android tab read android.json on gh-pages to offer the newest APK.
+      - name: Point the site's Android download at this release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/publish-android-download.sh "${GITHUB_REF_NAME#android-v}"

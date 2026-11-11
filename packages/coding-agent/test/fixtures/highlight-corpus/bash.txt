@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build and test everything
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="$ROOT/bin:$PATH"
+
+log() {
+  printf '%s [%s] %s\n' "$(date +%T)" "$1" "${*:2}" >&2
+}
+
+build_one() {
+  local dir=$1 target=${2:-release}
+  if [[ ! -d "$dir" ]]; then
+    log error "no such directory: $dir"
+    return 1
+  fi
+  (cd "$dir" && make "$target" -j"$(nproc)") || return $?
+}
+
+for dir in "$ROOT"/packages/*/; do
+  case "$(basename "$dir")" in
+    docs|examples) continue ;;
+    *) build_one "$dir" ;;
+  esac
+done
+
+cat <<EOF2 > "$ROOT/out/summary.txt"
+Built at $(date)
+Commit: $(git rev-parse --short HEAD)
+EOF2
+
+while read -r line; do
+  echo "${line//foo/bar}" | sed -e 's/a/b/g' | awk '{ print $1 }'
+done < input.txt
+
+count=$(( count + 1 ))
+if (( count > 10 )); then echo "many"; fi
+arr=(one "two three" 'four')
+echo "${#arr[@]} items: ${arr[*]}"
+trap 'rm -rf "$tmp"' EXIT
+tmp=$(mktemp -d)
+test -f "$tmp/x" && echo yes || echo no
+function cleanup {
+  rm -f /tmp/lock
+}
+exit 0

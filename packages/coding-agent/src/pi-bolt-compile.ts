@@ -10,12 +10,12 @@
  *
  * The new executable takes the place of this one, in the same folder; the one it replaces is kept beside it as
  * <folder>.previous (`pi-bolt update --rollback` puts it back). <install>/compile.json keeps what was asked for (and a raised
- * limit on the size of a function), and `pi-bolt update` compiles the same extensions into the release it installs.
+ * limit on the size of a function): `pi-bolt compile` without options compiles the same again. An update installs the
+ * release's build, without extensions compiled in: they load from their files until `pi-bolt compile` compiles them in.
  *
  * Each extension compiled in stands in for its installed copy while that is unchanged (core/extensions/compiled.ts).
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, verify } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
@@ -30,9 +30,8 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { totalmem } from "node:os";
+import { constants, totalmem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import {
 	type CompiledExtensionSource,
@@ -51,16 +50,19 @@ import {
 	piBoltInstallDir,
 	piBoltInstallMethod,
 	piBoltPackageManager,
+	piBoltReleasePlatform,
 } from "./pi-bolt.ts";
+import { downloadWithRetry, megabytes } from "./pi-bolt-download.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
-/** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
+/** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next compile without options. */
 export interface CompileSelection {
 	only?: string[];
 	exclude?: string[];
 	noPackages?: boolean;
 	/**
 	 * The compiler's limit on the bytecode of one function, when a compile raised it (BUN_JSC_maximumAOTCandidateBytecodeSize):
-	 * the next compile, and the update's, use it too.
+	 * the next compile uses it too.
 	 */
 	maximumBytecodeSize?: number;
 }
@@ -83,8 +85,8 @@ interface CompileOptions extends CompileSelection {
 	runtime?: string;
 	/** Build into this folder and install nothing. */
 	out?: string;
-	/** The update's run: the saved selection; the build it replaces is not kept (the update kept the one before it). */
-	afterUpdate?: boolean;
+	/** No selection given: compile.json's (its --only, exclusions and --no-packages), with --only's names gone since left out. */
+	again?: boolean;
 }
 
 interface Kit {
@@ -255,7 +257,9 @@ const USAGE = `Usage: pi-bolt compile [options]
 
 Compile the extensions installed on this machine into Pi-Bolt: they then run as machine code, like Pi itself, and cost
 nothing to load. Each one compiled in is used while its installed copy is unchanged; a changed one is loaded from its files
-again until it is compiled in again. \`pi-bolt update\` compiles the same extensions into the release it installs.
+again until it is compiled in again. \`pi-bolt update\` installs the release's build, without them: they load from their
+files until \`pi-bolt compile\` compiles them in again. Without options, it compiles what compile.json records: the last
+compile's --only, exclusions and --no-packages.
 
 The first compile downloads this release's runtime and compile kit (37-52 MB) and keeps them, with the release's signed
 checksums, in the installation's cache: later compiles of this version need no network. A project's own extensions
@@ -264,10 +268,11 @@ checksums, in the installation's cache: later compiles of this version need no n
 Options:
   --list             List the extensions a compile takes, by the names it gives them, and stop: nothing is downloaded
   --only a,b         Only these extensions
-  --exclude a,b      Every extension except these. They are recorded: later compiles without --only, and
-                     \`pi-bolt update\`, leave them out too, and a later --exclude adds to them
+  --exclude a,b      Every extension except these. They are recorded: later compiles without --only leave them out
+                     too, and a later --exclude adds to them
   --include a,b      Compile these in again, which --exclude left out before
-  --no-exclude       Leave out none of the extensions --exclude left out before (with --exclude: only those it names)
+  --no-exclude       Leave out none of the extensions --exclude left out before (with --exclude: only those it names),
+                     and take none of compile.json's --only
   --no-packages      Leave out the packages \`pi-bolt install\` installed
   --off              Go back to the release's executable, with no extensions compiled in
   --status           Show what is compiled in
@@ -281,7 +286,7 @@ Options:
 Environment:
   BUN_JSC_maximumAOTCandidateBytecodeSize=N
                      Compile functions of up to N bytes of bytecode (default 262144). compile.json keeps it: a later
-                     \`pi-bolt compile\` without it, and \`pi-bolt update\`, use it too; N=262144 takes it back
+                     \`pi-bolt compile\` without it uses it too; N=262144 takes it back
 `;
 
 export function piBoltCompileUsage(): string {
@@ -296,9 +301,9 @@ function parseList(value: string | undefined, flag: string): string[] {
 		.filter(Boolean);
 }
 
-/** The platform as release files name it: linux-x64, darwin-arm64. */
+/** The platform as release files name it: linux-x64, linux-x64-musl, darwin-arm64. */
 function platformName(): string {
-	return `${process.platform}-${process.arch}`;
+	return piBoltReleasePlatform();
 }
 
 /** Where this installation is: <install> and the build's folder in it. */
@@ -313,7 +318,8 @@ function installation(): { installDir: string; buildDir: string } {
 }
 
 function sha256File(path: string): string {
-	return createHash("sha256").update(readFileSync(path)).digest("hex");
+	// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+	return process.getBuiltinModule("node:crypto").createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -333,8 +339,8 @@ function untar(archive: string, into: string): void {
 }
 
 /**
- * How long a download may go without receiving anything, connecting included, before it is given up: a black-holed route
- * otherwise waits for the system's own timeout (75 s on macOS) with nothing printed.
+ * How long a download may go without receiving anything, connecting included, before the attempt is given up: a black-holed
+ * route otherwise waits for the system's own timeout (75 s on macOS) with nothing printed.
  */
 const DOWNLOAD_IDLE_SECONDS = 20;
 
@@ -342,56 +348,25 @@ const DOWNLOAD_IDLE_SECONDS = 20;
 const NETWORK_HINT =
 	"pi-bolt compile downloads this release's runtime and compile kit once (37-52 MB), then compiles offline from its cache. Check the connection or the proxy (HTTPS_PROXY), or give the files with --kit and --runtime (docs/PLUGINS.md#pi-bolt-compile).";
 
-function megabytes(bytes: number): string {
-	return `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
-}
-
 /**
- * Downloads `url`. A failure names the URL and why, and gives up after `idleSeconds` with nothing received. `onSize`: the size
- * the server gives, before the body comes.
+ * Downloads `url`, trying again after a dropped connection, a timeout or a 5xx, from where it stopped when the server can
+ * (pi-bolt-download.ts), and saying so. A failure names the URL and why. `idleSeconds`: how long an attempt waits with nothing
+ * received. `onSize`: the size the server gives, before the body comes.
  */
 export async function download(
 	url: string,
-	options: { idleSeconds?: number; onSize?: (bytes: number | undefined) => void } = {},
+	options: { idleSeconds?: number; onSize?: (bytes: number | undefined) => void; retryDelayMs?: number } = {},
 ): Promise<Buffer> {
-	const idleSeconds = options.idleSeconds ?? DOWNLOAD_IDLE_SECONDS;
-	const controller = new AbortController();
-	let timedOut = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const wait = () => {
-		clearTimeout(timer);
-		timer = setTimeout(() => {
-			timedOut = true;
-			controller.abort();
-		}, idleSeconds * 1000);
-	};
-	wait();
 	try {
-		const response = await fetch(url, { redirect: "follow", signal: controller.signal });
-		if (!response.ok) {
-			throw new CompileError(`could not download ${url}: the server answered ${response.status}\n${NETWORK_HINT}`);
-		}
-		const length = Number(response.headers.get("content-length"));
-		options.onSize?.(Number.isFinite(length) && length > 0 ? length : undefined);
-		if (!response.body) return Buffer.from(await response.arrayBuffer());
-		const chunks: Uint8Array[] = [];
-		const reader = response.body.getReader();
-		for (;;) {
-			wait();
-			const { done, value } = await reader.read();
-			if (done) break;
-			chunks.push(value);
-		}
-		return Buffer.concat(chunks);
+		return await downloadWithRetry(url, {
+			idleSeconds: options.idleSeconds ?? DOWNLOAD_IDLE_SECONDS,
+			onSize: options.onSize,
+			retryDelayMs: options.retryDelayMs,
+			onRetry: (line) => process.stderr.write(chalk.yellow(`download of ${basename(url)} failed: ${line}\n`)),
+		});
 	} catch (error) {
-		if (error instanceof CompileError) throw error;
-		const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
-		const reason = timedOut
-			? `nothing came for ${idleSeconds} s`
-			: `${error instanceof Error ? error.message : String(error)}${cause}`;
+		const reason = error instanceof Error ? error.message : String(error);
 		throw new CompileError(`could not download ${url}: ${reason}\n${NETWORK_HINT}`);
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -407,7 +382,7 @@ export function checkReleaseSums(
 ): Map<string, string> {
 	let signed = false;
 	try {
-		signed = verify(null, sums, key, signature);
+		signed = process.getBuiltinModule("node:crypto").verify(null, sums, key, signature);
 	} catch {
 		signed = false;
 	}
@@ -441,7 +416,7 @@ async function releaseFile(base: string, name: string, sha: Map<string, string>,
 		onSize: (bytes) =>
 			process.stderr.write(chalk.dim(`downloading ${name}${bytes ? ` (${megabytes(bytes)})` : ""}: ${url}\n`)),
 	});
-	if (createHash("sha256").update(data).digest("hex") !== sha.get(name)) {
+	if (process.getBuiltinModule("node:crypto").createHash("sha256").update(data).digest("hex") !== sha.get(name)) {
 		throw new CompileError(`checksum mismatch: the download of ${name} is corrupt or incomplete`);
 	}
 	mkdirSync(cacheDir, { recursive: true });
@@ -627,8 +602,9 @@ function buildEnvironment(kit: Kit, kitDir: string, maximumBytecodeSize: number 
 	delete env.BUN_AOT_JIT;
 	delete env.BUN_AOT_CPU;
 	if (!build.jit) env.BUN_AOT_JIT = "0";
-	// (As build-pi.sh: x64-baseline is the build for any x86-64 CPU, and every Linux ARM64 build is the one for any ARMv8.0 CPU.)
-	if (build.variant === "x64-baseline" || (process.platform === "linux" && build.variant.startsWith("arm64"))) {
+	// (As build-pi.sh: x64-baseline and x64-musl-baseline are the builds for any x86-64 CPU, and every Linux ARM64 build is the
+	// one for any ARMv8.0 CPU.)
+	if (build.variant.endsWith("-baseline") || (process.platform === "linux" && build.variant.startsWith("arm64"))) {
 		env.BUN_AOT_CPU = "baseline";
 	}
 	// (Nothing from a Pi-Bolt that started this one: the build is a Bun of its own.)
@@ -662,7 +638,7 @@ export function buildFailureReason(output: string, tooBig: string[] = []): strin
 			...(tooBig.length > 0
 				? tooBig
 				: [
-						`Leave that extension out with \`pi-bolt compile --exclude <name>\`, or compile it anyway with \`${SIZE_LIMIT}=<n> pi-bolt compile\`, which compile.json keeps for \`pi-bolt update\` (docs/TROUBLESHOOTING.md).`,
+						`Leave that extension out with \`pi-bolt compile --exclude <name>\`, or compile it anyway with \`${SIZE_LIMIT}=<n> pi-bolt compile\`, which compile.json keeps for later compiles (docs/TROUBLESHOOTING.md).`,
 					]),
 		);
 	}
@@ -673,7 +649,7 @@ export function buildFailureReason(output: string, tooBig: string[] = []): strin
 
 /**
  * The limit a compile builds with: the one the environment sets, else the one compile.json keeps (a compile that raised it
- * records it, so that `pi-bolt update` compiles the same extensions again). Undefined: the compiler's own.
+ * records it, so that a later compile builds with it again). Undefined: the compiler's own.
  */
 export function bytecodeSizeLimit(env: NodeJS.ProcessEnv, record: { maximumBytecodeSize?: number } | undefined) {
 	const set = env[SIZE_LIMIT];
@@ -951,7 +927,7 @@ function explainTooBig(
 	if (pieces.length === 0) return nothing;
 	const sizes = measurePieces(bun, pieces, names, work, env);
 	const kb = (bytes: number) => (bytes < 10240 ? `${bytes} bytes` : `${Math.round(bytes / 1024)} KB`);
-	const raise = `compile it anyway with \`${SIZE_LIMIT}=${tooBig.size} pi-bolt compile\`, which compile.json keeps for \`pi-bolt update\` (docs/TROUBLESHOOTING.md).`;
+	const raise = `compile it anyway with \`${SIZE_LIMIT}=${tooBig.size} pi-bolt compile\`, which compile.json keeps for later compiles (docs/TROUBLESHOOTING.md).`;
 
 	if (!tooBig.topLevel) {
 		const ranked = pieces
@@ -1657,10 +1633,8 @@ async function buildExecutable(
 			`the build stopped:\n${how}${buildFailureReason(output, explained.lines)}${advice.join("")}${logged ? `\n(all of what the compiler printed: ${log})` : ""}`,
 		);
 	}
-	// Everything else is this build's: the macOS launcher and pi-spawn, Pi's documentation, themes and native modules.
-	const own = new Set(darwin ? ["pi-bin", "pi-bin.hot"] : ["pi"]);
-	for (const name of readdirSync(buildDir)) {
-		if (!own.has(name)) cpSync(join(buildDir, name), join(stage, name), { recursive: true, verbatimSymlinks: true });
+	for (const name of buildFilesToCopy(readdirSync(buildDir), darwin)) {
+		cpSync(join(buildDir, name), join(stage, name), { recursive: true, verbatimSymlinks: true });
 	}
 	const about = existsSync(join(buildDir, "pi-bolt.txt"))
 		? readFileSync(join(buildDir, "pi-bolt.txt"), "utf8").split("\n")[0]
@@ -1677,24 +1651,34 @@ async function buildExecutable(
 	}
 }
 
-/** Puts `stage` in place of `current`; the build there is kept as <current>.previous, or (after an update) removed. */
-function install(stage: string, current: string, keepPrevious: boolean): void {
+/** Puts `stage` in place of `current`; the build there is kept as <current>.previous. */
+function install(stage: string, current: string): void {
 	const previous = `${current}.previous`;
-	if (keepPrevious) {
-		rmSync(previous, { recursive: true, force: true });
-		renameSync(current, previous);
-		renameSync(stage, current);
-		return;
-	}
-	const replaced = `${current}.replaced-${process.pid}`;
-	renameSync(current, replaced);
+	rmSync(previous, { recursive: true, force: true });
+	renameSync(current, previous);
 	renameSync(stage, current);
-	rmSync(replaced, { recursive: true, force: true });
+}
+
+/** compile.json, and where `pi-bolt compile --off` sets it aside while the installer runs. */
+function recordPaths(installDir: string): { record: string; aside: string } {
+	const record = join(installDir, "compile.json");
+	return { record, aside: `${record}.off` };
+}
+
+/** Puts back the record an --off that was killed (SIGKILL, a crash) left set aside: --off removes it only once it is done. */
+function recoverRecord(installDir: string): void {
+	const { record, aside } = recordPaths(installDir);
+	try {
+		if (!existsSync(record) && existsSync(aside)) renameSync(aside, record);
+	} catch {
+		// (Another process put it back first.)
+	}
 }
 
 function readRecord(installDir: string): CompileRecord | undefined {
+	recoverRecord(installDir);
 	try {
-		return JSON.parse(readFileSync(join(installDir, "compile.json"), "utf8")) as CompileRecord;
+		return JSON.parse(readFileSync(recordPaths(installDir).record, "utf8")) as CompileRecord;
 	} catch {
 		return undefined;
 	}
@@ -1708,36 +1692,36 @@ export interface Selection {
 	recorded: string[];
 	/** Those compile.json records as excluded that no extension here is named any more. */
 	stale: string[];
-	/** Those of an update's --only, compile.json's, that no extension here is named any more: left out. */
+	/** Those of compile.json's --only (a compile without options) that no extension here is named any more: left out. */
 	staleOnly: string[];
 	/** The values given that name no extension found. */
 	unknown: string[];
 }
 
 /**
- * What a compile takes of the extensions `found` (#174). An update compiles what was asked for before: compile.json's
- * --only and exclusions. Otherwise compile.json's exclusions stand, less those --include names, and --exclude adds to
- * them; --no-exclude drops them, and --only chooses without them. The values given may name an extension by any of its
+ * What a compile takes of the extensions `found` (#174). A compile without options compiles what was asked for before:
+ * compile.json's --only and exclusions. Otherwise compile.json's exclusions stand, less those --include names, and --exclude
+ * adds to them; --no-exclude drops them, and --only chooses without them. The values given may name an extension by any of its
  * names (namesPlugin); what is recorded is the names the plan gives.
  */
 export function chooseExtensions(
 	found: PluginPlan["found"],
-	options: Pick<CompileOptions, "only" | "exclude" | "include" | "noExclude" | "afterUpdate">,
+	options: Pick<CompileOptions, "only" | "exclude" | "include" | "noExclude" | "again">,
 	record: CompileSelection | undefined,
 ): Selection {
 	const known = (value: string) => found.some((plugin) => namesPlugin(value, plugin));
-	// (An update's --only is compile.json's: one of those removed since is left out, not an error, or no update would
-	// compile anything in again.)
-	const savedOnly = options.afterUpdate ? (options.only ?? []) : [];
+	// (compile.json's --only, without options: one of those removed since is left out, not an error, or the same compile would
+	// never work again.)
+	const savedOnly = options.again ? (options.only ?? []) : [];
 	const given = [
-		...(options.afterUpdate ? [] : (options.only ?? [])),
+		...(options.again ? [] : (options.only ?? [])),
 		...(options.exclude ?? []),
 		...(options.include ?? []),
 	];
 	const unknown = given.filter((value) => !known(value));
 	const named = (values: string[] = []) =>
 		found.filter((plugin) => values.some((value) => namesPlugin(value, plugin))).map((plugin) => plugin.name);
-	const kept = options.afterUpdate || !(options.noExclude || options.only?.length) ? (record?.exclude ?? []) : [];
+	const kept = options.again || !(options.noExclude || options.only?.length) ? (record?.exclude ?? []) : [];
 	const included = named(options.include);
 	const stale = kept.filter((name) => !found.some((plugin) => plugin.name === name));
 	const recorded = kept.filter((name) => !stale.includes(name) && !included.includes(name));
@@ -1750,11 +1734,6 @@ export function chooseExtensions(
 		staleOnly: savedOnly.filter((value) => !known(value)),
 		unknown,
 	};
-}
-
-/** Whether an update should compile extensions into the release it installed (`pi-bolt compile` was run here). */
-export function piBoltCompileWanted(installDir: string): boolean {
-	return existsSync(join(installDir, "compile.json"));
 }
 
 /** A compile's work folder (mkdtemp's six characters), and the file in it that names the process using it. */
@@ -1883,7 +1862,7 @@ async function planCompile(
 	};
 	const selection = chooseExtensions(planPlugins(planOptions).found, options, record);
 	if (selection.recorded.length > 0) {
-		const how = options.afterUpdate ? "" : ` (--include ${selection.recorded.join(",")} compiles them in)`;
+		const how = options.again ? "" : ` (--include ${selection.recorded.join(",")} compiles them in)`;
 		process.stderr.write(
 			chalk.dim(`leaving out what compile.json records as excluded: ${selection.recorded.join(", ")}${how}\n`),
 		);
@@ -1896,7 +1875,7 @@ async function planCompile(
 		);
 		if (selection.only?.length === 0) {
 			throw new CompileError(
-				`none of the extensions compile.json names in --only is here any more: run pi-bolt compile to choose again`,
+				`none of the extensions compile.json names in --only is here any more: choose with --only, or take all of them with --no-exclude`,
 			);
 		}
 	}
@@ -2038,7 +2017,7 @@ async function compile(options: CompileOptions, record: CompileSelection | undef
 				if (!(error instanceof TooBigToCompile) || attempt >= 4) throw error;
 				const limit = options.maximumBytecodeSize ?? DEFAULT_SIZE_LIMIT;
 				if (error.names.length === 0) {
-					// (Kept in compile.json, as one the command was given: `pi-bolt update` then builds with it at once.)
+					// (Kept in compile.json, as one the command was given: the next compile builds with it at once.)
 					options.maximumBytecodeSize = error.size;
 					process.stderr.write(
 						chalk.dim(
@@ -2094,7 +2073,7 @@ async function compile(options: CompileOptions, record: CompileSelection | undef
 			);
 			return;
 		}
-		install(stage, where!.buildDir, !options.afterUpdate);
+		install(stage, where!.buildDir);
 		const record: CompileRecord = {
 			version: build.version,
 			extensions: names,
@@ -2108,9 +2087,7 @@ async function compile(options: CompileOptions, record: CompileSelection | undef
 		};
 		writeFileSync(join(where!.installDir, "compile.json"), `${JSON.stringify(record, null, "\t")}\n`);
 		console.log(chalk.green(`Compiled into Pi-Bolt ${build.version} in ${took}: ${names.join(", ")}${leftNote}`));
-		if (!options.afterUpdate) {
-			console.log(chalk.dim(`The build before is kept: pi-bolt update --rollback puts it back.`));
-		}
+		console.log(chalk.dim(`The build before is kept: pi-bolt update --rollback puts it back.`));
 	} finally {
 		rmSync(work, { recursive: true, force: true });
 	}
@@ -2126,15 +2103,38 @@ function status(): void {
 }
 
 /**
- * `pi-bolt compile --off`: the release's executable back (from the installer, which does not compile anything in for it), and no
- * extensions compiled in by later updates. The record goes only once the release is installed: a failed reinstall leaves the
- * compiled build running, and the next update compiling the same extensions into it.
+ * `pi-bolt compile --off`: the release's executable back (from the installer, which does not compile anything in for it), and the
+ * record forgotten. It goes only once the release is installed: after a failed reinstall the compiled build still runs, and
+ * `pi-bolt compile --status` and a later compile go by its record. While the installer runs, the record is set aside: an
+ * installer that finds it says the extensions load from their files now and how to compile them in again, which is not what
+ * --off is for.
+ * A stop signal (Ctrl-C while the release downloads) ends this process without running a `finally`, so the record is put back
+ * before it exits; one a SIGKILL left set aside is put back by the next compile that reads it (recoverRecord).
  */
 async function off(installAgain: () => Promise<boolean>): Promise<boolean> {
 	const { installDir } = installation();
-	if (!(await installAgain())) return false;
-	rmSync(join(installDir, "compile.json"), { force: true });
-	return true;
+	const { record, aside } = recordPaths(installDir);
+	const had = existsSync(record);
+	if (had) renameSync(record, aside);
+	const handlers = STOP_SIGNALS.map((signal) => {
+		const handler = () => {
+			recoverRecord(installDir);
+			process.exit(128 + (constants.signals[signal] ?? 0));
+		};
+		process.once(signal, handler);
+		return [signal, handler] as const;
+	});
+	let installed = false;
+	try {
+		installed = await installAgain();
+	} finally {
+		for (const [signal, handler] of handlers) process.off(signal, handler);
+		if (had) {
+			if (installed) rmSync(aside, { force: true });
+			else recoverRecord(installDir);
+		}
+	}
+	return installed;
 }
 
 /**
@@ -2180,8 +2180,8 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 					break;
 				}
 				case "--after-update":
-					options.afterUpdate = true;
-					break;
+					// (What `pi-bolt update` of an earlier release runs in the build it installed: updating no longer compiles.)
+					return 0;
 				case "--status":
 					mode = "status";
 					break;
@@ -2218,8 +2218,11 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 		if (mode === "off") return (await off(installAgain)) ? 0 : 1;
 		const installDir = installs ? installation().installDir : piBoltInstallDir();
 		const record = installDir ? readRecord(installDir) : undefined;
-		if (options.afterUpdate && !record) return 0;
-		if (options.afterUpdate) Object.assign(options, { only: record!.only, noPackages: record!.noPackages });
+		// (No selection given: compile.json's, the same compile again.)
+		const selects = [options.only, options.exclude, options.include, options.noExclude, options.noPackages];
+		if (record && selects.every((value) => value === undefined)) {
+			Object.assign(options, { again: true, only: record.only, noPackages: record.noPackages });
+		}
 		options.maximumBytecodeSize = bytecodeSizeLimit(process.env, record);
 		if (options.maximumBytecodeSize !== undefined && !process.env[SIZE_LIMIT]) {
 			process.stderr.write(
@@ -2237,4 +2240,14 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 		);
 		return 1;
 	}
+}
+
+/**
+ * What a compiled build takes from the build it is made from: everything but the executables it replaces (the macOS
+ * launcher and pi-spawn, Pi's documentation, themes and native modules). Not `skills`: no build ships that folder, and one
+ * an install updated in place still holds from an earlier build is not carried into compiled builds.
+ */
+export function buildFilesToCopy(names: readonly string[], darwin: boolean): string[] {
+	const skip = new Set([...(darwin ? ["pi-bin", "pi-bin.hot"] : ["pi"]), "skills"]);
+	return names.filter((name) => !skip.has(name));
 }

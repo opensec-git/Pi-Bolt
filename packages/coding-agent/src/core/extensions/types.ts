@@ -67,6 +67,16 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { McpServerConfig, McpServerRegistry, RegisteredMcpServer } from "../mcp-servers.ts";
 import type { CustomMessage } from "../messages.ts";
+import type {
+	MobilePageDefinition,
+	MobileTileDefinition,
+	MobileView,
+	MobileViewOp,
+	MobileViewOptions,
+	MobileViewResult,
+	ShowViewOptions,
+	ViewEvent,
+} from "../mobile-ui/types.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type {
@@ -161,7 +171,8 @@ export interface KeybindingHints {
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
-export interface ExtensionUIContext {
+/** The UI a mode gives extensions (`ExtensionUIContext` without the mobile UI kit, which Pi adds for every mode). */
+export interface ExtensionUIHost {
 	/** Show a selector and return the user's choice. */
 	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
@@ -240,8 +251,9 @@ export interface ExtensionUIContext {
 			/** Called with the overlay handle after the overlay is shown. Use to control visibility. */
 			onHandle?: (handle: OverlayHandle) => void;
 			/**
-			 * Report pi as blocked on user input (OSC 7501 program status) while this component is visible.
-			 * Only applies to inline components, not overlays.
+			 * Report pi as blocked on user input (OSC 7501 program status) while this component waits for input.
+			 * Inline components report it while visible. Overlays report it until `done()` is called, also while
+			 * hidden with `setHidden()`.
 			 */
 			blocked?: { kind: NonNullable<ProgramStatus["kind"]>; message: string };
 		},
@@ -318,6 +330,23 @@ export interface ExtensionUIContext {
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
 }
+
+/** The mobile UI kit (docs/mobile-ui.md): native views in the Pi-Bolt app, text in the terminal. */
+export interface ExtensionViewUI {
+	/**
+	 * Shows, replaces (same key) or removes (undefined) a view in a slot: `panel` (default, above the composer),
+	 * `inline` (in the transcript) or `page`. Throws when the view is invalid.
+	 */
+	setView(key: string, view: MobileView | undefined, options?: MobileViewOptions): void;
+	/** Applies ops to the view `key` (or an open sheet's), atomically. Throws when an op fails. */
+	updateView(key: string, ops: MobileViewOp[]): void;
+	/** Opens a modal sheet; resolves with the submitted form or pressed action, or undefined when dismissed. */
+	showView(view: MobileView, options?: ShowViewOptions): Promise<MobileViewResult | undefined>;
+	/** The view `key` as Pi holds it now, with the user's committed field values. */
+	getView(key: string): MobileView | undefined;
+}
+
+export interface ExtensionUIContext extends ExtensionUIHost, ExtensionViewUI {}
 
 // ============================================================================
 // Extension Context
@@ -1056,7 +1085,7 @@ export interface AgentSettledEvent {
 	aborted: boolean;
 }
 
-export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
+export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom" | "view";
 
 /** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {
@@ -1441,6 +1470,7 @@ export type ExtensionEvent =
 	| AgentSettledEvent
 	| UIPromptStartEvent
 	| UIPromptEndEvent
+	| ViewEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -1558,8 +1588,18 @@ export interface MessageRenderOptions extends KeybindingHints {
 	outputPad: number;
 }
 
+/**
+ * Markdown surface a transformer runs on.
+ * - `user`, `assistant`, `assistant-thinking`: transcript messages (the default types of a transformer)
+ * - `custom`: custom messages without a custom renderer, and expanded skill blocks (their content, without Pi's header)
+ * - `summary`: expanded branch and compaction summaries (the summary, without Pi's header)
+ * - `changelog`: Pi's changelog ("What's New" and `/changelog`), the "Extension Updates" notice, and the release note of
+ *   the "Update Available" notice
+ */
+export type MarkdownMessageType = "user" | "assistant" | "assistant-thinking" | "custom" | "summary" | "changelog";
+
 export interface MarkdownTransformContext {
-	messageType: "user" | "assistant" | "assistant-thinking";
+	messageType: MarkdownMessageType;
 	isStreaming: boolean;
 	availableWidth: number;
 	/** Persisted session-entry id. Undefined for live messages or live rendering; available when rendering from persisted session entries. */
@@ -1569,6 +1609,17 @@ export interface MarkdownTransformContext {
 }
 
 export type MarkdownTransformer = (markdown: string, context: MarkdownTransformContext) => string;
+
+export interface MarkdownTransformerOptions {
+	/** Surfaces the transformer runs on. Default: `["user", "assistant", "assistant-thinking"]`. */
+	messageTypes?: readonly MarkdownMessageType[];
+}
+
+/** A registered Markdown transformer and the surfaces it runs on. */
+export interface MarkdownTransformerRegistration {
+	transformer: MarkdownTransformer;
+	messageTypes: ReadonlySet<MarkdownMessageType>;
+}
 
 export interface EntryRenderOptions extends KeybindingHints {
 	expanded: boolean;
@@ -1596,6 +1647,14 @@ export interface RegisteredCommand {
 	description?: string;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null | Promise<AutocompleteItem[] | null>;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+}
+
+/** A page or Home tile a package registered (docs/mobile-ui.md#package-pages-and-home-tiles). */
+export interface RegisteredPage {
+	key: string;
+	kind: "page" | "tile";
+	definition: MobileTileDefinition<ExtensionContext>;
+	sourceInfo: SourceInfo;
 }
 
 export interface ResolvedCommand extends RegisteredCommand {
@@ -1672,6 +1731,8 @@ export interface ExtensionAPI {
 	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): () => void;
 	on(event: "ui_prompt_start", handler: ExtensionHandler<UIPromptStartEvent>): () => void;
 	on(event: "ui_prompt_end", handler: ExtensionHandler<UIPromptEndEvent>): () => void;
+	/** A tap, committed field value or form submit in a view (docs/mobile-ui.md#events). */
+	on(event: "view_event", handler: ExtensionHandler<ViewEvent>): () => void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): () => void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent, TurnEndEventResult>): () => void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): () => void;
@@ -1702,6 +1763,15 @@ export interface ExtensionAPI {
 
 	/** Register a custom command. */
 	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;
+
+	/**
+	 * Register a page of the mobile UI kit: opened from the session's menu in the Pi-Bolt app, and from Settings ->
+	 * Packages without a session. `open` builds its view; the view's key is `key` (docs/mobile-ui.md).
+	 */
+	registerPage(key: string, page: MobilePageDefinition<ExtensionContext>): void;
+
+	/** Register a Home tile of the mobile UI kit: a small live view the user can turn on for the package. */
+	registerTile(key: string, tile: MobileTileDefinition<ExtensionContext>): void;
 
 	/** Register a keyboard shortcut. */
 	registerShortcut(
@@ -1738,8 +1808,11 @@ export interface ExtensionAPI {
 	/** Register a custom renderer for CustomMessageEntry. */
 	registerMessageRenderer<T = unknown>(customType: string, renderer: MessageRenderer<T>): void;
 
-	/** Register a transformer for user and assistant Markdown before Pi renders it in the interactive transcript. */
-	registerMarkdownTransformer(transformer: MarkdownTransformer): void;
+	/**
+	 * Register a transformer for Markdown before Pi renders it in interactive mode. By default it runs on user,
+	 * assistant and thinking Markdown; `options.messageTypes` selects the surfaces instead.
+	 */
+	registerMarkdownTransformer(transformer: MarkdownTransformer, options?: MarkdownTransformerOptions): void;
 
 	/** Register a custom renderer for CustomEntry. Custom entries do not participate in LLM context. */
 	registerEntryRenderer<T = unknown>(customType: string, renderer: EntryRenderer<T>): void;
@@ -2300,9 +2373,11 @@ export interface Extension {
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
 	toolRenderers?: ToolRendererResolver[];
-	markdownTransformer?: MarkdownTransformer;
+	markdownTransformer?: MarkdownTransformerRegistration;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;
+	/** Pages and Home tiles of the mobile UI kit, by key. */
+	pages?: Map<string, RegisteredPage>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
 }

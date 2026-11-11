@@ -69,6 +69,15 @@ with ICU built for any ARMv8 CPU (`-march=armv8-a+crc`, as the runtime itself).
 `scripts/build-runtime.sh --native` skips the sysroot and links against the host's libc and ICU. That is faster to set up, but
 the result runs only on systems like the build machine.
 
+On Linux x86-64 with musl (Alpine 3.23), the runtime is built natively by `scripts/build-runtime-musl.sh` instead, as the
+`runtime` workflow does in an Alpine container: `scripts/alpine-tools.sh --build` installs the tools (LLVM 23 from Alpine's
+edge), then `scripts/fetch-sources.sh` and `scripts/build-runtime-musl.sh --icu`. `--icu` builds the glibc sysroot's ICU from
+source and installs it into `/usr` as static libraries, with all of its data, so the executable needs no ICU package (Alpine's
+`icu-dev` must not be installed: its libraries would be linked instead). The musl runtime has a stamp of its own
+(`scripts/runtime-stamp.sh musl`). `build-pi.sh` and `package-release.sh` then make the `x64-musl`, `x64-musl-baseline` and
+`x64-musl-jit` builds and `pi-bolt-*-linux-x64-musl` archives. Based on the patch set by @nthrow in
+[#280](https://github.com/opensec-git/Pi-Bolt/issues/280).
+
 On macOS there is no sysroot: the runtime is built against Xcode's SDK for macOS 13 and later (Bun's own floor), with
 `-mcpu=apple-m1`, and uses the system's ICU. LLVM 23 from Homebrew (`brew install llvm cmake ninja bash xz`), Rust and Bun 1.4.2 are
 what it needs besides Xcode. The scripts need bash 4.4 or later (macOS's own is 3.2) and Python 3; `build-pi.sh` also needs the

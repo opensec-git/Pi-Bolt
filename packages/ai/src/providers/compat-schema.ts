@@ -189,6 +189,10 @@ function optionalSessionAffinityFormat(options?: Annotations<"openai" | "openai-
 	return opt(sessionAffinityFormat(options));
 }
 
+function optionalPromptCacheKeyMode(options?: Annotations<"auto" | "enabled" | "disabled">) {
+	return opt(union([stringLiteral("auto"), stringLiteral("enabled"), stringLiteral("disabled")], options));
+}
+
 const OpenAICompletionsCompatProperties = {
 	supportsStore: opt(
 		bool({
@@ -230,6 +234,18 @@ const OpenAICompletionsCompatProperties = {
 		bool({
 			description:
 				"Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL.",
+		}),
+	),
+	requiresNonNullAssistantContent: opt(
+		bool({
+			description:
+				'Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false.',
+		}),
+	),
+	requiresToolsWithToolHistory: opt(
+		bool({
+			description:
+				'Whether requests without tools must send "tools": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted.',
 		}),
 	),
 	requiresThinkingAsText: opt(
@@ -334,6 +350,10 @@ const OpenAICompletionsCompatProperties = {
 		description:
 			"Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
 	}),
+	promptCacheKeyMode: optionalPromptCacheKeyMode({
+		description:
+			"Controls the prompt_cache_key request field. auto sends it to api.openai.com, or with long cache retention when supportsLongCacheRetention is true; enabled sends it whenever caching is active, for compatible proxies; disabled never sends it. Default: auto.",
+	}),
 	supportsLongCacheRetention: optionalCompatBoolean({
 		description:
 			'Whether the provider supports long prompt cache retention (prompt_cache_retention: "24h" or Anthropic-style cache_control.ttl: "1h", depending on format). Default: auto-detected from provider and URL.',
@@ -364,7 +384,11 @@ const OpenAIResponsesCompatProperties = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description:
-			"Session-affinity header format. openai sends session_id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+			"Session-affinity header format. openai sends session-id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+	}),
+	promptCacheKeyMode: optionalPromptCacheKeyMode({
+		description:
+			"Controls the prompt_cache_key request field. auto and enabled send it whenever caching is active; disabled never sends it, for compatible proxies that reject it. Default: auto.",
 	}),
 	supportsLongCacheRetention: optionalCompatBoolean({
 		description:
@@ -492,6 +516,10 @@ const AnthropicMessagesCompatProperties = {
 			default: false,
 		}),
 	),
+	supportsMessageThreads: optionalCompatBoolean({
+		description:
+			"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+	}),
 	allowedFallbackModels: opt(
 		arr(AnthropicAllowedFallbackModelSchema, {
 			maxItems: 3,
@@ -560,6 +588,10 @@ const ProviderCompatPropertyOverrides = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description: "Session-affinity header format. Defaults are API-specific or auto-detected.",
+	}),
+	promptCacheKeyMode: optionalPromptCacheKeyMode({
+		description:
+			"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
 	}),
 	supportsMidConvoEffort: optionalCompatBoolean({
 		description:
