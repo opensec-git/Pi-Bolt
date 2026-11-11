@@ -1,5 +1,22 @@
-import { describe, expect, test } from "vitest";
-import { isHerdrPi, reExecAsPi, shouldReExecAsPi } from "../src/extensions/herdr/pi-name.ts";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, test } from "vitest";
+import { isHerdrPi, reExecAsPi, reExecTarget, shouldReExecAsPi } from "../src/extensions/herdr/pi-name.ts";
+
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+	for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+});
+
+/** A macOS build's folder: the launcher `pi` and the executable `pi-bin` it starts. */
+function darwinBuild(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pi-name-"));
+	cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+	writeFileSync(join(dir, "pi"), "");
+	writeFileSync(join(dir, "pi-bin"), "");
+	return dir;
+}
 
 interface ExecveCall {
 	file: string;
@@ -50,6 +67,30 @@ describe("Herdr pi name", () => {
 		expect(calls[0].env).toBe(env);
 		// Nothing is added to the environment of the process a re-exec starts: there is no temporary link to remove.
 		expect(env).toEqual({ PIBOLT_HERDR_PI: "1", HERDR_ENV: "1" });
+	});
+
+	// PR #157 review: on macOS the re-exec started pi-bin itself, which takes no spawn helper, so every program Pi then
+	// started ran without it. The launcher beside pi-bin forks one and starts pi-bin with argv[0] as given.
+	test("on macOS the re-exec goes through the launcher", () => {
+		const dir = darwinBuild();
+		expect(reExecTarget(join(dir, "pi-bin"), "darwin")).toBe(join(dir, "pi"));
+		// No launcher beside it (a pi-bin started by hand): pi-bin itself.
+		rmSync(join(dir, "pi"));
+		expect(reExecTarget(join(dir, "pi-bin"), "darwin")).toBe(join(dir, "pi-bin"));
+		// Elsewhere the executable is the one that runs.
+		expect(reExecTarget("/opt/pi-bolt/pi-bolt-linux-x64/pi", "linux")).toBe("/opt/pi-bolt/pi-bolt-linux-x64/pi");
+	});
+
+	test.runIf(process.platform === "darwin")("a macOS re-exec runs the launcher with pi as argv[0]", () => {
+		const dir = darwinBuild();
+		const execPath = process.execPath;
+		process.execPath = join(dir, "pi-bin");
+		try {
+			const calls = reExecWithStubbedExecve(["--herdr-pi"], {});
+			expect(calls.map((call) => [call.file, call.args])).toEqual([[join(dir, "pi"), ["pi", "--herdr-pi"]]]);
+		} finally {
+			process.execPath = execPath;
+		}
 	});
 
 	test("a runtime without execve does not re-exec", () => {
