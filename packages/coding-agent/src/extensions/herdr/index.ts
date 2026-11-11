@@ -84,12 +84,13 @@ function hasControlCharacter(text: string): boolean {
 export function createHerdrExtension(
 	env: NodeJS.ProcessEnv = process.env,
 	platform: NodeJS.Platform = process.platform,
+	reportsAsPi: () => boolean = isHerdrPi,
 ): ExtensionFactory {
 	return (pi) => {
 		const herdr = herdrFromEnvironment(env, platform);
 		if (!herdr) return;
 		const { transport, paneId } = herdr;
-		const piIntegration = isHerdrPi(env);
+		const piIntegration = reportsAsPi();
 		const source = piIntegration ? PI_SOURCE : SOURCE;
 		const agent = piIntegration ? PI_AGENT : AGENT;
 

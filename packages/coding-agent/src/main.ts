@@ -5,7 +5,6 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { basename } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
 import { type Args, type Mode, missingExtensionPaths, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
@@ -69,7 +68,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { loadAcpMode } from "./extensions/acp/mode.lazy.ts";
 import { quietOtherHerdrReporters } from "./extensions/herdr/index.ts";
-import { HERDR_PI_ENV, reExecAsPi, shouldReExecAsPi } from "./extensions/herdr/pi-name.ts";
+import { startHerdrPi } from "./extensions/herdr/pi-name.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { loadMcpMode } from "./extensions/mcp-server/mode.lazy.ts";
@@ -773,24 +772,16 @@ export async function main(args: string[], options?: MainOptions) {
 
 	// The service runs headless as RPC does, whether or not it was started from a terminal.
 	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`.
-	// Re-exec with `pi` as argv[0] before the TUI (and its session) starts; the flag stays in args so the restored command
-	// re-enters Pi-integration mode. Outside Herdr there is nothing to report to, and no reason to change the name.
-	if (PIBOLT && parsed.herdrPi && process.env.HERDR_ENV === "1") {
-		// Herdr on Windows reads the command line rather than argv[0]: only a process started as pi.exe is seen
-		// as its Pi integration. Keep the ordinary pi-bolt reports when that is not the case.
-		if (process.platform === "win32" && basename(process.argv0).toLowerCase() !== "pi.exe") {
+	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`: an
+	// interactive run in a Herdr pane re-execs itself under that name here, before the TUI (and its session) starts.
+	if (PIBOLT && parsed.herdrPi) {
+		const herdrPi = startHerdrPi(args, appMode === "interactive");
+		if (herdrPi === "not-pi-exe") {
 			console.error(
 				chalk.yellow("Warning: --herdr-pi needs a pi.exe process on Windows; reporting as pi-bolt instead"),
 			);
-		} else {
-			process.env[HERDR_PI_ENV] = "1";
-			if (appMode === "interactive" && shouldReExecAsPi()) {
-				if (!reExecAsPi(args)) {
-					delete process.env[HERDR_PI_ENV];
-					console.error(chalk.yellow("Warning: could not start --herdr-pi; reporting as pi-bolt"));
-				}
-			}
+		} else if (herdrPi === "re-exec-failed") {
+			console.error(chalk.yellow("Warning: could not start --herdr-pi; reporting as pi-bolt"));
 		}
 	}
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);

@@ -99,15 +99,10 @@ async function startedInHerdr(
 	} = {},
 ) {
 	const herdr = await fakeHerdr(options.answer);
-	const env = {
-		HERDR_ENV: "1",
-		HERDR_SOCKET_PATH: herdr.socketPath,
-		HERDR_PANE_ID: "w1:p2",
-		...(options.piIntegration ? { PIBOLT_HERDR_PI: "1" } : {}),
-	};
+	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: herdr.socketPath, HERDR_PANE_ID: "w1:p2" };
 	const fake = fakePi();
 	let idle = true;
-	createHerdrExtension(env)(fake.pi);
+	createHerdrExtension(env, process.platform, () => options.piIntegration === true)(fake.pi);
 	const ctx = context({ mode: options.mode, idle: () => idle, sessionFile: options.sessionFile ?? "/work/s.jsonl" });
 	await fake.fire("session_start", { type: "session_start", reason: "startup" }, ctx);
 	const states = () => herdr.requests.filter((r) => r.method === "pane.report_agent").map((r) => r.params.state);
