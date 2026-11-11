@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import type { Token, Tokens } from "marked";
 import {
 	type DefaultTextStyle,
@@ -9,6 +9,7 @@ import {
 	type MarkdownTheme,
 	setMarkdownCachingForTest,
 } from "../src/components/markdown.ts";
+import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 
 // A list or table that streams in is lexed again from its last items or rows, and rendered again from the lines of the
@@ -53,6 +54,9 @@ const DOCUMENTS: Record<string, string> = {
 	// A paragraph that leaves an inline <a> open: the paragraph after it is lexed in that state, so it is not settled by
 	// the blank line after it. (Only two: a block further back is lexed again from the lexer's first state, on the base too.)
 	openLink: `Use <a href="x">docs\n\nsee www.example.com for more and https://example.org at the end.\n`,
+	// Comment-only HTML blocks render no line (earendil-works/pi#11710): they are left out of the tokens rendered, not the
+	// tokens lexed, which a streaming reply is lexed from.
+	htmlComments: `<!-- start -->\n\n## Notes\n\n<!-- a -->\n\n- item one\n- item <!-- inline --> two\n\n  <!-- in item -->\n\n  still two\n\n> q\n>\n> <!-- quoted -->\n>\n> r\n\nSee <!-- todo --> the docs.\n\n<!-- multi\nline\n-->\ntext after\n\n<!-- unclosed at the end`,
 };
 
 /** Lines a fresh component gives with caching off: everything lexed and rendered from scratch. */
@@ -314,6 +318,23 @@ describe("Markdown streaming: what is reused", () => {
 			assert.deepStrictEqual(lines, fresh, `at length ${length}, width ${width}, mark ${mark}`);
 		}
 	});
+});
+
+// Issue #297: links that show their URL, links that are hyperlinks, and local file links that are both, in paragraphs, a
+// list and a table, the first blocks reused while the last ones stream in.
+const LINKS = `Open [the image](file:///C:/Temp/example.png) or [a local one](file://localhost/C:/Temp/example.png), [x.png](file:///tmp/x.png), [GitHub](https://github.com) and [settings](x-apple.systempreferences:com.apple.preference.security).\n\n- [${"long ".repeat(6)}label](file:///C:/Temp/${"deep/".repeat(12)}example.png)\n- <file:///tmp/y.png> and [run](javascript:alert(1))\n- [share](file://server/share/x.png)\n\n| file | web |\n|---|---|\n| [image](file:///tmp/x.png) | [docs](https://example.com/docs) |\n| [other](vscode://file/etc/passwd) | [mail](mailto:a@example.com) |\n\nThe end, with [an open link](file:///tmp/open`;
+
+describe("Markdown streaming: links, with hyperlinks on and off", () => {
+	afterEach(() => resetCapabilitiesCache());
+
+	for (const hyperlinks of [true, false]) {
+		it(`every prefix into one component, at three widths (hyperlinks ${hyperlinks ? "on" : "off"})`, () => {
+			setCapabilities({ images: null, trueColor: false, hyperlinks });
+			for (const width of [100, 40, 14]) {
+				streamLive(`links@${width}`, unique("links", LINKS), () => 1, width);
+			}
+		});
+	}
 });
 
 /**

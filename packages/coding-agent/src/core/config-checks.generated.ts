@@ -108,6 +108,12 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 							(var_1.compat.requiresAssistantAfterToolResult === undefined ||
 								!("requiresAssistantAfterToolResult" in var_1.compat) ||
 								typeof var_1.compat.requiresAssistantAfterToolResult === "boolean") &&
+							(var_1.compat.requiresNonNullAssistantContent === undefined ||
+								!("requiresNonNullAssistantContent" in var_1.compat) ||
+								typeof var_1.compat.requiresNonNullAssistantContent === "boolean") &&
+							(var_1.compat.requiresToolsWithToolHistory === undefined ||
+								!("requiresToolsWithToolHistory" in var_1.compat) ||
+								typeof var_1.compat.requiresToolsWithToolHistory === "boolean") &&
 							(var_1.compat.requiresThinkingAsText === undefined ||
 								!("requiresThinkingAsText" in var_1.compat) ||
 								typeof var_1.compat.requiresThinkingAsText === "boolean") &&
@@ -360,6 +366,14 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 									var_1.compat.sessionAffinityFormat === "openai-nosession") ||
 								(typeof var_1.compat.sessionAffinityFormat === "string" &&
 									var_1.compat.sessionAffinityFormat === "openrouter")) &&
+							(var_1.compat.promptCacheKeyMode === undefined ||
+								!("promptCacheKeyMode" in var_1.compat) ||
+								(typeof var_1.compat.promptCacheKeyMode === "string" &&
+									var_1.compat.promptCacheKeyMode === "auto") ||
+								(typeof var_1.compat.promptCacheKeyMode === "string" &&
+									var_1.compat.promptCacheKeyMode === "enabled") ||
+								(typeof var_1.compat.promptCacheKeyMode === "string" &&
+									var_1.compat.promptCacheKeyMode === "disabled")) &&
 							(var_1.compat.supportsLongCacheRetention === undefined ||
 								!("supportsLongCacheRetention" in var_1.compat) ||
 								typeof var_1.compat.supportsLongCacheRetention === "boolean") &&
@@ -402,6 +416,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 							(var_1.compat.supportsMidConvoToolChanges === undefined ||
 								!("supportsMidConvoToolChanges" in var_1.compat) ||
 								typeof var_1.compat.supportsMidConvoToolChanges === "boolean") &&
+							(var_1.compat.supportsMessageThreads === undefined ||
+								!("supportsMessageThreads" in var_1.compat) ||
+								typeof var_1.compat.supportsMessageThreads === "boolean") &&
 							(var_1.compat.allowedFallbackModels === undefined ||
 								!("allowedFallbackModels" in var_1.compat) ||
 								(Array.isArray(var_1.compat.allowedFallbackModels) &&
@@ -750,6 +767,12 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 											(element.compat.requiresAssistantAfterToolResult === undefined ||
 												!("requiresAssistantAfterToolResult" in element.compat) ||
 												typeof element.compat.requiresAssistantAfterToolResult === "boolean") &&
+											(element.compat.requiresNonNullAssistantContent === undefined ||
+												!("requiresNonNullAssistantContent" in element.compat) ||
+												typeof element.compat.requiresNonNullAssistantContent === "boolean") &&
+											(element.compat.requiresToolsWithToolHistory === undefined ||
+												!("requiresToolsWithToolHistory" in element.compat) ||
+												typeof element.compat.requiresToolsWithToolHistory === "boolean") &&
 											(element.compat.requiresThinkingAsText === undefined ||
 												!("requiresThinkingAsText" in element.compat) ||
 												typeof element.compat.requiresThinkingAsText === "boolean") &&
@@ -1044,6 +1067,14 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 													element.compat.sessionAffinityFormat === "openai-nosession") ||
 												(typeof element.compat.sessionAffinityFormat === "string" &&
 													element.compat.sessionAffinityFormat === "openrouter")) &&
+											(element.compat.promptCacheKeyMode === undefined ||
+												!("promptCacheKeyMode" in element.compat) ||
+												(typeof element.compat.promptCacheKeyMode === "string" &&
+													element.compat.promptCacheKeyMode === "auto") ||
+												(typeof element.compat.promptCacheKeyMode === "string" &&
+													element.compat.promptCacheKeyMode === "enabled") ||
+												(typeof element.compat.promptCacheKeyMode === "string" &&
+													element.compat.promptCacheKeyMode === "disabled")) &&
 											(element.compat.supportsLongCacheRetention === undefined ||
 												!("supportsLongCacheRetention" in element.compat) ||
 												typeof element.compat.supportsLongCacheRetention === "boolean") &&
@@ -1086,6 +1117,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 											(element.compat.supportsMidConvoToolChanges === undefined ||
 												!("supportsMidConvoToolChanges" in element.compat) ||
 												typeof element.compat.supportsMidConvoToolChanges === "boolean") &&
+											(element.compat.supportsMessageThreads === undefined ||
+												!("supportsMessageThreads" in element.compat) ||
+												typeof element.compat.supportsMessageThreads === "boolean") &&
 											(element.compat.allowedFallbackModels === undefined ||
 												!("allowedFallbackModels" in element.compat) ||
 												(Array.isArray(element.compat.allowedFallbackModels) &&
@@ -1440,6 +1474,12 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 												(var_31.compat.requiresAssistantAfterToolResult === undefined ||
 													!("requiresAssistantAfterToolResult" in var_31.compat) ||
 													typeof var_31.compat.requiresAssistantAfterToolResult === "boolean") &&
+												(var_31.compat.requiresNonNullAssistantContent === undefined ||
+													!("requiresNonNullAssistantContent" in var_31.compat) ||
+													typeof var_31.compat.requiresNonNullAssistantContent === "boolean") &&
+												(var_31.compat.requiresToolsWithToolHistory === undefined ||
+													!("requiresToolsWithToolHistory" in var_31.compat) ||
+													typeof var_31.compat.requiresToolsWithToolHistory === "boolean") &&
 												(var_31.compat.requiresThinkingAsText === undefined ||
 													!("requiresThinkingAsText" in var_31.compat) ||
 													typeof var_31.compat.requiresThinkingAsText === "boolean") &&
@@ -1748,6 +1788,14 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 														var_31.compat.sessionAffinityFormat === "openai-nosession") ||
 													(typeof var_31.compat.sessionAffinityFormat === "string" &&
 														var_31.compat.sessionAffinityFormat === "openrouter")) &&
+												(var_31.compat.promptCacheKeyMode === undefined ||
+													!("promptCacheKeyMode" in var_31.compat) ||
+													(typeof var_31.compat.promptCacheKeyMode === "string" &&
+														var_31.compat.promptCacheKeyMode === "auto") ||
+													(typeof var_31.compat.promptCacheKeyMode === "string" &&
+														var_31.compat.promptCacheKeyMode === "enabled") ||
+													(typeof var_31.compat.promptCacheKeyMode === "string" &&
+														var_31.compat.promptCacheKeyMode === "disabled")) &&
 												(var_31.compat.supportsLongCacheRetention === undefined ||
 													!("supportsLongCacheRetention" in var_31.compat) ||
 													typeof var_31.compat.supportsLongCacheRetention === "boolean") &&
@@ -1790,6 +1838,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 												(var_31.compat.supportsMidConvoToolChanges === undefined ||
 													!("supportsMidConvoToolChanges" in var_31.compat) ||
 													typeof var_31.compat.supportsMidConvoToolChanges === "boolean") &&
+												(var_31.compat.supportsMessageThreads === undefined ||
+													!("supportsMessageThreads" in var_31.compat) ||
+													typeof var_31.compat.supportsMessageThreads === "boolean") &&
 												(var_31.compat.allowedFallbackModels === undefined ||
 													!("allowedFallbackModels" in var_31.compat) ||
 													(Array.isArray(var_31.compat.allowedFallbackModels) &&

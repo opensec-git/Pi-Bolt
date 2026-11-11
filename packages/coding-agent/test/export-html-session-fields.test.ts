@@ -107,6 +107,29 @@ describe("HTML export of a session file", () => {
 		expect(script).not.toContain("<img");
 	});
 
+	// Issue #297: a link the page does not link to shows where it goes, as text.
+	it("shows the URL of a link it does not link to after its text", () => {
+		const file = viewer.safeMarkedParse("[Open image](file:///C:/Temp/example.png)");
+		expect(file).not.toContain("<a");
+		expect(file).toContain('Open image <span class="markdown-link-url">(file:///C:/Temp/example.png)</span>');
+
+		const script = viewer.safeMarkedParse('[Run it](javascript:alert("<b>x</b>"))');
+		expect(script).not.toContain("<a");
+		expect(script).not.toContain("<b>");
+		expect(script).toContain(
+			'Run it <span class="markdown-link-url">(javascript:alert(&quot;&lt;b&gt;x&lt;/b&gt;&quot;))</span>',
+		);
+
+		const bare = viewer.safeMarkedParse("<file:///tmp/x.png>");
+		expect(bare).not.toContain("<a");
+		expect(bare).not.toContain("markdown-link-url");
+		expect(bare).toContain("file:///tmp/x.png");
+
+		const web = viewer.safeMarkedParse("[GitHub](https://github.com)");
+		expect(web).toContain('<a href="https://github.com">GitHub</a>');
+		expect(web).not.toContain("markdown-link-url");
+	});
+
 	it("allows the page no remote loads", () => {
 		const policy = html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
 		expect(policy).toBeDefined();

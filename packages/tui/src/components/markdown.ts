@@ -19,6 +19,7 @@ import {
 	INTERNED_LINE_LENGTH,
 	internLine,
 	isWebLink,
+	localFileLinkTarget,
 	type SanitizedTerminalText,
 	sanitizeTerminalText,
 	sanitizeTerminalTextFrom,
@@ -1160,6 +1161,94 @@ export function lexMarkdownForTest(source: string, complete = false): Token[] {
 	return lexMarkdown(source, complete);
 }
 
+// An unclosed comment runs to the end of an HTML block, as in CommonMark, so streamed comments stay hidden.
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?(?:-->|$)/g;
+
+function stripHtmlComments(html: string): string {
+	return html.replace(HTML_COMMENT_REGEX, "");
+}
+
+function isHtmlCommentBlock(token: Token): boolean {
+	return token.type === "html" && stripHtmlComments(token.raw).trim() === "";
+}
+
+/**
+ * What a Markdown component knows of its text, kept as text is added to it: whether it has a character that is not white
+ * space, a tab, an HTML comment's start; and its last three characters (`end`), where a "<!--" that ends in added text begins.
+ */
+interface TextFacts {
+	text: string;
+	visible: boolean;
+	tabs: boolean;
+	comments: boolean;
+	end: string;
+}
+
+/** The tokens tokensFor() renders, by the lexed tokens they were made from (withoutHtmlCommentBlocks()). */
+const renderedWithoutComments = new WeakMap<Token[], Token[]>();
+
+/** List and blockquote tokens without comment-only HTML blocks inside, by the token they were made from. */
+const withoutCommentsInside = new WeakMap<Token, Token>();
+
+/**
+ * `tokens` without the block HTML tokens that hold only comments, so they render no line; `tokens` itself when it has none
+ * (nearly always). A removed comment between two blank lines, or at the start or end, also drops a blank line, so it leaves
+ * no extra gap (earendil-works/pi#11710). Lexed tokens are never changed: lexMarkdown() lexes a growing text from the
+ * tokens of the text before, which must add up to it, so the rendered tokens are this copy instead.
+ */
+function withoutHtmlCommentBlocks(tokens: Token[]): Token[] {
+	let result: Token[] | undefined;
+	for (let i = tokens.length - 1; i >= 0; i--) {
+		const token = tokens[i];
+		let kept: Token | undefined = token;
+		if (token.type === "list") {
+			kept = withoutCommentsInList(token as Tokens.List);
+		} else if (token.type === "blockquote") {
+			kept = withoutCommentsInBlockquote(token as Tokens.Blockquote);
+		} else if (isHtmlCommentBlock(token)) {
+			kept = undefined;
+		}
+		if (kept === token) continue;
+		result ??= tokens.slice();
+		if (kept !== undefined) {
+			result[i] = kept;
+			continue;
+		}
+		result.splice(i, 1);
+		if (result[i]?.type === "space" && (i === 0 || result[i - 1]?.type === "space")) {
+			result.splice(i, 1);
+		} else if (i === result.length && result[i - 1]?.type === "space") {
+			result.splice(--i, 1);
+		}
+	}
+	return result ?? tokens;
+}
+
+function withoutCommentsInList(list: Tokens.List): Token {
+	const known = withoutCommentsInside.get(list);
+	if (known) return known;
+	let items: Tokens.ListItem[] | undefined;
+	for (let i = 0; i < list.items.length; i++) {
+		const item = list.items[i];
+		const tokens = withoutHtmlCommentBlocks(item.tokens);
+		if (tokens === item.tokens) continue;
+		items ??= list.items.slice();
+		items[i] = { ...item, tokens };
+	}
+	const result: Token = items ? { ...list, items } : list;
+	withoutCommentsInside.set(list, result);
+	return result;
+}
+
+function withoutCommentsInBlockquote(blockquote: Tokens.Blockquote): Token {
+	const known = withoutCommentsInside.get(blockquote);
+	if (known) return known;
+	const tokens = blockquote.tokens ? withoutHtmlCommentBlocks(blockquote.tokens) : undefined;
+	const result: Token = tokens !== blockquote.tokens ? { ...blockquote, tokens: tokens ?? [] } : blockquote;
+	withoutCommentsInside.set(blockquote, result);
+	return result;
+}
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -1248,7 +1337,7 @@ export class Markdown implements Component {
 	 * finds it for a text that is the one before with text added from the text added: a message streaming in is not read
 	 * in full for each chunk (startsWithText()).
 	 */
-	private facts?: { text: string; visible: boolean; tabs: boolean };
+	private facts?: TextFacts;
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
@@ -1339,14 +1428,19 @@ export class Markdown implements Component {
 		}
 		// (`added` is what the text adds to the text before: the result for the previous text, which `before` is.)
 		const facts = this.facts;
-		this.facts =
-			facts !== undefined && added !== undefined && facts.text === before
-				? {
-						text: this.text,
-						visible: facts.visible || /\S/.test(added),
-						tabs: facts.tabs || added.includes("\t"),
-					}
-				: undefined;
+		let grownFacts: TextFacts | undefined;
+		if (facts !== undefined && added !== undefined && facts.text === before) {
+			// (The end of the text before and what was added: a "<!--" can begin in the first and end in the second.)
+			const end = facts.end + added;
+			grownFacts = {
+				text: this.text,
+				visible: facts.visible || /\S/.test(added),
+				tabs: facts.tabs || added.includes("\t"),
+				comments: facts.comments || end.includes("<!--"),
+				end: end.slice(-3),
+			};
+		}
+		this.facts = grownFacts;
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -1606,7 +1700,7 @@ export class Markdown implements Component {
 		return lines;
 	}
 
-	/** The tokens of the text at `width` (after the transform and tab replacement), or undefined when it has no text. */
+	/** The tokens of the text at `width` (after the transform and tab replacement), or undefined when it has nothing to show. */
 	private tokensFor(width: number): { tokens: Token[]; contentWidth: number } | undefined {
 		// Calculate available width for content (subtract horizontal padding)
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
@@ -1645,15 +1739,30 @@ export class Markdown implements Component {
 				: { from: this.text, added: "", ...(asIs && lexed !== undefined ? { lexed } : {}) };
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
-		return { tokens, contentWidth };
+		// (Most texts have no HTML comment: their tokens are rendered as they are, with nothing looked at.)
+		if (!(facts?.comments ?? text.includes("<!--"))) return { tokens, contentWidth };
+		let shown = renderedWithoutComments.get(tokens);
+		if (!shown) {
+			shown = withoutHtmlCommentBlocks(tokens);
+			renderedWithoutComments.set(tokens, shown);
+		}
+		// A text of comments only (a reply that so far is "<!-- ") renders as a text with nothing to show.
+		if (shown.length === 0) return undefined;
+		return { tokens: shown, contentWidth };
 	}
 
-	/** Whether the text has a character that is not white space, and a tab (facts). */
-	private textFacts(): { text: string; visible: boolean; tabs: boolean } {
+	/** What the component knows of its text (TextFacts), made again when the text was not grown by setText(). */
+	private textFacts(): TextFacts {
 		const text = this.text;
 		let facts = this.facts;
 		if (facts?.text !== text) {
-			facts = { text, visible: /\S/.test(text), tabs: text.includes("\t") };
+			facts = {
+				text,
+				visible: /\S/.test(text),
+				tabs: text.includes("\t"),
+				comments: text.includes("<!--"),
+				end: text.slice(-3),
+			};
 			this.facts = facts;
 		}
 		return facts;
@@ -2208,9 +2317,9 @@ export class Markdown implements Component {
 				break;
 
 			case "html":
-				// Render HTML as plain text (escaped for terminal)
+				// Render HTML as plain text (escaped for terminal), without its comments
 				if ("raw" in token && typeof token.raw === "string") {
-					lines.push(this.applyDefaultStyle(token.raw.trim()));
+					lines.push(this.applyDefaultStyle(stripHtmlComments(token.raw).trim()));
 				}
 				break;
 
@@ -2238,7 +2347,15 @@ export class Markdown implements Component {
 			return segments.map((segment: string) => applyText(segment)).join("\n");
 		};
 
-		for (const token of tokens) {
+		// After a skipped HTML comment, drop the next text's leading space if the text before ended with one,
+		// so "a <!-- c --> b" renders as "a b".
+		let dropLeadingSpace = false;
+		for (let i = 0; i < tokens.length; i++) {
+			let token = tokens[i];
+			if (dropLeadingSpace && token.type === "text" && !token.tokens?.length && /^[ \t]/.test(token.text)) {
+				token = { ...token, text: token.text.replace(/^[ \t]+/, "") };
+			}
+			dropLeadingSpace = false;
 			switch (token.type) {
 				case "latex": {
 					const latexToken = token as LatexToken;
@@ -2287,24 +2404,27 @@ export class Markdown implements Component {
 				case "link": {
 					const linkText = this.renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLink = this.theme.link(this.theme.underline(linkText));
-					if (getCapabilities().hyperlinks) {
-						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
-						// so we always show only the link text regardless of whether it matches href.
-						// Only a web or mail link is clickable: a click on a local path or another scheme (file:, an app's
-						// handler, or a target read as an option by `open`) could run a program instead of showing a page.
-						result += (isWebLink(token.href) ? hyperlink(styledLink, token.href) : styledLink) + stylePrefix;
-					} else {
-						// Fallback: print URL in parentheses when text differs from href.
-						// Compare raw token.text (not styled) against href for the equality check.
-						// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com"
-						// but href="mailto:foo@bar.com").
-						const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
-						if (token.text === token.href || token.text === hrefForComparison) {
-							result += styledLink + stylePrefix;
-						} else {
-							result += styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
-						}
+					const hyperlinks = getCapabilities().hyperlinks;
+					if (hyperlinks && isWebLink(token.href)) {
+						// OSC 8: a web or mail link is drawn as its text only, a hyperlink that a browser or mail program opens.
+						result += hyperlink(styledLink, token.href) + stylePrefix;
+						break;
 					}
+					// Any other link, and every link without hyperlinks, shows its URL in parentheses after its text (unless
+					// the text is the URL), so where it goes is never hidden. Compare raw token.text (not styled) against href.
+					// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com" but
+					// href="mailto:foo@bar.com").
+					const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
+					const shown =
+						token.text === token.href || token.text === hrefForComparison
+							? styledLink
+							: styledLink + this.theme.linkUrl(` (${token.href})`);
+					// A local file (localFileLinkTarget()) is a hyperlink, text and URL together: a click opens what a click on
+					// the printed URL opens (in fullscreen mode, through TuiAltScreen's openUrl). Any other link is not: a click
+					// on a relative path or another scheme (an app's handler, a target `open` reads as an option) could run a
+					// program.
+					const target = hyperlinks ? localFileLinkTarget(token.href) : undefined;
+					result += (target === undefined ? shown : hyperlink(shown, target)) + stylePrefix;
 					break;
 				}
 
@@ -2319,8 +2439,10 @@ export class Markdown implements Component {
 				}
 
 				case "html":
-					// Render inline HTML as plain text
-					if ("raw" in token && typeof token.raw === "string") {
+					// Render inline HTML as plain text; comments are hidden
+					if (token.raw.startsWith("<!--")) {
+						dropLeadingSpace = i === 0 || /[ \t]$/.test(tokens[i - 1].raw);
+					} else {
 						result += applyTextWithNewlines(token.raw);
 					}
 					break;

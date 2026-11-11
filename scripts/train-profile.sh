@@ -62,7 +62,8 @@ if [ -n "$WITH" ]; then
 	REGEXPS+=("$WITH/regexps.txt")
 fi
 python3 "$PIBOLT_ROOT/scripts/lib/merge_orders.py" "${ORDERS[@]}" >"$TMP/bytecode.order"
-sort -u "${REGEXPS[@]}" >"$TMP/regexps.txt"
+# (In C order: a locale's collation would order the same lines differently on another machine.)
+LC_ALL=C sort -u "${REGEXPS[@]}" >"$TMP/regexps.txt"
 mv "$TMP/bytecode.order" "$OUT/bytecode.order"
 mv "$TMP/regexps.txt" "$OUT/regexps.txt"
 log "profile: $OUT ($(wc -l < "$OUT/regexps.txt") regular expressions)"
