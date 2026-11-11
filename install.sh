@@ -880,8 +880,10 @@ uninstall() {
 	for dir in "$INSTALL"/pi-bolt-linux-* "$INSTALL"/pi-bolt-darwin-*; do
 		[ -d "$dir" ] && rm -rf "$dir"
 	done
-	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed.)
-	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-*
+	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed; and
+	# what automatic updates keep: when the last one ran, its output, and its lock.)
+	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-* \
+		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock"
 	target=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
 	case "$target" in
 	"$INSTALL"/*) rm -f "$BIN_DIR/pi-bolt" ;;

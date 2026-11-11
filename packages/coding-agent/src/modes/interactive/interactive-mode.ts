@@ -142,6 +142,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { addMcpServerConfig } from "../../extensions/mcp/config.ts";
 import { PIBOLT, PIBOLT_RELEASES_URL, piBoltUpdateCommand } from "../../pi-bolt.ts";
+import { planAutoUpdate, startAutoUpdate } from "../../pi-bolt-auto-update.ts";
 import type { RemoteControlController } from "../../remote-control/controller.ts";
 import { loadRemoteControl } from "../../remote-control/remote-control.lazy.ts";
 import {
@@ -1352,9 +1353,13 @@ export class InteractiveMode {
 				.finally(() => clearTimeout(timeout));
 		}
 
+		// Pi-Bolt's automatic update, when the global setting turns it on (pi-bolt-auto-update.ts); it reports instead of the
+		// notice of a newer version.
+		const autoUpdating = this.startPiBoltAutoUpdate();
+
 		// Start version check asynchronously
 		checkForNewPiVersion(this.version).then((newRelease) => {
-			if (newRelease) {
+			if (newRelease && !autoUpdating) {
 				this.showNewVersionNotification(newRelease);
 			}
 		});
@@ -5225,6 +5230,25 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/**
+	 * Starts Pi-Bolt's background update when `piBolt.autoUpdate` is on and this installation takes one now (planAutoUpdate),
+	 * after the first frame. Returns whether it started. Its one line comes when it is done; nothing when there is no update.
+	 */
+	private startPiBoltAutoUpdate(): boolean {
+		const plan = planAutoUpdate(this.settingsManager.getPiBoltAutoUpdate());
+		if (plan.kind !== "start") return false;
+		startAutoUpdate(plan.installDir, (line) => {
+			if (!this.isInitialized) return;
+			if (line.kind === "error") this.showWarning(line.text);
+			else {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new ThemedText(() => theme.fg("success", line.text), 1, 0));
+				this.ui.requestRender();
+			}
+		});
+		return true;
+	}
+
 	showNewVersionNotification(release: LatestPiRelease): void {
 		const updateInstruction = () =>
 			theme.fg("muted", `New ${PIBOLT ? "Pi-Bolt " : ""}version ${release.version} is available. Run `) +
@@ -5535,6 +5559,7 @@ export class InteractiveMode {
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
 					remoteControlEnabled: this.settingsManager.getRemoteControlEnabled(),
+					...(PIBOLT ? { piBoltAutoUpdate: this.settingsManager.getPiBoltAutoUpdate() } : {}),
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
@@ -5659,6 +5684,9 @@ export class InteractiveMode {
 					},
 					onEnableInstallTelemetryChange: (enabled) => {
 						this.settingsManager.setEnableInstallTelemetry(enabled);
+					},
+					onPiBoltAutoUpdateChange: (enabled) => {
+						this.settingsManager.setPiBoltAutoUpdate(enabled);
 					},
 					onRemoteControlEnabledChange: (enabled) => {
 						this.settingsManager.setRemoteControlEnabled(enabled);

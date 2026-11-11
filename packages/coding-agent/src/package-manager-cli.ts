@@ -6,9 +6,10 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	truncateSync,
 	writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { ModelsError } from "@earendil-works/pi-ai";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import lockfile from "proper-lockfile";
@@ -54,10 +55,20 @@ import {
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
-import { runPiBoltCompile } from "./pi-bolt-compile.ts";
+import {
+	AUTO_UPDATE_ARGUMENT,
+	AUTO_UPDATE_LOCK_STALE_MS,
+	type AutoUpdateResult,
+	autoUpdatePaths,
+	readAutoUpdateRecord,
+	startedRecently,
+	writeAutoUpdateRecord,
+} from "./pi-bolt-auto-update.ts";
+import { buildHasCompiledExtensions, runPiBoltCompile } from "./pi-bolt-compile.ts";
 import { fetchReleaseInstaller, type ReleaseInstaller, runReleaseInstaller } from "./pi-bolt-installer.ts";
 import { rollbackPiBolt } from "./pi-bolt-rollback.ts";
 import { isInProfile, updatePiBoltWindows } from "./pi-bolt-update-windows.ts";
+import { stripAnsi } from "./utils/ansi.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
@@ -921,6 +932,87 @@ async function runPiBoltSelfUpdate(version: string, options: { reinstall?: boole
 	return true;
 }
 
+/**
+ * `pi-bolt update --background`, which a session starts (pi-bolt-auto-update.ts): with the lock, when no other runs, the
+ * update `pi-bolt update` makes, to the latest release of the installation's channel, its output going to the session's log
+ * file and how it ended to <install>/auto-update.json. Returns 0 when it ran (whatever it found), 1 when it could not.
+ */
+async function runPiBoltBackgroundUpdate(currentVersion: string): Promise<number> {
+	const installDir = piBoltInstallDir();
+	if (!installDir) return 1;
+	let release: () => Promise<void>;
+	try {
+		release = await lockfile.lock(autoUpdatePaths(installDir).lock, {
+			realpath: false,
+			stale: AUTO_UPDATE_LOCK_STALE_MS,
+			// (A lock it could not renew is taken over by the next update after AUTO_UPDATE_LOCK_STALE_MS: nothing to stop here.)
+			onCompromised: () => {},
+		});
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+			console.log("Another Pi-Bolt is updating this installation.");
+			return 0;
+		}
+		throw error;
+	}
+	const checkedAt = Date.now();
+	// Another Pi-Bolt that started at the same moment may have run its update and let go of the lock before this one took it.
+	if (startedRecently(readAutoUpdateRecord(installDir), checkedAt)) {
+		await release();
+		console.log("Another Pi-Bolt updated this installation less than a day ago.");
+		return 0;
+	}
+	let result: AutoUpdateResult;
+	try {
+		// (The log is this update's from here; until now it was the last one's.)
+		truncateSync(autoUpdatePaths(installDir).log);
+	} catch {
+		// No log: run by hand, not by a session.
+	}
+	try {
+		writeAutoUpdateRecord(installDir, { checkedAt });
+		result = await backgroundUpdate(currentVersion, installDir);
+	} catch (error) {
+		result = { kind: "failed", reason: error instanceof Error ? error.message : String(error) };
+	}
+	try {
+		writeAutoUpdateRecord(installDir, { checkedAt, result });
+	} finally {
+		await release();
+	}
+	return 0;
+}
+
+/** The background update's lookup and update, and how it ended: what runPiBoltSelfUpdate prints, kept for its reason. */
+async function backgroundUpdate(currentVersion: string, installDir: string): Promise<AutoUpdateResult> {
+	const latest = await getLatestPiRelease(currentVersion, { retry: true });
+	if (!latest) return { kind: "failed", reason: "the latest release could not be found" };
+	if (!isNewerPackageVersion(latest.version, currentVersion)) return { kind: "current", version: currentVersion };
+	// (Extensions compiled into this build load from their files in the new one: an update compiles nothing.)
+	const compiledBefore =
+		buildHasCompiledExtensions(dirname(process.execPath)) && existsSync(join(installDir, "compile.json"));
+	const errors: string[] = [];
+	const error = console.error;
+	console.error = (...args: unknown[]) => {
+		errors.push(args.map(String).join(" "));
+		error(...args);
+	};
+	let installed: boolean;
+	try {
+		installed = await runPiBoltSelfUpdate(latest.version);
+	} finally {
+		console.error = error;
+	}
+	if (!installed) {
+		// (The first line runPiBoltSelfUpdate printed: "Error: <why>", without its colors.)
+		const reason = stripAnsi(errors[0] ?? "")
+			.replace(/^Error: /, "")
+			.replace(/\.$/, "");
+		return { kind: "failed", reason: reason || "the update did not finish", version: latest.version };
+	}
+	return { kind: "installed", version: latest.version, ...(compiledBefore ? { extensionsFromFiles: true } : {}) };
+}
+
 /** `pi-bolt update` on Windows for the installation in `installDir` (this executable's), without the installer. */
 async function runPiBoltWindowsUpdate(
 	version: string,
@@ -1193,6 +1285,11 @@ export async function handlePackageCommand(
 	args: string[],
 	runtimeOptions: PackageCommandRuntimeOptions = {},
 ): Promise<boolean> {
+	// Pi-Bolt: the update a session started in the background (pi-bolt-auto-update.ts).
+	if (PIBOLT && args[0] === "update" && args[1] === AUTO_UPDATE_ARGUMENT && args.length === 2) {
+		process.exitCode = await runPiBoltBackgroundUpdate(PIBOLT.version);
+		return true;
+	}
 	// Pi-Bolt: `pi-bolt compile` (pi-bolt-compile.ts). In Pi, `compile` stays a message to the model.
 	if (PIBOLT && args[0] === "compile") {
 		const build = PIBOLT;

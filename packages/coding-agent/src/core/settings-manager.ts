@@ -1064,6 +1064,20 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/**
+	 * `piBolt.autoUpdate`, from the global settings only: a project's settings cannot make Pi-Bolt install a release
+	 * (pi-bolt-auto-update.ts).
+	 */
+	getPiBoltAutoUpdate(): boolean {
+		return this.globalSettings.piBolt?.autoUpdate === true;
+	}
+
+	setPiBoltAutoUpdate(enabled: boolean): void {
+		this.globalSettings.piBolt = { ...this.globalSettings.piBolt, autoUpdate: enabled };
+		this.markModified("piBolt", "autoUpdate");
+		this.save();
+	}
+
 	/** "Don't ask again" for /remote-control's offer to install cloudflared. */
 	setRemoteControlAskCloudflared(ask: boolean): void {
 		const current = this.globalSettings.remoteControl;

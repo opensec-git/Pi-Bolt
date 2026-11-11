@@ -107,7 +107,9 @@ pi-bolt update --rollback       # put back the build it replaced
 pi-bolt update --channel beta   # take pre-releases too
 ```
 
-These update the installer's installations. For an npm install, `pi-bolt update` asks the npm registry for the latest version
+These update the installer's installations. To have Pi-Bolt install new releases in the background as a session starts (at
+most once a day; they start next time), turn on **Automatic updates** in `/settings`, which is off by default;
+`PIBOLT_NO_AUTO_UPDATE=1` turns it off for scripts and CI. For an npm install, `pi-bolt update` asks the npm registry for the latest version
 and prints the npm command that installs it; `pi-bolt update --rollback` says to install the version you want with
 `npm install -g --allow-scripts=pi-bolt pi-bolt@<version>`. Homebrew, Scoop and mise installs are updated with their own
 commands, which `pi-bolt update` prints.

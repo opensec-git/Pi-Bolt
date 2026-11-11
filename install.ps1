@@ -913,7 +913,7 @@ function Install-PiBolt {
 			Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
 			if (Test-Path -LiteralPath $dir.FullName) { Write-Host "  ${dim}$($dir.FullName) is in use (is Pi-Bolt running?): close it, then remove the folder$reset" }
 		}
-		foreach ($item in 'cache', 'compile.json', 'channel') {
+		foreach ($item in 'cache', 'compile.json', 'channel', 'auto-update.json', 'auto-update.log', 'auto-update.lock') {
 			Remove-Item -LiteralPath (Join-Path $install $item) -Recurse -Force -ErrorAction SilentlyContinue
 		}
 		if ((Test-Path -LiteralPath $install) -and -not (Get-ChildItem -LiteralPath $install -Force)) { Remove-Item -LiteralPath $install -Force }
