@@ -315,7 +315,7 @@ ${chalk.bold("Commands:")}
   ${COMMAND_NAME} update [source|self|pi]   Update ${PRODUCT_NAME}, extensions, or model catalogs
   ${COMMAND_NAME} list                      List installed extensions from settings
   ${COMMAND_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
-  ${COMMAND_NAME} auth <command>            Print credentials or check provider readiness
+  ${COMMAND_NAME} auth <command>            Log in or out, print credentials, or check provider readiness
   ${COMMAND_NAME} mcp <command>             Manage MCP servers
   ${COMMAND_NAME} service <command>         Remote control for paired phones at login: install/uninstall/status/pair/logs
   ${COMMAND_NAME} remote-control <command>  Turn remote control (the Pi-Bolt phone app) on or off: enable/disable/status

@@ -54,6 +54,7 @@ export async function executeBashWithOperations(
 	let outputChunks: string[] = [];
 	let outputStart = 0;
 	let outputBytes = 0;
+	let discardedOutput = false;
 	const maxOutputBytes = DEFAULT_MAX_BYTES * 2;
 
 	let tempFile: OutputFile | undefined;
@@ -102,6 +103,7 @@ export async function executeBashWithOperations(
 		while (outputBytes > maxOutputBytes && outputChunks.length - outputStart > 1) {
 			outputBytes -= outputChunks[outputStart].length;
 			outputStart++;
+			discardedOutput = true;
 		}
 		if (outputStart > 1024 && outputStart * 2 > outputChunks.length) {
 			outputChunks = outputChunks.slice(outputStart);
@@ -151,7 +153,7 @@ export async function executeBashWithOperations(
 		output: truncationResult.truncated ? truncationResult.content : fullOutput,
 		exitCode: cancelled ? undefined : (exitCode ?? undefined),
 		cancelled,
-		truncated: truncationResult.truncated,
+		truncated: discardedOutput || truncationResult.truncated,
 		fullOutputPath: tempFile?.opened ? tempFile.path : undefined,
 	};
 }

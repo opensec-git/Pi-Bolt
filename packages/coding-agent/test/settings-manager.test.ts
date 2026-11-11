@@ -3,6 +3,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
+import { SETTINGS_DEFAULTS } from "../src/core/settings-defaults.ts";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 
 describe("SettingsManager", () => {
@@ -424,7 +425,10 @@ describe("SettingsManager", () => {
 	});
 
 	describe("cacheWarming", () => {
-		it("defaults to streaming and ignores project settings", () => {
+		// Pi-Bolt keeps "streaming" as the default: "idle" re-sends the last request while the user is away, which spends
+		// their tokens without being asked, so it is opt-in (global settings only).
+		it("defaults to streaming, takes idle only from global settings, and ignores project settings", () => {
+			expect(SETTINGS_DEFAULTS.cacheWarming).toBe("streaming");
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
 
 			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "idle" }));

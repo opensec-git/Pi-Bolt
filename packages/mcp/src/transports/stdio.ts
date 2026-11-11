@@ -3,10 +3,10 @@ import { lstatSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import process from "node:process";
 import crossSpawn from "cross-spawn";
-import { type JsonRpcMessage, McpConnectionClosedError, parseJsonRpcMessage } from "../protocol/jsonrpc.ts";
-import { DEFAULT_MAX_MESSAGE_BYTES, type McpTransport, TransportEvents } from "./transport.ts";
+import { type JsonRpcMessage, McpConnectionClosedError } from "../protocol/jsonrpc.ts";
+import { JsonRpcLineReader } from "./lines.ts";
+import { type McpTransport, TransportEvents } from "./transport.ts";
 
-const DEFAULT_MAX_STDERR_BYTES = 64 * 1024;
 const DEFAULT_CLOSE_TIMEOUT_MS = 2_000;
 /** How long a server gets to exit on its own after stdin closes, before it is sent SIGTERM. */
 const STDIN_CLOSE_GRACE_MS = 500;
@@ -107,19 +107,20 @@ export interface StdioTransportOptions {
 export class StdioTransport extends TransportEvents implements McpTransport {
 	readonly options: Readonly<StdioTransportOptions>;
 	private child: ChildProcess | undefined;
-	/**
-	 * The unfinished stdout line, in the chunks it arrived in. Only new chunks are searched for "\n": growing one buffer
-	 * and searching it from the start per chunk makes a message of N bytes cost O(N^2) copying and scanning.
-	 */
-	private stdoutPending: Buffer[] = [];
-	private stdoutPendingBytes = 0;
-	private stderrBuffer = Buffer.alloc(0);
+	private readonly lines: JsonRpcLineReader;
 	private started = false;
 	private closed = false;
 
 	constructor(options: StdioTransportOptions) {
 		super();
 		this.options = Object.freeze({ ...options, args: options.args ? [...options.args] : undefined });
+		this.lines = new JsonRpcLineReader({
+			maxMessageBytes: this.options.maxMessageBytes,
+			maxStderrBytes: this.options.maxStderrBytes,
+			onStderr: this.options.onStderr,
+			onMessage: (message) => this.emitMessage(message),
+			onError: (error) => this.emitError(error),
+		});
 	}
 
 	get pid(): number | undefined {
@@ -127,7 +128,7 @@ export class StdioTransport extends TransportEvents implements McpTransport {
 	}
 
 	get stderr(): string {
-		return this.stderrBuffer.toString("utf8");
+		return this.lines.stderr;
 	}
 
 	async start(): Promise<void> {
@@ -150,22 +151,19 @@ export class StdioTransport extends TransportEvents implements McpTransport {
 		if (USE_PROCESS_GROUPS && pid !== undefined) {
 			installExitHook();
 			liveProcessGroups.add(pid);
-			child.once("exit", () => liveProcessGroups.delete(pid));
+			// Not on "exit": children of the server can outlive it while still holding its pipes.
+			child.once("close", () => liveProcessGroups.delete(pid));
 		}
-		child.stdout?.on("data", (chunk: Buffer | string) => this.handleStdout(chunk));
+		child.stdout?.on("data", (chunk: Buffer) => this.lines.readStdout(chunk));
 		child.stdout?.on("error", (error) => this.emitError(error));
 		child.stdin?.on("error", (error) => {
 			if (!this.closed) this.emitError(error);
 		});
-		child.stderr?.on("data", (chunk: Buffer | string) => this.handleStderr(chunk));
+		child.stderr?.on("data", (chunk: Buffer) => this.lines.readStderr(chunk));
 		child.stderr?.on("error", (error) => this.emitError(error));
 		child.on("close", () => {
 			this.child = undefined;
-			if (Buffer.concat(this.stdoutPending).toString("utf8").trim()) {
-				this.emitError(new Error("MCP stdio server closed with an incomplete JSON-RPC message"));
-			}
-			this.stdoutPending = [];
-			this.stdoutPendingBytes = 0;
+			this.lines.end();
 			this.emitClose();
 		});
 
@@ -203,7 +201,9 @@ export class StdioTransport extends TransportEvents implements McpTransport {
 			this.emitClose();
 			return;
 		}
-		if (child.exitCode !== null || child.signalCode !== null) {
+		// With process groups, a server that already exited can leave children holding its pipes; the
+		// group cleanup below still has to run for them.
+		if (!USE_PROCESS_GROUPS && (child.exitCode !== null || child.signalCode !== null)) {
 			child.stdin?.end();
 			return;
 		}
@@ -222,54 +222,5 @@ export class StdioTransport extends TransportEvents implements McpTransport {
 			timers.push(setTimeout(() => killProcessTree(child, "SIGKILL"), grace + closeTimeoutMs));
 			child.stdin?.end();
 		});
-	}
-
-	private handleStdout(chunk: Buffer | string): void {
-		const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-		const maxMessageBytes = this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES;
-		let start = 0;
-		for (let newline = data.indexOf(0x0a); newline !== -1; newline = data.indexOf(0x0a, start)) {
-			let line = data.subarray(start, newline);
-			start = newline + 1;
-			if (this.stdoutPending.length > 0) {
-				this.stdoutPending.push(line);
-				line = Buffer.concat(this.stdoutPending, this.stdoutPendingBytes + line.length);
-				this.stdoutPending = [];
-				this.stdoutPendingBytes = 0;
-			}
-			this.handleStdoutLine(line, maxMessageBytes);
-		}
-		if (start < data.length) {
-			const rest = data.subarray(start);
-			this.stdoutPending.push(rest);
-			this.stdoutPendingBytes += rest.length;
-			if (this.stdoutPendingBytes > maxMessageBytes) {
-				this.stdoutPending = [];
-				this.stdoutPendingBytes = 0;
-				this.emitError(new Error(`MCP stdio message exceeds ${maxMessageBytes} bytes`));
-			}
-		}
-	}
-
-	private handleStdoutLine(line: Buffer, maxMessageBytes: number): void {
-		if (line.length > maxMessageBytes) {
-			this.emitError(new Error(`MCP stdio message exceeds ${maxMessageBytes} bytes`));
-			return;
-		}
-		const text = line.toString("utf8").replace(/\r$/, "");
-		if (!text.trim()) return;
-		try {
-			this.emitMessage(parseJsonRpcMessage(JSON.parse(text)));
-		} catch (error) {
-			this.emitError(error);
-		}
-	}
-
-	private handleStderr(chunk: Buffer | string): void {
-		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-		const maxStderrBytes = this.options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
-		this.stderrBuffer = Buffer.concat([this.stderrBuffer, buffer]);
-		if (this.stderrBuffer.length > maxStderrBytes) this.stderrBuffer = this.stderrBuffer.subarray(-maxStderrBytes);
-		this.options.onStderr?.(buffer.toString("utf8"));
 	}
 }

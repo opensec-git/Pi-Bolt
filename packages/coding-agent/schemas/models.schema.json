@@ -552,6 +552,14 @@
           "type": "boolean",
           "description": "Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL."
         },
+        "requiresNonNullAssistantContent": {
+          "type": "boolean",
+          "description": "Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send \"\" instead of null content. Default: false."
+        },
+        "requiresToolsWithToolHistory": {
+          "type": "boolean",
+          "description": "Whether requests without tools must send \"tools\": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted."
+        },
         "requiresThinkingAsText": {
           "type": "boolean",
           "description": "Whether thinking blocks must be converted to text blocks with <thinking> delimiters. Default: auto-detected from URL."
@@ -1013,6 +1021,23 @@
           ],
           "description": "Session-affinity header format. Defaults are API-specific or auto-detected."
         },
+        "promptCacheKeyMode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "auto"
+            },
+            {
+              "type": "string",
+              "const": "enabled"
+            },
+            {
+              "type": "string",
+              "const": "disabled"
+            }
+          ],
+          "description": "Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto."
+        },
         "supportsLongCacheRetention": {
           "type": "boolean",
           "description": "Whether the provider supports long prompt cache retention. Defaults are API-specific or auto-detected."
@@ -1080,6 +1105,10 @@
           "type": "boolean",
           "description": "Whether the exact model accepts mid-conversation tool_addition and tool_removal blocks. Requires supportsMidConvoSystemMessages.",
           "default": false
+        },
+        "supportsMessageThreads": {
+          "type": "boolean",
+          "description": "Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field."
         },
         "allowedFallbackModels": {
           "type": "array",

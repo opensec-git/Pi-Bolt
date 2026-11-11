@@ -13,30 +13,25 @@ import type {
 import { estimateContextTokens } from "../utils/estimate.ts";
 
 const CONTEXT_SAFETY_TOKENS = 4096;
-/**
- * Share of the chars/3.5 estimate also kept free, since its error grows with the estimated text. Code and JSON often
- * run 3.0 to 3.2 chars per token, which the estimate undercounts by 9% to 17% (#10497 measured 3.19); 0.2 covers
- * ratios down to about 2.9. CJK text, at 1 to 1.5 chars per token, is undercounted 2 to 3.5 times; no margin covers
- * that and still leaves an output budget, so it relies on the provider's overflow error and compaction.
- */
-const ESTIMATE_SAFETY_RATIO = 0.2;
-/**
- * Smallest clamped output limit. Below it the request cannot produce an answer: a limit of 1 (or the 16 some APIs
- * raise it to) ends in an empty `length` response that is not recognized as an overflow (#11236). With this floor a
- * request whose estimate overshot still gets an answer, and one that really does not fit gets the provider's overflow
- * error, which triggers compaction. It equals the fixed margin, so the request exceeds the estimated window only when
- * the estimate alone leaves no room.
- */
-const MIN_CLAMPED_MAX_TOKENS = CONTEXT_SAFETY_TOKENS;
+// OpenRouter counts the input with its own tokenizer and rejects input + max_tokens above the
+// window before routing. It counted prose up to 12% above the provider's count (#10497).
+const CONTEXT_SAFETY_RATIO = 0.15;
+// The 15% margin is kept only while it leaves at least this much output. Otherwise (a nearly full
+// large window, or any small window such as a 32k local model) only the fixed margin is kept, and
+// output is capped at this size so an OpenRouter overcount still fits for a while before compaction.
+const MIN_OUTPUT_WITH_RATIO_MARGIN = 32768;
 const MIN_MAX_TOKENS = 1;
 
+/** Fit maxTokens into the context window, leaving room for the input being counted higher than estimated. */
 export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptContext, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
-	const estimate = estimateContextTokens(context);
-	// Reported usage is the provider's own count; only the estimated tail carries the chars/token error.
-	const margin = Math.max(CONTEXT_SAFETY_TOKENS, Math.ceil(estimate.trailingTokens * ESTIMATE_SAFETY_RATIO));
-	const available = model.contextWindow - estimate.tokens - margin;
-	return Math.min(maxTokens, Math.max(MIN_CLAMPED_MAX_TOKENS, available));
+	const input = estimateContextTokens(context).tokens;
+	const margin = Math.max(CONTEXT_SAFETY_TOKENS, Math.ceil(input * CONTEXT_SAFETY_RATIO));
+	let room = model.contextWindow - input - margin;
+	if (room < MIN_OUTPUT_WITH_RATIO_MARGIN) {
+		room = Math.min(MIN_OUTPUT_WITH_RATIO_MARGIN, model.contextWindow - input - CONTEXT_SAFETY_TOKENS);
+	}
+	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, room));
 }
 
 export function resolveSamplingParams(
@@ -70,6 +65,7 @@ export function buildBaseOptions(
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
 		immutableMessages: options?.immutableMessages,
+		disableContinuation: options?.disableContinuation,
 		headers: options?.headers,
 		identity: options?.identity,
 		onPayload: options?.onPayload,

@@ -371,7 +371,8 @@ describe("Markdown lexing of a growing source", () => {
 					{ head: "```ts\nconst a = 1;\n```\nA paragraph", grow: [" that", " grows", " on its first line"] },
 				];
 				for (const { head, grow } of cases) {
-					let source = `<!-- settled ${Math.random()} -->\n\n${head}`;
+					// (A first paragraph that no earlier test lexed. Not an HTML comment: those render no line, #11710.)
+					let source = `Settled ${Math.random()}\n\n${head}`;
 					let previous = lexMarkdownForTest(source);
 					const block = previous[2]!;
 					assert.ok(block.type === "list" || block.type === "code");
@@ -387,7 +388,7 @@ describe("Markdown lexing of a growing source", () => {
 						previous = tokens;
 					}
 					const grown = new Markdown(source, 1, 0, defaultMarkdownTheme).render(60);
-					// (The block's lines come first, after the comment's.)
+					// (The block's lines come first, after the first paragraph's.)
 					assert.deepStrictEqual(grown.slice(0, 4), lines.slice(0, 4));
 				}
 			} finally {

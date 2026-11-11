@@ -9,7 +9,7 @@ export function openaiCodexProvider(): Provider<"openai-codex-responses"> {
 	return withCatalogListing(
 		createProvider({
 			id: "openai-codex",
-			name: "OpenAI Codex (legacy)",
+			name: "OpenAI Codex",
 			baseUrl: "https://chatgpt.com/backend-api",
 			auth: {
 				oauth: lazyOAuth({

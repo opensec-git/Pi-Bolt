@@ -54,6 +54,9 @@ const DOCUMENTS: Record<string, string> = {
 	// A paragraph that leaves an inline <a> open: the paragraph after it is lexed in that state, so it is not settled by
 	// the blank line after it. (Only two: a block further back is lexed again from the lexer's first state, on the base too.)
 	openLink: `Use <a href="x">docs\n\nsee www.example.com for more and https://example.org at the end.\n`,
+	// Comment-only HTML blocks render no line (earendil-works/pi#11710): they are left out of the tokens rendered, not the
+	// tokens lexed, which a streaming reply is lexed from.
+	htmlComments: `<!-- start -->\n\n## Notes\n\n<!-- a -->\n\n- item one\n- item <!-- inline --> two\n\n  <!-- in item -->\n\n  still two\n\n> q\n>\n> <!-- quoted -->\n>\n> r\n\nSee <!-- todo --> the docs.\n\n<!-- multi\nline\n-->\ntext after\n\n<!-- unclosed at the end`,
 };
 
 /** Lines a fresh component gives with caching off: everything lexed and rendered from scratch. */
