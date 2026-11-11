@@ -1,7 +1,8 @@
 name: codeql
 
-# Code scanning: the workflows themselves (injection, permissions) and the TypeScript, on every push to pi-bolt, every pull
-# request and once a week. Results are in the repository's Security tab.
+# Code scanning: the workflows themselves (injection, permissions), the TypeScript and the Android app's Kotlin, on every
+# push to pi-bolt, every pull request and once a week. Results are in the repository's Security tab. Kotlin needs a build
+# CodeQL can watch (build mode none cannot read Kotlin), so that job compiles the app's main sources with Gradle.
 on:
   push:
     branches: [pi-bolt]
@@ -28,14 +29,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions, javascript-typescript]
+        include:
+          - language: actions
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: java-kotlin
+            build-mode: manual
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        if: ${{ matrix.language == 'java-kotlin' }}
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
       - uses: github/codeql-action/init@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ matrix.build-mode }}
           config-file: ./.github/codeql/codeql-config.yml
+      # CodeQL sees only compilations in its own process tree: no Gradle or Kotlin daemon, no build cache, every task run.
+      - name: Compile the Android app
+        if: ${{ matrix.language == 'java-kotlin' }}
+        working-directory: android
+        run: >-
+          ./gradlew --no-daemon --no-build-cache --no-configuration-cache --rerun-tasks
+          -Pkotlin.compiler.execution.strategy=in-process
+          :protocol:compileKotlin :app:compileReleaseKotlin
       - uses: github/codeql-action/analyze@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         with:
           category: /language:${{ matrix.language }}
