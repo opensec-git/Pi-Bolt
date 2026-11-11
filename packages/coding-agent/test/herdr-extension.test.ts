@@ -267,6 +267,28 @@ describe("Herdr extension", () => {
 		});
 	});
 
+	// PR #157 review: a refused session report left the state report queued behind it, so no state ever reached Herdr.
+	test("--herdr-pi still reports the state when Herdr refuses the session report", async () => {
+		const refused = { error: { code: "method_not_found", message: "unknown method" } };
+		const run = await startedInHerdr({
+			piIntegration: true,
+			answer: (request) => (request.method === "pane.report_agent_session" ? refused : { result: {} }),
+		});
+		await until(() => run.states().length === 1);
+		run.setIdle(false);
+		await run.fire("agent_start", { type: "agent_start" }, run.ctx);
+		await until(() => run.states().length === 2);
+		expect(run.states()).toEqual(["idle", "working"]);
+		// The session report goes first each time, two tries each, until Herdr takes one.
+		const methods = run.herdr.requests.map((r) => r.method);
+		expect(methods.slice(0, 3)).toEqual([
+			"pane.report_agent_session",
+			"pane.report_agent_session",
+			"pane.report_agent",
+		]);
+		expect(methods.filter((m) => m === "pane.report_agent_session").length).toBeGreaterThanOrEqual(4);
+	});
+
 	test("--herdr-pi releases the official Pi agent", async () => {
 		const run = await startedInHerdr({ piIntegration: true });
 		await until(() => run.herdr.requests.length === 3);

@@ -195,8 +195,10 @@ export function createHerdrExtension(
 						const { request } = queuedSession;
 						queuedSession = undefined;
 						// Keep the session report first: without it the source is not anchored and state reports are ignored.
-						if (!(await send(transport, request))) break;
-						sessionReported = true;
+						// One Herdr refuses (an older Herdr without pane.report_agent_session, or a validation error) must
+						// not hold back the state report behind it, or the sidebar stays empty: the state still goes, and
+						// the session report is tried again with the next one.
+						sessionReported = await send(transport, request);
 						continue;
 					}
 					if (!queued) break;
