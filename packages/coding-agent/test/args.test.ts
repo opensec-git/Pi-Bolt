@@ -428,6 +428,14 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--herdr-pi flag", () => {
+		test("parses --herdr-pi as a known flag, not an extension flag", () => {
+			const result = parseArgs(["--herdr-pi"]);
+			expect(result.herdrPi).toBe(true);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+	});
+
 	describe("--tui-mode flag", () => {
 		test.each(["regular", "fullscreen"] as const)("parses %s mode", (mode) => {
 			const result = parseArgs(["--tui-mode", mode]);

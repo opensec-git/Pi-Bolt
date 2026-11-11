@@ -68,6 +68,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { loadAcpMode } from "./extensions/acp/mode.lazy.ts";
 import { quietOtherHerdrReporters } from "./extensions/herdr/index.ts";
+import { startHerdrPi } from "./extensions/herdr/pi-name.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { loadMcpMode } from "./extensions/mcp-server/mode.lazy.ts";
@@ -771,6 +772,18 @@ export async function main(args: string[], options?: MainOptions) {
 
 	// The service runs headless as RPC does, whether or not it was started from a terminal.
 	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`: an
+	// interactive run in a Herdr pane re-execs itself under that name here, before the TUI (and its session) starts.
+	if (PIBOLT && parsed.herdrPi) {
+		const herdrPi = startHerdrPi(args, appMode === "interactive");
+		if (herdrPi === "not-pi-exe") {
+			console.error(
+				chalk.yellow("Warning: --herdr-pi needs a pi.exe process on Windows; reporting as pi-bolt instead"),
+			);
+		} else if (herdrPi === "re-exec-failed") {
+			console.error(chalk.yellow("Warning: could not start --herdr-pi; reporting as pi-bolt"));
+		}
+	}
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
