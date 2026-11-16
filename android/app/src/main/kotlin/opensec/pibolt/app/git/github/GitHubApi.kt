@@ -16,6 +16,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 @Immutable
 data class GitHubRepo(
@@ -31,6 +33,39 @@ data class GitHubRepo(
 
 @Immutable
 data class PullRequest(val number: Int, val url: String, val title: String)
+
+@Immutable
+data class GitHubRepoCreated(
+    val fullName: String,
+    val cloneUrl: String,
+    val htmlUrl: String,
+    val defaultBranch: String,
+)
+
+@Immutable
+data class GitHubIssue(
+    val number: Int,
+    val title: String,
+    val body: String?,
+    val htmlUrl: String,
+    val state: String,
+)
+
+@Immutable
+data class GitHubComment(
+    val id: Long,
+    val body: String,
+    val htmlUrl: String,
+)
+
+@Immutable
+data class GitHubContent(
+    val path: String,
+    val sha: String,
+    val size: Long,
+    val content: String?,
+    val downloadUrl: String?,
+)
 
 /** A GitHub call that failed, with a message for the user. [status] is the HTTP code (0 without an answer). */
 class GitHubException(message: String, val status: Int) : Exception(message)
@@ -89,6 +124,156 @@ class GitHubApi(
         val (json, _) = call("POST", "/repos/$owner/$name/pulls", payload.toString())
         val o = json.jsonObject
         return PullRequest(o.long("number")?.toInt() ?: 0, o.str("html_url").orEmpty(), o.str("title") ?: title)
+    }
+
+    /** Create a user repository (`gh repo create` equivalent). */
+    suspend fun createRepo(
+        name: String,
+        description: String? = null,
+        private: Boolean = true,
+        autoInit: Boolean = false,
+    ): GitHubRepoCreated {
+        val payload = buildJsonObject {
+            put("name", name)
+            description?.let { put("description", it) }
+            put("private", private)
+            put("auto_init", autoInit)
+        }
+        val (json, _) = call("POST", "/user/repos", payload.toString())
+        val o = json.jsonObject
+        return GitHubRepoCreated(
+            fullName = o.str("full_name") ?: throw GitHubException("GitHub sent an unexpected answer.", 200),
+            cloneUrl = o.str("clone_url") ?: "https://github.com/${o.str("full_name") ?: "x"}.git",
+            htmlUrl = o.str("html_url").orEmpty(),
+            defaultBranch = o.str("default_branch") ?: "main",
+        )
+    }
+
+    /** Read a file's contents from a repo (base64 decoded). Null when not found (404); other errors propagate. */
+    suspend fun getContents(owner: String, repo: String, path: String, ref: String? = null): GitHubContent? {
+        val url = "/repos/$owner/$repo/contents/${path.trimStart('/')}" + (ref?.let { "?ref=$it" } ?: "")
+        return try {
+            val (json, _) = call("GET", url, null)
+            val o = json.jsonObject
+            val encoded = o.str("content") ?: ""
+            val decoded = String(Base64.getDecoder().decode(encoded.replace("\n", "").replace("\r", "")), StandardCharsets.UTF_8)
+            GitHubContent(
+                path = o.str("path").orEmpty(),
+                sha = o.str("sha") ?: "",
+                size = o.long("size") ?: 0,
+                content = decoded,
+                downloadUrl = o.str("download_url"),
+            )
+        } catch (e: GitHubException) {
+            if (e.status == 404) null else throw e
+        }
+    }
+
+    /** Create or update a file (`gh api -X PUT .../contents` equivalent). Pass [currentSha] to update an existing file. */
+    suspend fun putContents(
+        owner: String,
+        repo: String,
+        path: String,
+        message: String,
+        content: String,
+        branch: String? = null,
+        currentSha: String? = null,
+    ): GitHubContent {
+        val payload = buildJsonObject {
+            put("message", message)
+            put("content", Base64.getEncoder().encodeToString(content.toByteArray(StandardCharsets.UTF_8)))
+            branch?.let { put("branch", it) }
+            currentSha?.let { put("sha", it) }
+        }
+        val (json, _) = call("PUT", "/repos/$owner/$repo/contents/${path.trimStart('/')}", payload.toString())
+        val o = (json as? JsonObject)?.get("content") as? JsonObject
+        return GitHubContent(
+            path = o?.str("path").orEmpty(),
+            sha = o?.str("sha") ?: "",
+            size = o?.long("size") ?: 0,
+            content = null,
+            downloadUrl = o?.str("download_url"),
+        )
+    }
+
+    /** Create an issue (`gh issue create` equivalent). */
+    suspend fun createIssue(
+        owner: String,
+        repo: String,
+        title: String,
+        body: String? = null,
+        labels: List<String> = emptyList(),
+    ): GitHubIssue {
+        val payload = buildJsonObject {
+            put("title", title)
+            body?.let { put("body", it) }
+            if (labels.isNotEmpty()) put("labels", labels.joinToString(","))
+        }
+        val (json, _) = call("POST", "/repos/$owner/$repo/issues", payload.toString())
+        val o = json.jsonObject
+        return GitHubIssue(
+            number = o.str("number")?.toIntOrNull() ?: 0,
+            title = o.str("title") ?: title,
+            body = o.str("body"),
+            htmlUrl = o.str("html_url").orEmpty(),
+            state = o.str("state") ?: "open",
+        )
+    }
+
+    /** List issues (`gh issue list` equivalent), [state] = open/closed/all. */
+    suspend fun listIssues(owner: String, repo: String, state: String = "open"): List<GitHubIssue> {
+        val (json, _) = call("GET", "/repos/$owner/$repo/issues?state=$state&per_page=50", null)
+        return (json as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o ->
+            GitHubIssue(
+                number = o.str("number")?.toIntOrNull() ?: 0,
+                title = o.str("title") ?: "",
+                body = o.str("body"),
+                htmlUrl = o.str("html_url").orEmpty(),
+                state = o.str("state") ?: "open",
+            )
+        } }
+    }
+
+    /** Comment on an issue or pull request. */
+    suspend fun createComment(owner: String, repo: String, issueNumber: Int, body: String): GitHubComment {
+        val payload = buildJsonObject { put("body", body) }
+        val (json, _) = call("POST", "/repos/$owner/$repo/issues/$issueNumber/comments", payload.toString())
+        val o = json.jsonObject
+        return GitHubComment(
+            id = o.long("id") ?: 0,
+            body = o.str("body").orEmpty(),
+            htmlUrl = o.str("html_url").orEmpty(),
+        )
+    }
+
+    /** List pull requests (`gh pr list` equivalent), [state] = open/closed/all. */
+    suspend fun listPullRequests(owner: String, repo: String, state: String = "open"): List<PullRequest> {
+        val (json, _) = call("GET", "/repos/$owner/$repo/pulls?state=$state&per_page=50", null)
+        return (json as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let { o ->
+            PullRequest(o.str("number")?.toIntOrNull() ?: 0, o.str("html_url").orEmpty(), o.str("title") ?: "")
+        } }
+    }
+
+    /** Trigger a GitHub Actions workflow_dispatch (`gh workflow run` equivalent). */
+    suspend fun dispatchWorkflow(
+        owner: String,
+        repo: String,
+        workflowId: String,
+        ref: String = "main",
+        inputs: Map<String, String> = emptyMap(),
+    ): Boolean {
+        val payload = buildJsonObject {
+            put("ref", ref)
+            if (inputs.isNotEmpty()) {
+                put("inputs", buildJsonObject { for ((k, v) in inputs) put(k, v) })
+            }
+        }
+        return try {
+            call("POST", "/repos/$owner/$repo/actions/workflows/$workflowId/dispatches", payload.toString())
+            true
+        } catch (e: GitHubException) {
+            if (e.status == 204) true else throw e
+        }
     }
 
     private fun repoOf(o: JsonObject): GitHubRepo? {
