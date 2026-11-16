@@ -1,4 +1,4 @@
-// pibolt-github v1: written by the Rapid Pi Android app; do not edit (it is rewritten).
+// pibolt-github v2: written by the Rapid Pi Android app; do not edit (it is rewritten).
 // GitHub REST API tools for the agent: create repos, read/write files, issues, comments, pull requests, Actions.
 // Needs GITHUB_TOKEN in the environment (set by the app when signed in to GitHub via Settings).
 // Reads are available to any session; writes change GitHub data — the model should confirm with the user first.
@@ -42,7 +42,12 @@ async function gh(method, path, body) {
 			detail = j.message || text;
 			if (j.errors) detail += " (" + j.errors.map((e) => e.message || e.code).join(", ") + ")";
 		} catch {}
-		throw new Error(`GitHub ${res.status}: ${detail}`);
+		const status = res.status;
+		let hint = "";
+		if (status === 401) hint = " Token invalid or revoked — sign in again in Settings > Agent > GitHub.";
+		else if (status === 403) hint = " Token lacks permission — it needs the repo scope.";
+		else if (status === 404) hint = " Repository not found, or the token can't see it. Check owner/repo and that you have access.";
+		throw new Error(`GitHub ${status}: ${detail}${hint}`);
 	}
 	if (!text) return null;
 	return JSON.parse(text);
@@ -52,11 +57,28 @@ function text(t, details) {
 	return { content: [{ type: "text", text: t }], details };
 }
 
-function repoPath(repo, path) {
-	const [owner, name] = repo.split("/");
+/** Parse owner/repo, returning [owner, name] or null when malformed. */
+function splitRepo(repo) {
+	const parts = String(repo).split("/");
+	if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+	return parts;
+}
+
+/** Build a /repos/owner/repo<path> URL with owner and name encoded separately (slash preserved). */
+function repoUrl(repo, path) {
+	const p = splitRepo(repo);
+	if (!p) throw new Error(`Invalid repository '${repo}': use owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'`);
+	const owner = encodeURIComponent(p[0]);
+	const name = encodeURIComponent(p[1]);
 	const cleanPath = path.startsWith("/") ? path.slice(1) : path;
-	const segments = cleanPath.split("/").map(segment => encodeURIComponent(segment));
-	return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${segments.join("/")}`;
+	return `/repos/${owner}/${name}/${cleanPath}`;
+}
+
+function repoContentsUrl(repo, path) {
+	const p = splitRepo(repo);
+	if (!p) throw new Error(`Invalid repository '${repo}': use owner/repo`);
+	const segments = path.split("/").map(segment => encodeURIComponent(segment));
+	return `/repos/${encodeURIComponent(p[0])}/${encodeURIComponent(p[1])}/contents/${segments.join("/")}`;
 }
 
 export default function (pi) {
@@ -68,14 +90,14 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				path: { type: "string", description: "File path in the repo, e.g. 'README.md'" },
 				ref: { type: "string", description: "Branch, tag or commit SHA (default: the repo's default branch)" },
 			},
 			required: ["repo", "path"],
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			const url = repoPath(params.repo, `contents/${params.path}`) + (params.ref ? `?ref=${encodeURIComponent(params.ref)}` : "");
+			const url = repoContentsUrl(params.repo, params.path) + (params.ref ? `?ref=${encodeURIComponent(params.ref)}` : "");
 			const data = await gh("GET", url);
 			if (!data) throw new Error("Empty answer from GitHub");
 			let content = data.content || "";
@@ -97,7 +119,7 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				path: { type: "string", description: "File path in the repo, e.g. 'src/main.ts'" },
 				message: { type: "string", description: "Commit message" },
 				content: { type: "string", description: "File contents" },
@@ -113,7 +135,7 @@ export default function (pi) {
 			};
 			if (params.branch) payload.branch = params.branch;
 			if (params.currentSha) payload.sha = params.currentSha;
-			const data = await gh("PUT", repoPath(params.repo, `contents/${params.path}`), payload);
+			const data = await gh("PUT", repoContentsUrl(params.repo, params.path), payload);
 			const c = data.content;
 			return text(
 				`Wrote ${params.path} in ${params.repo} (commit ${c.sha})`,
@@ -158,7 +180,7 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				title: { type: "string", description: "Issue title" },
 				body: { type: "string", description: "Issue body" },
 				labels: { type: "array", items: { type: "string" }, description: "Label names to apply" },
@@ -169,7 +191,7 @@ export default function (pi) {
 			const payload = { title: params.title };
 			if (params.body) payload.body = params.body;
 			if (params.labels) payload.labels = params.labels;
-			const data = await gh("POST", `/repos/${encodeURIComponent(params.repo)}/issues`, payload);
+			const data = await gh("POST", repoUrl(params.repo, "issues"), payload);
 			return text(
 				`Created issue #${data.number} in ${params.repo}`,
 				{ number: data.number, title: data.title, htmlUrl: data.html_url, state: data.state },
@@ -177,7 +199,7 @@ export default function (pi) {
 		},
 	});
 
-	/** List open issues in a GitHub repo. */
+	/** List issues in a GitHub repo. Returns empty list when there are none (not an error). */
 	pi.registerTool({
 		name: "github_list_issues",
 		label: "List GitHub issues",
@@ -185,16 +207,17 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				state: { type: "string", description: "open, closed or all (default: open)" },
 			},
 			required: ["repo"],
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const state = params.state || "open";
-			const data = await gh("GET", `/repos/${encodeURIComponent(params.repo)}/issues?state=${state}&per_page=50`);
-			const lines = (data || []).map((i) => `#${i.number} ${i.title} — ${i.state}`).join("\n") || "No issues.";
-			return text(lines, { count: (data || []).length, state });
+			const data = await gh("GET", repoUrl(params.repo, `issues?state=${encodeURIComponent(state)}&per_page=50`));
+			const list = data || [];
+			const lines = list.map((i) => `#${i.number} ${i.title} — ${i.state}`).join("\n") || "No issues.";
+			return text(lines, { count: list.length, state, repo: params.repo });
 		},
 	});
 
@@ -206,14 +229,14 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				issueNumber: { type: "number", description: "Issue or pull request number" },
 				body: { type: "string", description: "Comment body" },
 			},
 			required: ["repo", "issueNumber", "body"],
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			const data = await gh("POST", `/repos/${encodeURIComponent(params.repo)}/issues/${params.issueNumber}/comments`, { body: params.body });
+			const data = await gh("POST", repoUrl(params.repo, `issues/${params.issueNumber}/comments`), { body: params.body });
 			return text(
 				`Commented on #${params.issueNumber} in ${params.repo}`,
 				{ id: data.id, htmlUrl: data.html_url },
@@ -221,7 +244,7 @@ export default function (pi) {
 		},
 	});
 
-	/** List pull requests in a GitHub repo. */
+	/** List pull requests in a GitHub repo. Returns empty list when there are none (not an error). */
 	pi.registerTool({
 		name: "github_list_prs",
 		label: "List GitHub pull requests",
@@ -229,16 +252,17 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				state: { type: "string", description: "open, closed or all (default: open)" },
 			},
 			required: ["repo"],
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const state = params.state || "open";
-			const data = await gh("GET", `/repos/${encodeURIComponent(params.repo)}/pulls?state=${state}&per_page=50`);
-			const lines = (data || []).map((p) => `!${p.number} ${p.title} — ${p.state}`).join("\n") || "No pull requests.";
-			return text(lines, { count: (data || []).length, state });
+			const data = await gh("GET", repoUrl(params.repo, `pulls?state=${encodeURIComponent(state)}&per_page=50`));
+			const list = data || [];
+			const lines = list.map((p) => `!${p.number} ${p.title} — ${p.state}`).join("\n") || "No pull requests.";
+			return text(lines, { count: list.length, state, repo: params.repo });
 		},
 	});
 
@@ -250,7 +274,7 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				title: { type: "string", description: "Pull request title" },
 				body: { type: "string", description: "Pull request body" },
 				head: { type: "string", description: "Head branch, e.g. 'feature-branch'" },
@@ -259,7 +283,7 @@ export default function (pi) {
 			required: ["repo", "title", "head", "base"],
 		},
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			const data = await gh("POST", `/repos/${encodeURIComponent(params.repo)}/pulls`, {
+			const data = await gh("POST", repoUrl(params.repo, "pulls"), {
 				title: params.title,
 				body: params.body || "",
 				head: params.head,
@@ -280,7 +304,7 @@ export default function (pi) {
 		parameters: {
 			type: "object",
 			properties: {
-				repo: { type: "string", description: "owner/repo, e.g. 'ylstack1/my-app'" },
+				repo: { type: "string", description: "owner/repo, e.g. 'yl-stack/yl-agent-runtime-test'" },
 				workflow: { type: "string", description: "Workflow file name or id, e.g. 'ci.yml'" },
 				ref: { type: "string", description: "Branch or tag to run on (default: 'main')" },
 				inputs: { type: "object", description: "Workflow input key/value pairs" },
@@ -290,7 +314,7 @@ export default function (pi) {
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const payload = { ref: params.ref || "main" };
 			if (params.inputs) payload.inputs = params.inputs;
-			await gh("POST", `/repos/${encodeURIComponent(params.repo)}/actions/workflows/${encodeURIComponent(params.workflow)}/dispatches`, payload);
+			await gh("POST", repoUrl(params.repo, `actions/workflows/${encodeURIComponent(params.workflow)}/dispatches`), payload);
 			return text(`Triggered workflow ${params.workflow} in ${params.repo}`, { workflow: params.workflow, ref: payload.ref });
 		},
 	});
