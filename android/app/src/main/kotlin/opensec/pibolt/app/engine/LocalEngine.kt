@@ -519,6 +519,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             AppExtension.install(paths.agentDir)
             BackgroundJobs.install(paths.agentDir, app.assets)
             PreviewExtension.install(paths.agentDir) { app.assets.open(PreviewExtension.ASSET) }
+            GithubExtension.install(paths.agentDir, app.assets)
             val how = if (full) "installed (kept ${prefix.kept.size} unchanged trees)" else "up to date"
             Log.i(TAG, "prepare: prefix $how, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
@@ -630,7 +631,9 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
                 val env = environment()
                 // Project engines on this phone get the preview tools' socket; chats do not (no preview_* tools there).
                 val preview = if (isChat(cwd)) emptyMap() else app.previewBroker.environment()
-                val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env, app.github.gitEnvironment() + preview)
+                // The GitHub token, so the pibolt-github extension can call the REST API (GITHUB_TOKEN env var).
+                val githubToken = if (app.github.token().isNullOrEmpty()) emptyMap() else mapOf("GITHUB_TOKEN" to app.github.token()!!)
+                val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env, app.github.gitEnvironment() + preview + githubToken)
                 env.clear()
                 // The project's secrets as variables (never in the model's messages).
                 env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))

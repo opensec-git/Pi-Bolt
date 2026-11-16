@@ -66,6 +66,9 @@ class GitHub(
 
     val account: GitHubAccount? get() = (_state.value as? GitHubState.SignedIn)?.account
 
+    /** The signed-in token, for the app's own GitHub REST calls (the extension's GITHUB_TOKEN env var). Null when signed out. */
+    fun token(): String? = store.token()
+
     fun deviceFlow(): DeviceFlow = DeviceFlow(http, clientId, webBase)
 
     /** Checks [token] against `/user`, then stores it sealed. The token is not kept anywhere else. */
