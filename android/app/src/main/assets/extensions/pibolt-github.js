@@ -129,7 +129,7 @@ export default function (pi) {
 			properties: {
 				name: { type: "string", description: "Repository name, e.g. 'my-app'" },
 				description: { type: "string", description: "Repository description" },
-				`private`: { type: "boolean", description: "Private repo (default: true)" },
+				"private": { type: "boolean", description: "Private repo (default: true)" },
 				autoInit: { type: "boolean", description: "Create an initial commit with a README (default: false)" },
 			},
 			required: ["name"],
