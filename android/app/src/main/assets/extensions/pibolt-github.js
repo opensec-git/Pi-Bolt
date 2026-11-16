@@ -53,7 +53,10 @@ function text(t, details) {
 }
 
 function repoPath(repo, path) {
-	return `/repos/${encodeURIComponent(repo)}/${encodeURIComponent(path.startsWith("/") ? path.slice(1) : path)}`;
+	const [owner, name] = repo.split("/");
+	const cleanPath = path.startsWith("/") ? path.slice(1) : path;
+	const segments = cleanPath.split("/").map(segment => encodeURIComponent(segment));
+	return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/contents/${segments.join("/")}`;
 }
 
 export default function (pi) {
