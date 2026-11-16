@@ -632,7 +632,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
                 // Project engines on this phone get the preview tools' socket; chats do not (no preview_* tools there).
                 val preview = if (isChat(cwd)) emptyMap() else app.previewBroker.environment()
                 // The GitHub token, so the pibolt-github extension can call the REST API (GITHUB_TOKEN env var).
-                val githubToken = if (app.github.token().isNullOrEmpty()) emptyMap() else mapOf("GITHUB_TOKEN" to app.github.token()!!)
+                val gitHubToken = app.github.token()?.takeIf { it.isNotEmpty() }
+                val githubToken = if (gitHubToken == null) emptyMap() else mapOf("GITHUB_TOKEN" to gitHubToken)
                 val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env, app.github.gitEnvironment() + preview + githubToken)
                 env.clear()
                 // The project's secrets as variables (never in the model's messages).
