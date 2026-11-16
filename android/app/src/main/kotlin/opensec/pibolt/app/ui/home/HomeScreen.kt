@@ -52,6 +52,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -65,6 +67,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.shape.CircleShape
@@ -73,6 +76,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.semantics.contentDescription
 import opensec.rapidpi.app.ui.components.GlassIconButton
 import opensec.rapidpi.app.ui.components.glass
@@ -122,10 +126,10 @@ import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Mic
 import opensec.rapidpi.app.PiBoltApp
+import opensec.rapidpi.app.R
 import opensec.rapidpi.app.data.Host
 import opensec.rapidpi.app.data.ProjectStore
 import opensec.rapidpi.app.engine.EngineStatus
-import opensec.rapidpi.app.ui.components.BrandMark
 import opensec.rapidpi.app.ui.components.ConfirmSheet
 import opensec.rapidpi.app.ui.components.PiSnackHost
 import opensec.rapidpi.app.ui.components.SnackKind
@@ -440,16 +444,20 @@ fun HomeScreen(
             modifier = Modifier.align(Alignment.TopCenter).fillMaxHeight().widthIn(max = HOME_MAX_WIDTH).fillMaxWidth(),
         ) {
             item(key = "header", contentType = "header") {
-                // The brand is the title: the bare bolt at the title's cap height and "Rapid Pi" in largeTitle, with
-                // Settings and + as glass buttons on the same centre line. Today's spending, when there is any, follows.
+                // The brand is the landscape logo mark; Settings and + sit on the same centre line. Today's
+                // spending, when there is any, follows.
                 val spent = rememberTodayLine(app) != null
                 Row(
                     Modifier.statusBarsPadding().fillMaxWidth().heightIn(min = if (spent) 56.dp else 72.dp).padding(start = Space.page, end = Space.page - Space.xxs, top = Space.sm, bottom = if (spent) 0.dp else Space.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    BrandMark(size = 26.dp, play = false, modifier = Modifier.clearAndSetSemantics { })
-                    Spacer(Modifier.width(Space.sm))
-                    Text("Rapid Pi", style = type.largeTitle, color = colors.ink1, maxLines = 1, modifier = Modifier.weight(1f).semantics { heading() })
+                    Image(
+                        painter = painterResource(R.drawable.ic_rapidpi_header),
+                        contentDescription = "Rapid Pi",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.height(40.dp),
+                    )
+                    Spacer(Modifier.weight(1f))
                     GlassIconButton(Icons.Rounded.Settings, "Settings", onClick = onSettings)
                     if (hasProjects) {
                         Box {
