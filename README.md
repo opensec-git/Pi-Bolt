@@ -310,7 +310,12 @@ the run started as `pi.exe` stores the session.
 <summary><a id="paseo"></a><b>Paseo</b></summary>
 
 [Paseo](https://paseo.sh) starts Pi with `pi --mode rpc`, and Pi-Bolt takes the same arguments and speaks the same protocol.
-To add Pi-Bolt as a provider next to Pi, put this in `~/.paseo/config.json`:
+The shell installer offers to add Pi-Bolt next to Pi when it detects Paseo. Set `PIBOLT_PASEO=yes` to add it without asking,
+or `PIBOLT_PASEO=no` to skip; unattended installs skip it by default. It uses the installed command's full path in
+`${PASEO_HOME:-$HOME/.paseo}/config.json`, leaves an existing `pi-bolt` provider unchanged, and does not reload or restart
+Paseo. Run `paseo reload` for that home afterward. Uninstalling Pi-Bolt leaves Paseo's configuration in place.
+
+To add it manually, merge this into `~/.paseo/config.json` (or `$PASEO_HOME/config.json`):
 
 ```json
 {
