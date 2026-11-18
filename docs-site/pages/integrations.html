@@ -11,6 +11,11 @@
   executable.</p>
 
 <h3>Paseo</h3>
+<p>The shell installer offers to add Pi-Bolt as a separate provider when it detects Paseo. Set <code>PIBOLT_PASEO=yes</code>
+  to add it without asking, or <code>PIBOLT_PASEO=no</code> to skip; unattended installs skip it by default. It uses the
+  installed command's full path in <code>${PASEO_HOME:-$HOME/.paseo}/config.json</code> and leaves an existing
+  <code>pi-bolt</code> provider unchanged. It does not reload or restart Paseo: run <code>paseo reload</code> for that home
+  afterward. Uninstalling Pi-Bolt leaves Paseo's configuration in place.</p>
 <p><a href="https://paseo.sh">Paseo</a> runs Pi through its <code>pi</code> provider. To run every Pi agent on Pi-Bolt, change
   that provider's command in <code>~/.paseo/config.json</code>:</p>
 <pre data-label="~/.paseo/config.json">{ "agents": { "providers": { "pi": { "command": ["pi-bolt"] } } } }</pre>
