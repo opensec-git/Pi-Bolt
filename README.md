@@ -221,6 +221,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 - **Updates:** `pi-bolt update` installs the latest release, and `--rollback` puts back the build it replaced.
 - **Herdr:** Pi-Bolt shows its state in a [Herdr](https://herdr.dev) pane, and a Herdr restart reopens the conversation.
   [Details](#herdr)
+- **Paseo:** [Paseo](https://paseo.sh) runs Pi-Bolt as a provider of its own next to Pi, or in place of it.
+  [Details](#paseo)
 - **ARM64 and Android:** Linux ARM64 builds, and the same installer in Termux. [Android](#android-termux)
 
 Pi extensions work unchanged. The default build has no JIT, so an extension loaded at run time is interpreted; compile the ones
@@ -301,6 +303,39 @@ a display-only metadata report keeps the sidebar naming `Pi-Bolt`. Windows has n
 `pi.exe`, a hardlink or a copy, and pass `--herdr-pi`; a process named otherwise gets a startup warning and reports as
 `pi-bolt`. The resume command starts `pi-bolt` either way, so on Windows a restored pane reports as `pi-bolt` again and only
 the run started as `pi.exe` stores the session.
+
+</details>
+
+<details>
+<summary><a id="paseo"></a><b>Paseo</b></summary>
+
+[Paseo](https://paseo.sh) starts Pi with `pi --mode rpc`, and Pi-Bolt takes the same arguments and speaks the same protocol.
+The shell installer offers to add Pi-Bolt next to Pi when it detects Paseo. Set `PIBOLT_PASEO=yes` to add it without asking,
+or `PIBOLT_PASEO=no` to skip; unattended installs skip it by default. It uses the installed command's full path in
+`${PASEO_HOME:-$HOME/.paseo}/config.json`, leaves an existing `pi-bolt` provider unchanged, and does not reload or restart
+Paseo. Run `paseo reload` for that home afterward. Uninstalling Pi-Bolt leaves Paseo's configuration in place.
+
+To add it manually, merge this into `~/.paseo/config.json` (or `$PASEO_HOME/config.json`):
+
+```json
+{
+  "agents": {
+    "providers": {
+      "pi-bolt": { "extends": "pi", "label": "Pi-Bolt", "command": ["pi-bolt"] }
+    }
+  }
+}
+```
+
+`"extends": "pi"` tells Paseo to drive it the way it drives Pi; `command` only changes the executable. Use the full path that
+`command -v pi-bolt` prints if Paseo's daemon does not have `pi-bolt` on its `PATH`. Run `paseo reload` or restart Paseo, then
+pick Pi-Bolt in the app or run `paseo run --provider pi-bolt "your task"`. `paseo provider diagnostic pi-bolt` shows the
+executable and version Paseo found.
+
+To run every Pi agent on Pi-Bolt instead, change the command of the `pi` provider:
+`{ "agents": { "providers": { "pi": { "command": ["pi-bolt"] } } } }`.
+
+Pi-Bolt reads Pi's settings, sign-ins and sessions, so there is nothing else to configure.
 
 </details>
 
