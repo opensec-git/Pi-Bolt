@@ -290,6 +290,24 @@ def main():
                 sys.exit(f"{name}: the run did not complete")
             print(f"{name}: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
 
+        # The TUI session once untraced first: a session that fails on its own is the build's fault, not the tracer's.
+        check = Tty([exe, "--no-session", *MODEL_ARGS], env, cwd)
+        check_deadline = time.perf_counter() + 300
+        check_ok = check.wait_for("fake-model", 0, check_deadline)
+        if check_ok:
+            check.settle(0.2, check_deadline)
+            check_since = len(check.buf)
+            check.send(PROMPT.encode() + b"\r")
+            check_ok = check.wait_for(done(1), check_since, check_deadline)
+        check_screen = ANSI.sub(b"", check.buf[-4000:]).decode("utf-8", "replace")
+        check_ended = check.eof
+        check.send(b"/quit\r")
+        check.console.close()
+        if not check_ok:
+            print(f"TUI without tracing: no answer; ended: {check_ended}; the output's last part:\n{check_screen}", flush=True)
+            sys.exit("TUI: the session does not complete even without tracing")
+        print("TUI without tracing: the session completes", flush=True)
+
         plain("--version", ["--version"], "Pi-Bolt")
         plain("headless", ["-p", "--no-session", *MODEL_ARGS, PROMPT], DONE)
         # The TUI: started on this thread (a debuggee is the thread's that made it), driven from another.
