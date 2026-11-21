@@ -209,7 +209,16 @@ interface LineIndex {
 	checkpoints: { offset: number; newlines: number }[];
 	spacing: number;
 	totalLines?: number;
+	/** When the index was last stored, in ms since the epoch. */
+	storedAt?: number;
 }
+
+/**
+ * A file changed this close to when its index was stored can change again with the same size and timestamps (coarse
+ * kernel clocks, two-second FAT times). Such an index is not reused, as Git treats racily clean entries. The change
+ * time is used because, unlike the modification time, it cannot be set back.
+ */
+const RACY_CHANGE_MS = 2000;
 
 function sameFileVersion(a: BigIntStats, b: BigIntStats): boolean {
 	return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
@@ -396,7 +405,9 @@ class LargeFileReader {
 				readSelectionInChunks(file, startLine, endLine, DEFAULT_MAX_BYTES + 4, isAborted, index);
 			if (!stat.isFile() || stat.ino === 0n) return await read();
 			const index: LineIndex =
-				this.last && sameFileVersion(this.last.stat, stat)
+				this.last?.storedAt !== undefined &&
+				sameFileVersion(this.last.stat, stat) &&
+				Number(stat.ctimeNs / 1_000_000n) + RACY_CHANGE_MS < this.last.storedAt
 					? this.last
 					: {
 							stat,
@@ -410,6 +421,7 @@ class LargeFileReader {
 				index.nextPage = selection.nextPage;
 				if (selection.lastOpenPage) index.lastOpenPage = selection.lastOpenPage;
 				if (selection.byteExactSuffix) index.byteExactSuffix = selection.byteExactSuffix;
+				index.storedAt = Date.now();
 				this.last = index;
 			} else if (index.totalLines !== undefined) {
 				// The ranged read raced a write. Positional reads left the handle at byte zero for a fresh scan.

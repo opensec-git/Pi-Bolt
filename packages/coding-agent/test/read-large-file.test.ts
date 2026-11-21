@@ -52,9 +52,13 @@ describe("read tool on files read in chunks", () => {
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pi-read-large-"));
+		// Fixtures are written just before they are read. Index reuse waits until a change is older than two seconds.
+		const now = Date.now.bind(Date);
+		vi.spyOn(Date, "now").mockImplementation(() => now() + 60_000);
 	});
 
 	afterAll(() => {
+		vi.restoreAllMocks();
 		rmSync(dir, { recursive: true, force: true });
 	});
 
