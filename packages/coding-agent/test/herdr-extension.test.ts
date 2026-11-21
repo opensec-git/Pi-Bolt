@@ -3,7 +3,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { COMMAND_NAME } from "../src/config.ts";
+import { COMMAND_NAME, PRODUCT_NAME } from "../src/config.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
 import { createHerdrExtension, quietOtherHerdrReporters, resumeArgv } from "../src/extensions/herdr/index.ts";
 import { isHerdrPiIntegration } from "../src/extensions/herdr/integration-file.ts";
@@ -95,13 +95,14 @@ async function startedInHerdr(
 		mode?: string;
 		sessionFile?: string;
 		answer?: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>>;
+		piIntegration?: boolean;
 	} = {},
 ) {
 	const herdr = await fakeHerdr(options.answer);
 	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: herdr.socketPath, HERDR_PANE_ID: "w1:p2" };
 	const fake = fakePi();
 	let idle = true;
-	createHerdrExtension(env)(fake.pi);
+	createHerdrExtension(env, process.platform, () => options.piIntegration === true)(fake.pi);
 	const ctx = context({ mode: options.mode, idle: () => idle, sessionFile: options.sessionFile ?? "/work/s.jsonl" });
 	await fake.fire("session_start", { type: "session_start", reason: "startup" }, ctx);
 	const states = () => herdr.requests.filter((r) => r.method === "pane.report_agent").map((r) => r.params.state);
@@ -230,6 +231,70 @@ describe("Herdr extension", () => {
 		expect(run.herdr.requests).toEqual([]);
 	});
 
+	test("--herdr-pi reports as the official Pi integration and keeps the Pi-Bolt name", async () => {
+		const run = await startedInHerdr({ piIntegration: true });
+		await until(() => run.herdr.requests.length === 3);
+		expect(run.herdr.requests[0].params).toMatchObject({
+			pane_id: "w1:p2",
+			source: "herdr:pi",
+			agent: "pi",
+			agent_session_path: "/work/s.jsonl",
+			session_start_source: "startup",
+			resume_argv: [COMMAND_NAME, "--herdr-pi", "--session", "/work/s.jsonl"],
+		});
+		expect(run.herdr.requests[1].params).toMatchObject({
+			pane_id: "w1:p2",
+			source: "herdr:pi",
+			agent: "pi",
+			state: "idle",
+			agent_session_path: "/work/s.jsonl",
+			resume_argv: [COMMAND_NAME, "--herdr-pi", "--session", "/work/s.jsonl"],
+		});
+		expect(run.herdr.requests[2]).toMatchObject({
+			method: "pane.report_metadata",
+			params: {
+				pane_id: "w1:p2",
+				source: "pi-bolt",
+				agent: "pi",
+				applies_to_source: "herdr:pi",
+				display_agent: PRODUCT_NAME,
+			},
+		});
+	});
+
+	// PR #157 review: a refused session report left the state report queued behind it, so no state ever reached Herdr.
+	test("--herdr-pi still reports the state when Herdr refuses the session report", async () => {
+		const refused = { error: { code: "method_not_found", message: "unknown method" } };
+		const run = await startedInHerdr({
+			piIntegration: true,
+			answer: (request) => (request.method === "pane.report_agent_session" ? refused : { result: {} }),
+		});
+		await until(() => run.states().length === 1);
+		run.setIdle(false);
+		await run.fire("agent_start", { type: "agent_start" }, run.ctx);
+		await until(() => run.states().length === 2);
+		expect(run.states()).toEqual(["idle", "working"]);
+		// The session report goes first each time, two tries each, until Herdr takes one.
+		const methods = run.herdr.requests.map((r) => r.method);
+		expect(methods.slice(0, 3)).toEqual([
+			"pane.report_agent_session",
+			"pane.report_agent_session",
+			"pane.report_agent",
+		]);
+		expect(methods.filter((m) => m === "pane.report_agent_session").length).toBeGreaterThanOrEqual(4);
+	});
+
+	test("--herdr-pi releases the official Pi agent", async () => {
+		const run = await startedInHerdr({ piIntegration: true });
+		await until(() => run.herdr.requests.length === 3);
+		await run.fire("session_shutdown", { type: "session_shutdown", reason: "quit" });
+		await until(() => run.herdr.requests.length === 4);
+		expect(run.herdr.requests[3]).toMatchObject({
+			method: "pane.release_agent",
+			params: { pane_id: "w1:p2", source: "herdr:pi", agent: "pi" },
+		});
+	});
+
 	test("releases the pane on quit only", async () => {
 		const run = await startedInHerdr();
 		await until(() => run.states().length === 1);
@@ -315,6 +380,12 @@ describe("Herdr extension", () => {
 
 	test("resume commands Herdr would refuse are left out", () => {
 		expect(resumeArgv("/home/me/s.jsonl")).toEqual([COMMAND_NAME, "--session", "/home/me/s.jsonl"]);
+		expect(resumeArgv("/home/me/s.jsonl", true)).toEqual([
+			COMMAND_NAME,
+			"--herdr-pi",
+			"--session",
+			"/home/me/s.jsonl",
+		]);
 		expect(resumeArgv(undefined)).toBeUndefined();
 		expect(resumeArgv("relative.jsonl")).toBeUndefined();
 		expect(resumeArgv("/home/o'brien/s.jsonl")).toBeUndefined();
@@ -431,6 +502,66 @@ describe("Herdr executable (Windows)", () => {
 				params: { pane_id: "w1:p2", source: "pi-bolt", agent: "pi-bolt", seq: 8 },
 			}),
 		).toEqual(["pane", "release-agent", "w1:p2", "--source", "pi-bolt", "--agent", "pi-bolt", "--seq", "8"]);
+		expect(
+			herdrArguments({
+				method: "pane.report_agent_session",
+				params: {
+					pane_id: "w1:p2",
+					source: "herdr:pi",
+					agent: "pi",
+					seq: 9,
+					agent_session_path: "/work/s.jsonl",
+					session_start_source: "startup",
+					resume_argv: ["pi-bolt", "--herdr-pi", "--session", "/work/s.jsonl"],
+				},
+			}),
+		).toEqual([
+			"pane",
+			"report-agent-session",
+			"w1:p2",
+			"--source",
+			"herdr:pi",
+			"--agent",
+			"pi",
+			"--seq",
+			"9",
+			"--agent-session-path",
+			"/work/s.jsonl",
+			"--session-start-source",
+			"startup",
+			"--",
+			"pi-bolt",
+			"--herdr-pi",
+			"--session",
+			"/work/s.jsonl",
+		]);
+		expect(
+			herdrArguments({
+				method: "pane.report_metadata",
+				params: {
+					pane_id: "w1:p2",
+					source: "pi-bolt",
+					agent: "pi",
+					applies_to_source: "herdr:pi",
+					display_agent: PRODUCT_NAME,
+					seq: 9,
+				},
+			}),
+		).toEqual([
+			"pane",
+			"report-metadata",
+			"w1:p2",
+			"--source",
+			"pi-bolt",
+			"--agent",
+			"pi",
+			"--applies-to-source",
+			"herdr:pi",
+			"--display-agent",
+			PRODUCT_NAME,
+			"--seq",
+			"9",
+		]);
 	});
 
 	test.skipIf(process.platform === "win32")("on Windows, reports run HERDR_BIN_PATH", async () => {

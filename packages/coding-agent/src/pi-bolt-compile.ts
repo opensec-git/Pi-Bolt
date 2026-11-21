@@ -1659,6 +1659,15 @@ function install(stage: string, current: string): void {
 	renameSync(stage, current);
 }
 
+/** Whether the build in `buildDir` has extensions compiled in: its pi-bolt.txt names them (buildExecutable). */
+export function buildHasCompiledExtensions(buildDir: string): boolean {
+	try {
+		return /^Extensions compiled in/m.test(readFileSync(join(buildDir, "pi-bolt.txt"), "utf8"));
+	} catch {
+		return false;
+	}
+}
+
 /** compile.json, and where `pi-bolt compile --off` sets it aside while the installer runs. */
 function recordPaths(installDir: string): { record: string; aside: string } {
 	const record = join(installDir, "compile.json");

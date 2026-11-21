@@ -107,7 +107,9 @@ pi-bolt update --rollback       # put back the build it replaced
 pi-bolt update --channel beta   # take pre-releases too
 ```
 
-These update the installer's installations. For an npm install, `pi-bolt update` asks the npm registry for the latest version
+These update the installer's installations. To have Pi-Bolt install new releases in the background as a session starts (at
+most once a day; they start next time), turn on **Automatic updates** in `/settings`, which is off by default;
+`PIBOLT_NO_AUTO_UPDATE=1` turns it off for scripts and CI. For an npm install, `pi-bolt update` asks the npm registry for the latest version
 and prints the npm command that installs it; `pi-bolt update --rollback` says to install the version you want with
 `npm install -g --allow-scripts=pi-bolt pi-bolt@<version>`. Homebrew, Scoop and mise installs are updated with their own
 commands, which `pi-bolt update` prints.
@@ -293,6 +295,20 @@ In a [Herdr](https://herdr.dev) pane, Pi-Bolt shows up as `pi-bolt` (idle, worki
 same conversation in the same pane. There is nothing to install; `"-builtin:herdr"` in the `extensions` setting turns it off.
 Restoring a session needs Herdr 0.9.2 or later. To start other agents in Herdr panes from Pi-Bolt, install
 [pi-herdr](https://www.npmjs.com/package/@andrewjacop/pi-herdr): `pi-bolt install npm:@andrewjacop/pi-herdr`.
+
+For a pane's agent Herdr tracks its state, the command that reopens its session, and the session itself (`agent_session`); it
+saves the last two for a server restart. A `pi-bolt` pane reports its state and that command, so the sidebar works and a
+restart reopens the conversation, but Herdr stores the session only for the agents it ships, so `herdr agent list` and
+`herdr pane get` show none.
+
+`pi-bolt --herdr-pi` reports as Herdr's own Pi integration (`source=herdr:pi`, `agent=pi`), which is one of them, so the
+session is stored. Restoring does not depend on the flag: Herdr runs the resume command Pi-Bolt reports either way, and that
+command carries `--herdr-pi`, so on Linux and macOS a restored session reports the same way. Herdr identifies an agent by
+the command name of the foreground process, so the flag re-execs an interactive Pi-Bolt with `pi` as that name, and
+a display-only metadata report keeps the sidebar naming `Pi-Bolt`. Windows has no `exec`: start Pi-Bolt through a file named
+`pi.exe`, a hardlink or a copy, and pass `--herdr-pi`; a process named otherwise gets a startup warning and reports as
+`pi-bolt`. The resume command starts `pi-bolt` either way, so on Windows a restored pane reports as `pi-bolt` again and only
+the run started as `pi.exe` stores the session.
 
 </details>
 

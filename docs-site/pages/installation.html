@@ -159,6 +159,16 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
   <code>mise upgrade --bump github:opensec-git/Pi-Bolt</code>, and <code>mise use -g github:opensec-git/Pi-Bolt@&lt;version&gt;</code>
   for another version. <code>pi-bolt update</code> and <code>--rollback</code> give these commands for a Pi-Bolt that Scoop or
   mise installed, and change nothing. Running the installer again also updates.</p>
+<p>Automatic updates are off unless you turn them on, in <code>/settings</code> (<strong>Automatic updates</strong>) or with
+  <code>"piBolt": { "autoUpdate": true }</code> in <code>~/.pi/agent/settings.json</code>; a project's settings cannot turn them
+  on. An interactive session of an installation the installer made then looks for a new release on its channel after it has
+  started, at most once a day, and installs it in the background with the same checks as <code>pi-bolt update</code>. Like
+  <code>pi-bolt update</code>, it compiles nothing: extensions <code>pi-bolt compile</code> compiled in load from their files
+  until it compiles them in again. The session goes on; the new release starts next time,
+  and the session shows one line when it is installed, or the reason when it could not be (the output is in
+  <code>~/.pi-bolt/auto-update.log</code>). <code>pi-bolt -p</code>, RPC and ACP never update, nor does an installation that npm,
+  Homebrew, Scoop or mise manage. <code>PIBOLT_NO_AUTO_UPDATE=1</code> turns automatic updates off whatever the setting says, as
+  do <code>PI_SKIP_VERSION_CHECK</code> and <code>PI_OFFLINE</code>.</p>
 <p>An npm install is updated with npm: <code>npm install -g --allow-scripts=pi-bolt pi-bolt@latest</code> (with Bun,
   <code>bun add -g --trust pi-bolt@latest</code>). For it, <code>pi-bolt update</code> asks the npm registry for the version of
   <code>pi-bolt@latest</code> (GitHub when the registry does not answer), says whether a newer one is out, and prints that

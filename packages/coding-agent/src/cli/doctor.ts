@@ -17,7 +17,7 @@ import { verify } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { arch, cpus, homedir, release, totalmem } from "node:os";
-import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative } from "node:path";
 import { CONFIG_DIR_NAME, VERSION } from "../config.ts";
 import { createEventBus } from "../core/event-bus.ts";
 import { compiledExtensionList, compiledStateLines, extensionFingerprint } from "../core/extensions/compiled.ts";
@@ -32,13 +32,16 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../core/tr
 import { isHerdrPiIntegration } from "../extensions/herdr/integration-file.ts";
 import { herdrFromEnvironment } from "../extensions/herdr/transport.ts";
 import {
+	type PiBoltPathEntry as PathEntry,
 	PIBOLT,
 	PIBOLT_RELEASE_KEY,
 	PIBOLT_RELEASES_URL,
 	type PiBoltPackageManagerId,
 	piBoltInstallDir,
+	piBoltInstalledByInstaller,
 	piBoltInstallMethod,
 	piBoltJitSwitchCommand,
+	piBoltOnPath,
 	piBoltPackageManager,
 	piBoltUpdateCommand,
 } from "../pi-bolt.ts";
@@ -126,18 +129,8 @@ function selfInfo(): SelfInfo {
 	let method: SelfInfo["method"];
 	if (installMethod !== "installer") method = installMethod;
 	else if (installDir === undefined) method = "not installed";
-	else method = installedByInstaller(installDir, folder) ? "installer" : "manual";
+	else method = piBoltInstalledByInstaller(installDir, folder) ? "installer" : "manual";
 	return { executable, command: launcher ?? executable, folder, method, installDir };
-}
-
-/**
- * Whether the installer put this installation where it is: its own folder (~/.pi-bolt, or PIBOLT_INSTALL), or a `pi-bolt`
- * on PATH that leads to it. Anything else is an archive unpacked by hand.
- */
-function installedByInstaller(installDir: string, folder: string): boolean {
-	const defaults = [join(homedir(), ".pi-bolt"), process.env.PIBOLT_INSTALL].filter((dir): dir is string => !!dir);
-	if (defaults.some((dir) => realpathOr(dir) === realpathOr(installDir))) return true;
-	return piBoltOnPath().some((entry) => dirname(entry.real) === folder);
 }
 
 function realpathOr(path: string): string {
@@ -199,44 +192,6 @@ function buildSection(self: SelfInfo, report: DoctorReport): DoctorSection {
 }
 
 // --- Installation ---------------------------------------------------------------------------------------------------
-
-interface PathEntry {
-	path: string;
-	real: string;
-}
-
-/** Every `pi-bolt` on PATH, in PATH's order, with where each leads. */
-function piBoltOnPath(env: NodeJS.ProcessEnv = process.env): PathEntry[] {
-	const names = process.platform === "win32" ? ["pi-bolt.exe", "pi-bolt.cmd", "pi-bolt.ps1", "pi-bolt"] : ["pi-bolt"];
-	const seen = new Set<string>();
-	const entries: PathEntry[] = [];
-	for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter)) {
-		if (!dir) continue;
-		for (const name of names) {
-			const path = join(dir, name);
-			try {
-				if (!statSync(path).isFile()) continue;
-			} catch {
-				continue;
-			}
-			const real = npmShimTarget(path) ?? realpathOr(path);
-			if (seen.has(real)) continue;
-			seen.add(real);
-			entries.push({ path, real });
-		}
-	}
-	return entries;
-}
-
-/**
- * What a shim npm made on Windows starts: pi-bolt.cmd, pi-bolt.ps1 and pi-bolt (for Git Bash) in npm's global folder are
- * scripts that run node_modules\pi-bolt\bin\pi-bolt.exe beside them, which no link leads to.
- */
-function npmShimTarget(path: string): string | undefined {
-	if (process.platform !== "win32" || /\.exe$/i.test(path)) return undefined;
-	const target = join(dirname(path), "node_modules", "pi-bolt", "bin", "pi-bolt.exe");
-	return existsSync(target) ? realpathOr(target) : undefined;
-}
 
 /** The npm package's launcher (npm/bin/pi-bolt): it starts the executable of its version from ~/.pi-bolt/npm. */
 function isNpmLauncher(real: string): boolean {

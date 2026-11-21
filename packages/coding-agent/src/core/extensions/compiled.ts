@@ -54,7 +54,11 @@ export interface CompiledExtension extends CompiledExtensionSource {
  */
 export function startsWithoutCompiledExtensions(args: readonly string[]): boolean {
 	const [command, ...rest] = args;
-	return command === "doctor" || command === "compile" || (command === "update" && rest.includes("--rollback"));
+	return (
+		command === "doctor" ||
+		command === "compile" ||
+		(command === "update" && (rest.includes("--rollback") || rest.includes("--background")))
+	);
 }
 
 /**

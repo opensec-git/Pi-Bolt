@@ -233,7 +233,10 @@ describe("pi-bolt compile cleans up after itself (#11)", () => {
 		mkdirSync(join(install, "pi-bolt-linux-x64"), { recursive: true });
 		mkdirSync(join(install, ".compile-Ab12Cd", "kit"), { recursive: true });
 		mkdirSync(join(install, "cache"));
-		for (const file of ["compile.json", "compile.log", "channel"]) writeFileSync(join(install, file), "");
+		for (const file of ["compile.json", "compile.log", "channel", "auto-update.json", "auto-update.log"]) {
+			writeFileSync(join(install, file), "");
+		}
+		mkdirSync(join(install, "auto-update.lock"));
 		const installer = readFileSync(resolve(__dirname, "../../../install.sh"), "utf8");
 		const uninstall = /^uninstall\(\) \{\n[\s\S]*?\n\}\n/m.exec(installer)?.[0];
 		expect(uninstall).toBeDefined();

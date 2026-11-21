@@ -6,9 +6,9 @@
  * was built for, scripts/runtime-stamp.sh, when known). In every other build it is undefined and nothing here changes what Pi
  * does.
  */
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 
 declare const PIBOLT_BUILD: string | undefined;
 
@@ -286,6 +286,55 @@ export function piBoltUpdateCommand(method: PiBoltInstallMethod = piBoltInstallM
 export function piBoltInstallDir(): string | undefined {
 	const variantDir = dirname(process.execPath);
 	return /^pi-bolt-(linux|darwin|win32)-/i.test(basename(variantDir)) ? dirname(variantDir) : undefined;
+}
+
+/** A `pi-bolt` on PATH, and where it leads. */
+export interface PiBoltPathEntry {
+	path: string;
+	real: string;
+}
+
+/** Every `pi-bolt` on PATH, in PATH's order, with where each leads. */
+export function piBoltOnPath(env: NodeJS.ProcessEnv = process.env): PiBoltPathEntry[] {
+	const names = process.platform === "win32" ? ["pi-bolt.exe", "pi-bolt.cmd", "pi-bolt.ps1", "pi-bolt"] : ["pi-bolt"];
+	const seen = new Set<string>();
+	const entries: PiBoltPathEntry[] = [];
+	for (const dir of (env.PATH ?? env.Path ?? "").split(delimiter)) {
+		if (!dir) continue;
+		for (const name of names) {
+			const path = join(dir, name);
+			try {
+				if (!statSync(path).isFile()) continue;
+			} catch {
+				continue;
+			}
+			const real = npmShimTarget(path) ?? realPathOf(path);
+			if (seen.has(real)) continue;
+			seen.add(real);
+			entries.push({ path, real });
+		}
+	}
+	return entries;
+}
+
+/**
+ * What a shim npm made on Windows starts: pi-bolt.cmd, pi-bolt.ps1 and pi-bolt (for Git Bash) in npm's global folder are
+ * scripts that run node_modules\pi-bolt\bin\pi-bolt.exe beside them, which no link leads to.
+ */
+function npmShimTarget(path: string): string | undefined {
+	if (process.platform !== "win32" || /\.exe$/i.test(path)) return undefined;
+	const target = join(dirname(path), "node_modules", "pi-bolt", "bin", "pi-bolt.exe");
+	return existsSync(target) ? realPathOf(target) : undefined;
+}
+
+/**
+ * Whether the installer put the installation in `installDir` where it is: its own folder (~/.pi-bolt, or PIBOLT_INSTALL), or
+ * a `pi-bolt` on PATH that leads to the build's folder `folder`. Anything else is an archive unpacked by hand.
+ */
+export function piBoltInstalledByInstaller(installDir: string, folder: string): boolean {
+	const defaults = [join(homedir(), ".pi-bolt"), process.env.PIBOLT_INSTALL].filter((dir): dir is string => !!dir);
+	if (defaults.some((dir) => realPathOf(dir) === realPathOf(installDir))) return true;
+	return piBoltOnPath().some((entry) => dirname(entry.real) === folder);
 }
 
 /**
