@@ -97,6 +97,27 @@ function syncAgentMessages(session: AgentSession, sessionManager: SessionManager
 	session.agent.state.messages = sessionManager.buildSessionContext().messages;
 }
 
+describe("AgentSession.getLastAssistantText", () => {
+	it("stops at the most recent eligible assistant, skipping an empty abort", async () => {
+		const { session } = await createSession();
+		try {
+			session.agent.state.messages = [
+				createUserMessage("first", 1),
+				createAssistantMessage("  answer  ", 10, 2),
+				{ ...createAssistantMessage("", 0, 3), content: [], stopReason: "aborted" },
+			];
+			Object.defineProperty(session.agent.state.messages, 0, {
+				get() {
+					throw new Error("read before the selected answer");
+				},
+			});
+			expect(session.getLastAssistantText()).toBe("answer");
+		} finally {
+			session.dispose();
+		}
+	});
+});
+
 describe("AgentSession.getSessionStats", () => {
 	it("exposes the current context usage alongside token totals", async () => {
 		const { session, sessionManager } = await createSession();

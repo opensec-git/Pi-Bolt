@@ -88,7 +88,12 @@ export function decodePairingUri(uri: string): PairingPayload {
 
 /** Splits a JSON message into encrypted transport frames. */
 export function encryptMessage(cipher: CipherState, message: unknown): Buffer[] {
-	const data = Buffer.from(JSON.stringify(message), "utf8");
+	return encryptJson(cipher, JSON.stringify(message));
+}
+
+/** Apply the same framing and encryption to a JSON snapshot produced by the server. */
+export function encryptJson(cipher: CipherState, json: string): Buffer[] {
+	const data = Buffer.from(json, "utf8");
 	const frames: Buffer[] = [];
 	let offset = 0;
 	do {

@@ -18,7 +18,7 @@ import type {
 	ToolResultMessage,
 	TranscriptContext,
 } from "../src/types.ts";
-import { requestCacheStats, setRequestCacheEnabled } from "../src/utils/request-cache.ts";
+import { beginRequestCache, requestCacheStats, setRequestCacheEnabled } from "../src/utils/request-cache.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 /**
@@ -586,6 +586,85 @@ const REQUESTS = 60;
 afterEach(() => {
 	setRequestCacheEnabled(true);
 	vi.unstubAllGlobals();
+});
+
+describe("request cache order across branches", () => {
+	it("drops an unvisited suffix while an overlapping request finishes the longer branch", () => {
+		const start = () => {
+			const run = beginRequestCache("order", { sessionId: "overlapping-branches", immutableMessages: true }, []);
+			if (!run) throw new Error("expected an active cache");
+			return run;
+		};
+		const a = {},
+			b = {};
+		const convert = vi.fn(() => ({}));
+		for (let warm = 0; warm < 2; warm++) {
+			const run = start();
+			for (const source of [a, b]) run.derive(source, "", convert);
+			run.end();
+		}
+		// Publishing a changed branch must not change the values visible to its older reader.
+		const oldReader = start();
+		const otherBranch = start();
+		const changed = otherBranch.derive(a, "different", convert);
+		otherBranch.end();
+		convert.mockClear();
+		expect(oldReader.derive(a, "", convert)).not.toBe(changed);
+		oldReader.derive(b, "", convert);
+		expect(convert).not.toHaveBeenCalled();
+		oldReader.end();
+
+		const short = start();
+		const long = start();
+		convert.mockClear();
+		const fromShort = short.derive(a, "", convert);
+		expect(long.derive(a, "", convert)).toBe(fromShort);
+		long.derive(b, "", convert);
+		long.end();
+		short.end();
+		expect(convert).not.toHaveBeenCalled();
+		const resumed = start();
+		expect(resumed.derive(a, "", convert)).toBe(fromShort);
+		resumed.derive(b, "", convert);
+		resumed.end();
+		expect(convert).toHaveBeenCalledTimes(1);
+	});
+
+	it("clears an old group when a later source is pending or reconversion throws", () => {
+		const start = () => {
+			const run = beginRequestCache("order", { sessionId: "partial-conversion", immutableMessages: true }, []);
+			if (!run) throw new Error("expected an active cache");
+			return run;
+		};
+		const sources = [{}, { stopReason: "stop" }];
+		const convert = vi.fn((out: unknown[]) => {
+			out.push({});
+		});
+		function send(extra: string) {
+			const run = start();
+			try {
+				run.unit(sources, extra, [], convert);
+			} finally {
+				run.end();
+			}
+		}
+		send("a");
+		send("a");
+		convert.mockClear();
+		send("a");
+		expect(convert).not.toHaveBeenCalled();
+		sources[1].stopReason = "pending";
+		send("a");
+		sources[1].stopReason = "stop";
+		send("a");
+		expect(convert).toHaveBeenCalledTimes(2);
+		convert.mockImplementationOnce(() => {
+			throw new Error("conversion failed");
+		});
+		expect(() => send("b")).toThrow("conversion failed");
+		send("a");
+		expect(convert).toHaveBeenCalledTimes(4);
+	});
 });
 
 describe("request cache: cached and uncached request bodies are byte-identical", () => {

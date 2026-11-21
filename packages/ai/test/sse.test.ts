@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { iterateSseMessages, type ServerSentEvent } from "../src/utils/sse.ts";
+import {
+	createSseDecoder,
+	decodeSseText,
+	iterateSseMessages,
+	type ServerSentEvent,
+	type SseDecoder,
+} from "../src/utils/sse.ts";
 
 // The Anthropic provider's server-sent event parser moved to utils/sse.ts. Below is the parser as it was in
 // anthropic-messages.ts; the moved one must give the same events for the same bytes, however they are split into reads.
@@ -203,6 +209,51 @@ async function expectSame(chunks: Uint8Array[]): Promise<void> {
 }
 
 describe("iterateSseMessages matches the parser it replaced", () => {
+	it("supports reading, replacing and restoring the public decoder state between reads", () => {
+		const original = createSseDecoder();
+		expect([...decodeSseText(original, "event: test\ndata: pa", false)]).toEqual([]);
+		expect([...decodeSseText(original, "rt", false)]).toEqual([]);
+		expect(original.rest).toBe("data: part");
+
+		const restored: SseDecoder = JSON.parse(JSON.stringify(original));
+		expect(restored).toEqual({
+			event: "test",
+			data: [],
+			raw: ["event: test"],
+			stripLineBom: false,
+			rest: "data: part",
+			skipLeadingNewline: false,
+		});
+		for (const state of [original, restored]) {
+			expect([...decodeSseText(state, "ial", false)]).toEqual([]);
+			expect(state.rest).toBe("data: partial");
+			state.rest = "data: replacement\r\n\r\ndata: next";
+			expect([...decodeSseText(state, "!", false)]).toEqual([
+				{ event: "test", data: "replacement", raw: ["event: test", "data: replacement"] },
+			]);
+			expect(state.rest).toBe("data: next!");
+			state.rest = "";
+			expect([...decodeSseText(state, "", true)]).toEqual([]);
+		}
+	});
+
+	it("delivers a fragmented 1 MiB line on the terminating CR and an unfinished second line at EOF", () => {
+		const state = createSseDecoder();
+		const read = (text: string, final = false) => Array.from(decodeSseText(state, text, final));
+		const pieces = Array.from({ length: 1024 }, (_, i) => String(i).padEnd(1024, "x"));
+		const payload = pieces.join("");
+
+		expect(read("event: tool\r\ndata: ")).toEqual([]);
+		for (const piece of pieces) expect(read(piece)).toEqual([]);
+		expect(read("\r")).toEqual([]);
+		expect(read("\n\r")).toEqual([{ event: "tool", data: payload, raw: ["event: tool", `data: ${payload}`] }]);
+
+		expect(read("")).toEqual([]);
+		expect(read("\ndata: ta")).toEqual([]);
+		expect(read("il")).toEqual([]);
+		expect(read("", true)).toEqual([{ event: null, data: "tail", raw: ["data: tail"] }]);
+	});
+
 	it("gives the same events for every split of each stream into two reads, and for one byte per read", async () => {
 		for (const text of CORPUS) {
 			const bytes = encoder.encode(text);

@@ -145,7 +145,7 @@ function renderFresh(
 	message: AssistantMessage,
 	streaming: boolean,
 	width: number,
-): string[] {
+): readonly string[] {
 	setMarkdownCachingForTest(false);
 	try {
 		const reply = new AssistantMessageComponent();

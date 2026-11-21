@@ -137,6 +137,38 @@ describe("AgentSession compaction characterization", () => {
 		}
 	});
 
+	it("reports the newly saved checkpoint when manual and automatic compactions reuse a summary", async () => {
+		const reported: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", ({ preparation }) => ({
+						compaction: {
+							summary: "Same summary",
+							firstKeptEntryId: preparation.firstKeptEntryId,
+							tokensBefore: preparation.tokensBefore,
+						},
+					}));
+					pi.on("session_compact", ({ compactionEntry }) => {
+						reported.push(compactionEntry.id);
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		for (const reason of ["manual", "manual", "threshold"]) {
+			await harness.session.prompt("one");
+			await harness.session.prompt("two");
+			if (reason === "manual") await harness.session.compact();
+			else
+				await (harness.session as unknown as SessionWithCompactionInternals)._runAutoCompaction("threshold", false);
+		}
+		const saved = harness.sessionManager.getEntries().filter((entry) => entry.type === "compaction");
+		expect(saved).toHaveLength(3);
+		expect(reported).toEqual(saved.map((entry) => entry.id));
+	});
+
 	it("manually compacts using an extension-provided summary", async () => {
 		const summaryUsage = {
 			input: 10,
@@ -1009,6 +1041,24 @@ describe("AgentSession compaction characterization", () => {
 		await sessionInternals._checkCompaction(errorAssistant);
 
 		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+	});
+
+	it("checks ordinary replies without copying history, including imported replies with missing usage", async () => {
+		const harness = await createHarness({ models: [{ id: "faux-1", contextWindow: 200_000 }] });
+		harnesses.push(harness);
+		const session = harness.session as unknown as SessionWithCompactionInternals;
+		const normal = createAssistant(harness, { totalTokens: 100 });
+		const imported = createAssistant(harness, {});
+		Reflect.deleteProperty(imported, "usage");
+		harness.sessionManager.appendMessage(normal);
+		harness.sessionManager.appendMessage(imported);
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		const branch = vi.spyOn(harness.sessionManager, "getBranch");
+		const projection = vi.spyOn(harness.sessionManager, "buildSessionProjection");
+		expect(await session._checkCompaction(normal)).toBe(false);
+		expect(await session._checkCompaction(imported)).toBe(false);
+		expect(branch).not.toHaveBeenCalled();
+		expect(projection).not.toHaveBeenCalled();
 	});
 
 	it("does not trigger threshold compaction below the threshold or when disabled", async () => {

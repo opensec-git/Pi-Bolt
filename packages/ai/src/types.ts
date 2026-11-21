@@ -230,6 +230,12 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * Adapter support is explicit; unsupported adapters do not invoke it.
 	 */
 	onProviderStreamEvent?: (data: unknown, model: Model<Api>) => void | Promise<void>;
+	/** @internal The caller consumes raw tool deltas and only needs parsed arguments when the call or stream ends. */
+	skipToolArgumentPreviews?: boolean;
+	/** @internal A final-answer consumer can omit intermediate text and thinking updates. */
+	skipTextDeltas?: boolean;
+	/** @internal A CLI renderer can consume adjacent text updates together. */
+	coalesceTextDeltas?: boolean;
 	temperature?: number;
 	/**
 	 * Arbitrary sampling parameters merged into the request body as-is, after the named request

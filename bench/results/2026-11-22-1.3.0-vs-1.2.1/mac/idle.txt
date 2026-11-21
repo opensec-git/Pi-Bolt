@@ -1,0 +1,24 @@
+{'build': '1.2.1', 'cpu_ms_per_s': 0.693, 'own_mb': [19.6, 18.8], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.807, 'own_mb': [21.1, 17.9], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.717, 'own_mb': [19.7, 18.5], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.762, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.652, 'own_mb': [19.6, 18.7], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.749, 'own_mb': [21.1, 17.9], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.789, 'own_mb': [19.6, 18.6], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.803, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.71, 'own_mb': [19.8, 18.8], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.736, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.659, 'own_mb': [19.5, 18.4], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.826, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.719, 'own_mb': [19.8, 18.9], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.814, 'own_mb': [21.1, 17.9], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.756, 'own_mb': [19.7, 18.8], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.772, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.643, 'own_mb': [19.6, 18.6], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.736, 'own_mb': [21.1, 17.8], 'threads': {}}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.688, 'own_mb': [19.5, 18.7], 'threads': {}}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.803, 'own_mb': [21.1, 17.8], 'threads': {}}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.2.1                      0.702         18.7
+1.3.0                      0.788         17.8

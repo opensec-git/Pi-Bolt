@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { lazyStream } from "../src/api/lazy.ts";
 import type { Api, AssistantMessage, AssistantMessageEvent, Model } from "../src/types.ts";
 import { AssistantMessageEventStream, EventStream } from "../src/utils/event-stream.ts";
@@ -117,6 +117,57 @@ function message(timestamp: number, durationMs?: number): AssistantMessage {
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+it.each([false, true])(
+	"preserves block boundaries and the complete answer with skipTextDeltas=%s",
+	async (skipTextDeltas) => {
+		const stream = new AssistantMessageEventStream({ skipTextDeltas });
+		const partial = message(Date.now());
+		partial.content = [
+			{ type: "thinking", thinking: "h" },
+			{ type: "text", text: "a" },
+		];
+		stream.push({ type: "thinking_start", contentIndex: 0, partial });
+		stream.push({ type: "thinking_delta", contentIndex: 0, delta: "h", partial });
+		stream.push({ type: "thinking_end", contentIndex: 0, content: "h", partial });
+		stream.push({ type: "text_start", contentIndex: 1, partial });
+		stream.push({ type: "text_delta", contentIndex: 1, delta: "a", partial });
+		stream.push({ type: "text_end", contentIndex: 1, content: "a", partial });
+		stream.push({ type: "done", reason: "stop", message: partial });
+		const types = [];
+		for await (const event of stream) types.push(event.type);
+		expect(types).toEqual(
+			skipTextDeltas
+				? ["thinking_start", "thinking_end", "text_start", "text_end", "done"]
+				: ["thinking_start", "thinking_delta", "thinking_end", "text_start", "text_delta", "text_end", "done"],
+		);
+		expect(await stream.result()).toBe(partial);
+	},
+);
+
+it("flushes a renderer's text burst before a boundary and when the provider pauses", () => {
+	vi.useFakeTimers();
+	try {
+		const stream = new AssistantMessageEventStream({ coalesceTextDeltas: true });
+		const events: string[] = [];
+		stream.forwardTo((e) => events.push(e.type === "text_delta" ? e.delta : e.type));
+		const partial = message(Date.now());
+		const pushText = (delta: string) => stream.push({ type: "text_delta", contentIndex: 0, partial, delta });
+		pushText("first");
+		pushText("a");
+		pushText("b");
+		expect(events).toEqual(["first"]);
+		vi.advanceTimersByTime(5);
+		expect(events).toEqual(["first", "ab"]);
+		pushText("c");
+		stream.push({ type: "text_end", contentIndex: 0, partial, content: "firstabc" });
+		stream.push({ type: "done", reason: "stop", message: partial });
+		vi.runAllTimers();
+		expect(events).toEqual(["first", "ab", "c", "text_end", "done"]);
+	} finally {
+		vi.useRealTimers();
+	}
+});
 
 describe("AssistantMessageEventStream timing", () => {
 	it("sets durationMs on the final done or error message of a response it saw start", async () => {

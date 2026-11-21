@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import type { JsonValue } from "../src/types.ts";
+import type { JsonValue, ToolCall } from "../src/types.ts";
+import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 import { parseStreamingJson, parseToolCallArguments } from "../src/utils/json-parse.ts";
 import { type JsonChange, StreamingJsonParser, ToolCallArgumentsStream } from "../src/utils/streaming-json.ts";
 import { allocatedBytes, collectGarbage } from "./memory-helpers.ts";
@@ -808,6 +809,86 @@ describe("StreamingJsonParser cost", () => {
 });
 
 describe("ToolCallArgumentsStream", () => {
+	it.each([698, 1_003, 1_999])("restores the budget-limited preview of a wide array interrupted at %i", (cutoff) => {
+		const parser = new StreamingJsonParser();
+		const stream = new AssistantMessageEventStream({ skipToolArgumentPreviews: true });
+		const args = new ToolCallArgumentsStream(stream);
+		const block: ToolCall = { type: "toolCall", id: "id", name: "tool", arguments: {} };
+		const pieces = ['{"items":[', ...Array.from({ length: cutoff }, (_, i) => `${i},`)];
+		let eager: JsonValue | undefined;
+		for (const [index, piece] of pieces.entries()) {
+			args.appendTo(block, piece);
+			parser.append(piece);
+			eager = parser.snapshot();
+			if (index % 11 === 0) {
+				args.appendTo(block, "");
+				parser.append("");
+				eager = parser.snapshot();
+			}
+		}
+		expect(block.arguments).toEqual({});
+		stream.end();
+		expect(Object.getOwnPropertyDescriptor(block, "arguments")?.value).toEqual(eager);
+	});
+
+	it("publishes ordinary writable arguments and retains earlier snapshots after reassignment", async () => {
+		const stream = new AssistantMessageEventStream();
+		const block: ToolCall = { type: "toolCall", id: "id", name: "tool", arguments: { initial: true } };
+		const ref = (() => {
+			const args = new ToolCallArgumentsStream(stream);
+			args.appendTo(block, '{"text":"before');
+			const retained = block.arguments;
+			const replacement = { custom: true };
+			block.arguments = replacement;
+			expect(block.arguments).toBe(replacement);
+			args.appendTo(block, " after");
+			expect(JSON.parse(JSON.stringify(block)).arguments).toEqual({ text: "before after" });
+			expect(retained).toEqual({ text: "before" });
+			args.appendTo(block, " end");
+			return new WeakRef(args);
+		})();
+		stream.end();
+		expect(Object.getOwnPropertyDescriptor(block, "arguments")).toEqual({
+			value: { text: "before after end" },
+			configurable: true,
+			writable: true,
+			enumerable: true,
+		});
+		await collectGarbage();
+		expect(ref.deref()).toBeUndefined();
+	});
+
+	it("preserves ordinary preview identity across corrections to malformed roots", () => {
+		const args = new ToolCallArgumentsStream();
+		const eager = new ToolCallArgumentsStream();
+		const block: ToolCall = { type: "toolCall", id: "id", name: "tool", arguments: {} };
+		args.appendTo(block, "x");
+		const before = block.arguments;
+		const eagerBefore = eager.append("x");
+		args.replaceFor(block, "9");
+		eager.replace("9");
+		args.replaceFor(block, "x");
+		const eagerAfter = eager.replace("x").arguments;
+		expect(eagerAfter).not.toBe(eagerBefore);
+		expect(block.arguments).toEqual(eagerAfter);
+		expect(block.arguments).not.toBe(before);
+	});
+
+	it("preserves input across a long run of differently sized fragments", () => {
+		const stream = new AssistantMessageEventStream({ skipToolArgumentPreviews: true });
+		const args = new ToolCallArgumentsStream(stream);
+		const block: ToolCall = { type: "toolCall", id: "id", name: "tool", arguments: {} };
+		args.appendTo(block, '{"text":"');
+		for (let i = 0; i < 20_000; i++) {
+			args.appendTo(block, "a");
+			args.appendTo(block, "bc");
+		}
+		args.appendTo(block, '"}');
+		stream.end();
+		expect(block.arguments).toEqual({ text: "abc".repeat(20_000) });
+		expect(args.finish()).toEqual({ arguments: block.arguments });
+	});
+
 	it("shows partial arguments as an object and finishes with one full parse", () => {
 		const args = new ToolCallArgumentsStream();
 		expect(args.append("  ")).toEqual({});

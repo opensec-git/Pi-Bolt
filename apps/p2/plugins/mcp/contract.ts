@@ -4,7 +4,18 @@
 
 import type { CallToolResult, ToolAnnotations } from "@earendil-works/pi-mcp";
 import { arr, int, nul, obj, oneOf, opt, type Static, str, union, unknown } from "@earendil-works/pi-schema";
-import { LocationSchema, literal, local, method, record, remote, serverHost, unsafe } from "@p2/app/v1";
+import {
+	type AcceptsTable,
+	evolve,
+	LocationSchema,
+	literal,
+	local,
+	method,
+	record,
+	remote,
+	serverHost,
+	unsafe,
+} from "@p2/app/v1";
 
 /** An MCP tool as its server lists it (`tools/list`). */
 const ToolSchema = obj({
@@ -23,6 +34,33 @@ const RunsOnSchema = union([literal("host"), obj({ env: str() })]);
 /** Where an instance runs: `"host"` (the p2 host) or `{ env }` (an environment of `envs.json`). */
 export type RunsOn = Static<typeof RunsOnSchema>;
 
+/** One running (or failed) server process or connection, as `Mcp` version 2 (b4afdddf4) released it. */
+const InstanceSchemaV2 = obj({
+	id: str(),
+	server: str(),
+	source: oneOf(["owner", "project"]),
+	location: union([LocationSchema, nul()]),
+	runsOn: RunsOnSchema,
+	auth: opt(literal("oauth")),
+	status: oneOf(["starting", "connected", "sign-in", "failed"]),
+	error: opt(str()),
+	tools: arr(ToolSchema),
+});
+
+/** One running (or failed) server process or connection, as `Mcp` version 3 (6f1a96e1d) released it. */
+const InstanceSchemaV3 = obj({
+	id: str(),
+	server: str(),
+	source: oneOf(["owner", "project"]),
+	location: union([LocationSchema, nul()]),
+	runsOn: RunsOnSchema,
+	auth: opt(literal("oauth")),
+	status: oneOf(["starting", "connected", "sign-in", "failed"]),
+	error: opt(str()),
+	tools: arr(ToolSchema),
+	instructions: opt(str()),
+});
+
 /** One running (or failed) server process or connection. */
 export const InstanceSchema = obj({
 	id: str(),
@@ -38,8 +76,15 @@ export const InstanceSchema = obj({
 	error: opt(str()),
 	/** Kept while it reconnects. */
 	tools: arr(ToolSchema),
+	/** The server's instructions from `initialize`, if it sent any; kept while it reconnects. */
+	instructions: opt(str()),
+	/** What the server offers, in a sentence, as its configuration's `description` says (absent: not configured). */
+	description: opt(str()),
 });
-/** One instance as the manager lists it: its server, where it runs, its status, error and tools. */
+/**
+ * One instance as the manager lists it: its server, where it runs, its status, error, tools, instructions and
+ * configured description.
+ */
 export type Instance = Static<typeof InstanceSchema>;
 
 /**
@@ -104,7 +149,8 @@ const Caller = { session: str(), generation: int(), incarnation: str() };
  * moves the session to any configured environment.
  */
 export const McpManager = local("p2.mcp.manager", {
-	version: 2,
+	// 3: an instance's `instructions`; 4: its configured `description`.
+	version: 4,
 	params: {},
 	members: {
 		instances: arr(InstanceSchema),
@@ -154,12 +200,8 @@ export const McpManager = local("p2.mcp.manager", {
 	},
 });
 
-/**
- * MCP servers as a principal sees them: a session worker sets its locations and calls tools (its session, generation
- * and incarnation from the link), the owner sees every instance with its errors and sign-ins, restarts them and signs in
- * and out of HTTP servers. Nobody else gets one.
- */
-export const Mcp = remote("p2.mcp", {
+/** `Mcp` version 2, as b4afdddf4 released it (pages built before version 3 still hold it). */
+const McpV2 = remote("p2.mcp", {
 	version: 2,
 	params: {},
 	hostAddress: serverHost,
@@ -167,7 +209,7 @@ export const Mcp = remote("p2.mcp", {
 		worker: {
 			state: {
 				/** The instances the session's leases use, shared ones included; `error` is the owner's only. */
-				servers: arr(InstanceSchema),
+				servers: arr(InstanceSchemaV2),
 				/** Why the session's leases refused entries of its projects' `mcp.json` (or a location). */
 				errors: arr(str()),
 			},
@@ -185,7 +227,7 @@ export const Mcp = remote("p2.mcp", {
 		},
 		owner: {
 			/** `errors`: the owner's `mcp.json`'s, then every lease's (by session). */
-			state: { instances: arr(InstanceSchema), errors: arr(str()), signIns: arr(SignInSchema) },
+			state: { instances: arr(InstanceSchemaV2), errors: arr(str()), signIns: arr(SignInSchema) },
 			methods: {
 				restart: method(obj({ instance: str() })),
 				/**
@@ -201,10 +243,45 @@ export const Mcp = remote("p2.mcp", {
 	},
 });
 
+/** `Mcp` version 3, as 6f1a96e1d released it: instances with the server's `instructions`. */
+const McpV3 = evolve(McpV2, (e) =>
+	e.state("worker", "servers", arr(InstanceSchemaV3)).state("owner", "instances", arr(InstanceSchemaV3)),
+);
+
+/** One of a session's leases as its worker sees it: the location and the instances it uses, one per server. */
+const SessionLeaseSchema = obj({ location: LocationSchema, instances: arr(str()) });
+/** A lease of the worker's session: where, and the IDs of the instances it uses (one per server). */
+export type SessionLease = Static<typeof SessionLeaseSchema>;
+
+/**
+ * MCP servers as a principal sees them: a session worker sets its locations and calls tools (its session, generation
+ * and incarnation from the link), the owner sees every instance with its errors and sign-ins, restarts them and signs in
+ * and out of HTTP servers. Nobody else gets one. 3: an instance's `instructions` (the server's own, from `initialize`);
+ * 4: its configured `description`, and the worker's `leases` (which instances each location uses: a project override
+ * decides per lease, also for instances serving every location); the provider still serves 2 and 3 (`MCP_ACCEPTS`).
+ */
+export const Mcp = evolve(McpV3, (e) =>
+	e
+		.state("worker", "servers", arr(InstanceSchema))
+		.addState("worker", "leases", arr(SessionLeaseSchema))
+		.state("owner", "instances", arr(InstanceSchema)),
+);
+
+/** What `Mcp` versions 2 and 3's holders get: instances without what those versions lack. */
+export const MCP_ACCEPTS: AcceptsTable<typeof Mcp> = {
+	2: { state: { worker: { servers: asV2 }, owner: { instances: asV2 } } },
+	3: { state: { worker: { servers: asV3 }, owner: { instances: asV3 } } },
+};
+
+function asV2(instances: readonly Instance[]) {
+	return instances.map(({ instructions: _instructions, description: _description, ...instance }) => instance);
+}
+
+function asV3(instances: readonly Instance[]) {
+	return instances.map(({ description: _description, ...instance }) => instance);
+}
+
 /** The p2 page that signs the owner in to HTTP server `server` (relative: it opens on the origin the viewer uses). */
 export function signInLink(server: string): string {
 	return `/mcp/sign-in/${encodeURIComponent(server)}`;
 }
-
-/** The worker's Durable extension of MCP tools. */
-export const MCP_EXTENSION = "mcp";

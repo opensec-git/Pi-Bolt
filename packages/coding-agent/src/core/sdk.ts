@@ -39,12 +39,27 @@ import {
 	createWriteTool,
 	withFileMutationQueue,
 } from "./tools/index.ts";
-import { getBranchSelection } from "./virtual-models.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
 // or invoke low-level agent loops without supplying streamFn. Agent core remains
 // provider-agnostic and does not import pi-ai/compat itself.
 setDefaultStreamFn(streamSimple);
+
+const cliStreamRunners = new WeakMap<AgentSession, { runner: ExtensionRunner; mode: "print" | "interactive" }>();
+
+/** @internal Only the standalone CLI controls the observing renderer of these sessions. */
+export function enableCliStreamOptimization(session: AgentSession, mode: "print" | "interactive"): void {
+	const runner = session.extensionRunner;
+	if (runner.getExtensionPaths().every((path) => path.startsWith(BUILTIN_PATH_PREFIX))) {
+		cliStreamRunners.set(session, { runner, mode });
+	}
+}
+
+/** The standalone TUI owns this runner, including every extension that can observe its startup. */
+export function isBuiltinOnlyInteractiveCli(session: AgentSession): boolean {
+	const cli = cliStreamRunners.get(session);
+	return cli?.mode === "interactive" && cli.runner === session.extensionRunner;
+}
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -210,16 +225,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Check if session has existing data to restore
 	const existingSession = sessionManager.buildSessionContext();
 	const hasExistingSession = existingSession.messages.length > 0;
-	const hasThinkingEntry = sessionManager.getBranch().some((entry) => entry.type === "thinking_level_change");
 
 	let model = options.model;
 	let modelFallbackMessage: string | undefined;
 
 	// Assistant messages name the physical model that answered, so a virtual selection is only in
 	// model_change entries.
-	const sessionModel = getBranchSelection(sessionManager.getBranch(), (provider, modelId) =>
+	const recorded = sessionManager.getRecordedSelection((provider, modelId) =>
 		modelRuntime.getModel(provider, modelId),
 	);
+
+	const sessionModel = recorded.model;
+	const hasThinkingEntry = recorded.thinkingLevel !== undefined;
 
 	// If session has data, try to restore model from it
 	if (!model && hasExistingSession && sessionModel) {
@@ -391,13 +408,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			headers: response.headers,
 		});
 	};
-	const handleProviderStreamEvent: NonNullable<ModelsSimpleStreamOptions["onProviderStreamEvent"]> = async (
-		data,
-		model,
-	) => {
+	const handleProviderStreamEvent: NonNullable<ModelsSimpleStreamOptions["onProviderStreamEvent"]> = (data, model) => {
+		// A reload or a late subscription can change the observer between chunks. The empty path stays synchronous.
 		const runner = extensionRunnerRef.current;
 		if (!runner?.hasHandlers("provider_stream_event")) return;
-		await runner.emit({
+		return runner.emit({
 			data,
 			type: "provider_stream_event",
 			provider: model.provider,
@@ -417,6 +432,22 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const requestOptions = buildRequestOptions(options);
+			const cli = cliStreamRunners.get(session);
+			if (
+				cli &&
+				cli.runner === extensionRunnerRef.current &&
+				options?.signal &&
+				options.signal === agent.signal &&
+				!cli.runner.hasHandlers("message_start") &&
+				!cli.runner.hasHandlers("message_update")
+			) {
+				if (cli.mode === "print") {
+					requestOptions.skipToolArgumentPreviews = true;
+					requestOptions.skipTextDeltas = true;
+				} else {
+					requestOptions.coalesceTextDeltas = true;
+				}
+			}
 			if (requestOptions.onPayload === transformProviderPayload) {
 				// The payload hook only while an extension handles before_provider_request, read when the request is
 				// built (a cache-warming replay builds it later). Without a hook the providers may reuse the request

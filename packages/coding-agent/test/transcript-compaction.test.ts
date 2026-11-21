@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 // A settled transcript entry that compact()s keeps the lines it rendered last and lets go of the components it rendered them
 // from; whatever happens next, it must draw exactly what an entry that never compacted draws.
@@ -180,6 +180,25 @@ describe("transcript entries that compact", () => {
 		same(80);
 	});
 
+	it("a relocated assistant row reads the current code block shading when redrawn", () => {
+		let shaded = false;
+		const shade = (text: string) => `\x1b[44m${text}\x1b[49m`;
+		const theme = {
+			...getMarkdownTheme(),
+			get codeBlockBg() {
+				return shaded ? shade : undefined;
+			},
+		};
+		const row = new AssistantMessageComponent(assistantMessage(), false, theme);
+		row.renderLive(80);
+		expect(row.compact()).toBe(true);
+		const copy = row.compactedCopy();
+		shaded = true;
+		const expected = new AssistantMessageComponent(assistantMessage(), false, theme).render(72);
+		expect(expected.join("")).toContain("\x1b[44m");
+		expect(copy.render(72)).toEqual(expected);
+	});
+
 	it("a compacted copy put in an entry's place draws what the entry draws, and behaves as it does", () => {
 		const message = pair(() => new AssistantMessageComponent(assistantMessage()));
 		const row = pair(bashRow);
@@ -201,14 +220,21 @@ describe("transcript entries that compact", () => {
 		expect(messageCopy).toBeInstanceOf(AssistantMessageComponent);
 		expect(rowCopy).toBeInstanceOf(ToolExecutionComponent);
 		same(80);
+		expect(rowCopy.isCompacted()).toBe(true);
+		expect(rowCopy.children).toHaveLength(0);
 		// The copies click, expand, hide thinking and render at other widths as the entries would.
 		expect(messageCopy.handleMouse(click(80, 1))?.handled).toBe(true);
 		expect(message.twin.handleMouse(click(80, 1))?.handled).toBe(true);
 		same(80);
-		rowCopy.setExpanded(true);
-		row.twin.setExpanded(true);
+		expect(rowCopy.handleMouse(click(80, 3))?.handled).toBe(true);
+		expect(row.twin.handleMouse(click(80, 3))?.handled).toBe(true);
+		expect(rowCopy.isCompacted()).toBe(false);
+		expect(row.entry.isCompacted()).toBe(true);
 		same(80);
+		expect(rowCopy.compact()).toBe(true);
 		same(61);
+		expect(rowCopy.isCompacted()).toBe(false);
+		expect(row.entry.isCompacted()).toBe(true);
 		expect(messageCopy.compact()).toBe(true);
 		expect(rowCopy.compact()).toBe(true);
 		children[0] = messageCopy.compactedCopy();

@@ -31,6 +31,7 @@ import {
 	setCapabilities,
 	type TerminalCapabilities,
 } from "./terminal-image.ts";
+import { BoundedTerminalWriter } from "./terminal-writer.ts";
 import {
 	type Component,
 	Container,
@@ -159,6 +160,8 @@ interface WheelEvent {
 interface ScrollbarDrag {
 	scrollView: ScrollView;
 	grabOffset: number;
+	/** Pointer and document coordinates at the instant the user grabbed a partially loaded scrollbar. */
+	origin?: { y: number; scrollTop: number };
 }
 
 interface ScrollbarTarget {
@@ -230,17 +233,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	readonly mode = "fullscreen" as const;
 	readonly [VIEWPORT_TUI] = true as const;
 	private previousScreen: string[] = [];
-	private lastDocument: string[] = [];
 	private previousScreenWidth = 0;
 	private previousScreenHeight = 0;
-	// The rows of the frame before, by what each was before it was finished (resets, width), and those that are images.
-	private finishedRows = new Map<string, string>();
-	private finishedRowsWidth = 0;
-	private imageRows = new Set<string>();
-	// The rows of the frame before as the layout drew them, by what they became without the prompt markers and with the fake
-	// cursors resolved, and whether the hardware cursor was shown.
-	private resolvedRows = new Map<string, string>();
+	// Each row has two forms: resolved for composition, then finished for the terminal. Keep the
+	// input of each stage so stationary rows and rows moved by scrolling can reuse their output.
+	private resolvedRows: string[] = [];
 	private resolvedRowsCursor = false;
+	private finishInputs: string[] = [];
+	private frameScrollTop = 0;
+	private imageRows = new Set<string>();
 	private layoutRoot: Component | undefined;
 	private currentLayout: LayoutFrame | undefined;
 	private readonly implicitDocument: Component;
@@ -286,13 +287,21 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly onRightClickPaste?: () => void;
 	private copyOnSelect: boolean;
 	private readonly copySelection?: (text: string) => Promise<boolean | string>;
+	private trimHistoryAtEnd = false;
+	private layingOutWholeDocument = false;
 	/**
-	 * Called before the document is read in whole: before render(), and before a key or mouse event acts on the viewport
-	 * (scrolling, search, prompt jumps, selection, the scrollbar). True when the document changed since it was last laid
-	 * out: a frame is drawn first, so that the event acts on the document as it is. For a document that draws its end
-	 * before the rest of it (a resumed transcript).
+	 * Complete a partially loaded document for export, search or absolute navigation. Return whether the
+	 * layout needs refreshing. Without a paging hook, viewport input also requests the whole document.
 	 */
 	beforeDocumentRead: (() => boolean) | undefined;
+	/**
+	 * Materialize the requested range in the primary document. Its first row is measured from the end.
+	 * The range includes the viewport and any active selection. Return undefined when unchanged, or the
+	 * number of prepended rows (zero when replacing measured placeholders).
+	 */
+	beforeViewportScroll?: (rowsFromEnd: number, viewportHeight: number) => number | undefined;
+	/** The viewport returned to the end. Older pages can be released once no selection, search or drag needs them. */
+	onViewportFollowEnd?: () => void;
 
 	constructor(
 		terminal: Terminal,
@@ -360,6 +369,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	resetTextSelection(): void {
 		this.clearTextSelection();
 		this.lastClick = undefined;
+		if (this.trimHistoryAtEnd) this.requestRender();
 	}
 
 	/** The lines of the last rendered frame, one per terminal row, as written to the terminal. */
@@ -374,9 +384,70 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.requestRender();
 	}
 
-	override render(width: number): string[] {
-		this.beforeDocumentRead?.();
+	override render(width: number): readonly string[] {
+		const changed = this.completeDocument();
+		if (!this.stopped) {
+			if (this.beforeViewportScroll && this.isFollowingOutput) this.trimHistoryAtEnd = true;
+			if (changed || this.trimHistoryAtEnd) this.requestRender();
+		}
 		return this.layoutRoot?.render(width) ?? super.render(width);
+	}
+
+	/** Preserve absolute scroll and selection coordinates before a setting changes historical row heights. */
+	prepareDocumentReflow(): void {
+		if (!this.isFollowingOutput || this.selectionPressActive || this.getSelectionBounds()) this.layoutWholeDocument();
+	}
+
+	private completeDocument(): boolean {
+		if (!this.beforeDocumentRead) return false;
+		const view = this.getPrimaryScrollView();
+		const oldHeight = this.currentLayout && getScrollViewBox(this.currentLayout, view)?.children[0]?.rect.height;
+		const oldTop = view.scrollTop;
+		const following = view.isFollowingEnd;
+		if (!this.beforeDocumentRead()) return false;
+		if (
+			this.beforeViewportScroll &&
+			oldHeight !== undefined &&
+			!this.stopped &&
+			(!following || this.selectionAnchor || this.lastClick)
+		) {
+			// Measure the prefix at the width of the current frame, even if a resize triggered this read.
+			const layout = renderLayoutFrame(
+				this.layoutRoot ?? this.implicitScrollView,
+				this.previousScreenWidth,
+				this.previousScreenHeight,
+				() => this.requestRender(),
+			);
+			const added = (getScrollViewBox(layout, view)?.children[0]?.rect.height ?? oldHeight) - oldHeight;
+			this.shiftSelection(view, added);
+			if (!following) view.scrollTo(oldTop + added, { disableFollow: true });
+		}
+		return true;
+	}
+
+	private layoutWholeDocument(): boolean {
+		if (!this.beforeViewportScroll || !this.completeDocument()) return false;
+		this.layingOutWholeDocument = true;
+		try {
+			this.renderNow();
+		} finally {
+			this.layingOutWholeDocument = false;
+		}
+		return true;
+	}
+
+	private shiftSelection(view: ScrollView, added: number): void {
+		// Word and line selection endpoints can also be the initial range's endpoints.
+		const points = new Set([
+			this.selectionAnchor,
+			this.selectionFocus,
+			this.selectionInitialRange?.start,
+			this.selectionInitialRange?.end,
+			this.lastClick,
+		]);
+		for (const point of points) {
+			if (point?.scrollView === view) point.row += added;
+		}
 	}
 
 	protected override getMountedRoots(): readonly Component[] {
@@ -402,7 +473,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			setCapabilities({ ...capabilities, images: null });
 			this.invalidate();
 		}
-		this.lastDocument = [];
 		this.selectionAnchor = undefined;
 		this.selectionFocus = undefined;
 		this.selectionGranularity = "character";
@@ -451,19 +521,38 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.terminal.write(`${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`);
 		} else {
 			const width = Math.max(1, this.terminal.columns);
-			const documentLines = this.resolveFakeCursors(this.render(width)).map((line) =>
-				line.replace(OSC133_ZONE_PREFIX, ""),
-			);
-			this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
-				(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
-			);
-			let buffer = `${BEGIN_SYNCHRONIZED_OUTPUT}${EXIT_ALT_SCREEN}${DISABLE_AUTOWRAP}`;
-			for (let row = 0; row < this.lastDocument.length; row++) {
-				if (row > 0) buffer += "\r\n";
-				buffer += `\r\x1b[2K${this.lastDocument[row] ?? ""}`;
+			const document = this.render(width);
+			// Subclasses can override these hooks for the whole document. Preserve their
+			// call shape while streaming the built-in row-local transforms on demand.
+			const customTransforms =
+				this.resolveFakeCursors !== super.resolveFakeCursors || this.applyLineResets !== super.applyLineResets;
+			const transformed = customTransforms
+				? this.applyLineResets(
+						this.resolveFakeCursors(document).map((line) =>
+							line.replace(OSC133_ZONE_PREFIX, "").replaceAll(CURSOR_MARKER, ""),
+						),
+					)
+				: undefined;
+			const count = transformed?.length ?? document.length;
+			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
+			output.append(BEGIN_SYNCHRONIZED_OUTPUT + EXIT_ALT_SCREEN + DISABLE_AUTOWRAP);
+			const single = [""];
+			for (let row = 0; row < count; row++) {
+				let line: string;
+				if (transformed) {
+					line = transformed[row] ?? "";
+				} else {
+					const resolved = this.resolveFakeCursorLine(document[row]!);
+					single[0] = resolved.replace(OSC133_ZONE_PREFIX, "").replaceAll(CURSOR_MARKER, "");
+					line = this.applyLineResets(single)[0]!;
+				}
+				output.append(row > 0 ? "\r\n\r\x1b[2K" : "\r\x1b[2K");
+				output.append(
+					isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true),
+				);
 			}
-			buffer += `\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`;
-			this.terminal.write(buffer);
+			output.append(`\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`);
+			output.flush();
 		}
 		if (this.savedCapabilities) {
 			setCapabilities(this.savedCapabilities);
@@ -538,7 +627,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override resetRenderState(): void {
 		this.previousScreen = [];
-		this.finishedRows = new Map();
+		this.finishInputs = [];
+		this.resolvedRows = [];
 		this.imageRows = new Set();
 		this.previousScreenWidth = 0;
 		this.previousScreenHeight = 0;
@@ -546,21 +636,73 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	scrollBy(lines: number): void {
-		this.getPrimaryScrollView().scrollBy(lines);
-		this.requestRender();
+		this.scrollViewBy(this.getPrimaryScrollView(), lines);
+		this.requestViewRender();
+	}
+
+	private scrollViewBy(view: ScrollView, lines: number): number {
+		if (view !== this.getPrimaryScrollView()) return view.scrollBy(lines);
+		if (!Number.isFinite(lines)) return 0;
+		lines = Math.trunc(lines);
+		if (lines === 0 || (lines > 0 && view.isFollowingEnd)) return view.scrollBy(lines);
+		const changed = this.updateViewportWindow(this.currentLayout, view, lines);
+		const remaining = view.scrollBy(lines);
+		if (view.isFollowingEnd) this.trimHistoryAtEnd = true;
+		if (changed) this.renderNow();
+		return remaining;
+	}
+
+	private updateViewportWindow(layout: LayoutFrame | undefined, view: ScrollView, lines: number): boolean {
+		if (
+			!this.beforeViewportScroll ||
+			!layout ||
+			this.layingOutWholeDocument ||
+			this.activeSearch ||
+			this.scrollbarDrag
+		)
+			return false;
+		const height = getScrollViewBox(layout, view)?.children[0]?.rect.height;
+		if (height === undefined) return false;
+		const top = view.scrollTop;
+		const following = view.isFollowingEnd;
+		let start = Math.max(view.viewportHeight, height - top - lines);
+		let end = start - view.viewportHeight;
+		if (this.selectionPressActive || this.getSelectionBounds()) {
+			for (const point of [
+				this.selectionAnchor,
+				this.selectionFocus,
+				this.selectionInitialRange?.start,
+				this.selectionInitialRange?.end,
+			]) {
+				if (point?.scrollView !== view) continue;
+				start = Math.max(start, height - point.row);
+				end = Math.min(end, height - point.row - 1);
+			}
+		}
+		const added = this.beforeViewportScroll(start, start - end);
+		if (added === undefined) return false;
+		if (added !== 0) {
+			this.shiftSelection(view, added);
+			view.updateLayout(height + added, view.viewportHeight, () => this.requestRender());
+			if (!following) view.scrollTo(top + added, { disableFollow: true });
+		}
+		return true;
 	}
 
 	scrollToTop(): void {
+		this.layoutWholeDocument();
 		this.getPrimaryScrollView().scrollToStart();
-		this.requestRender();
+		this.requestViewRender();
 	}
 
 	scrollToBottom(): void {
 		this.getPrimaryScrollView().scrollToEnd();
-		this.requestRender();
+		this.trimHistoryAtEnd = true;
+		this.requestViewRender();
 	}
 
 	private scrollToPrompt(direction: -1 | 1): void {
+		this.layoutWholeDocument();
 		if (!this.currentLayout) return;
 		const scrollView = this.getPrimaryScrollView();
 		const lines = getScrollViewBox(this.currentLayout, scrollView)?.scrollContentLines;
@@ -569,7 +711,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		for (let row = scrollView.scrollTop + direction; row >= 0 && row < lines.length; row += direction) {
 			if (!OSC133_PROMPT_START.test(lines[row] ?? "")) continue;
 			scrollView.scrollTo(row);
-			this.requestRender();
+			if (scrollView.isFollowingEnd) this.trimHistoryAtEnd = true;
+			this.requestViewRender();
 			return;
 		}
 	}
@@ -579,6 +722,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.closeSearch();
 			return;
 		}
+		this.layoutWholeDocument();
 		const component = new AltScreenSearchComponent(
 			(query) => this.updateSearchQuery(query),
 			this.searchNavigationButtonStyle,
@@ -605,6 +749,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const search = this.activeSearch;
 		if (!search) return;
 		this.activeSearch = undefined;
+		if (this.isFollowingOutput) this.trimHistoryAtEnd = true;
 		search.overlay?.hide();
 		this.requestRender();
 	}
@@ -760,7 +905,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			return { consume: true };
 		}
 		if (data === FOCUS_IN) return { consume: true };
-		if (this.beforeDocumentRead !== undefined && this.isViewportInput(data) && this.beforeDocumentRead()) {
+		if (
+			!this.beforeViewportScroll &&
+			this.beforeDocumentRead &&
+			this.isViewportInput(data) &&
+			this.completeDocument()
+		) {
 			this.renderNow();
 		}
 
@@ -1057,13 +1207,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const seen = new Set<ScrollView>();
 		for (const scrollView of this.currentLayout ? getScrollViewsAt(this.currentLayout, event.x, event.y) : []) {
 			seen.add(scrollView);
-			remaining = scrollView.scrollBy(remaining);
+			remaining = this.scrollViewBy(scrollView, remaining);
 			if (remaining === 0 || scrollView.overscroll === "contain") break;
 		}
 		const primary = this.getPrimaryScrollView();
-		if (remaining !== 0 && !seen.has(primary)) primary.scrollBy(remaining);
+		if (remaining !== 0 && !seen.has(primary)) this.scrollViewBy(primary, remaining);
 		this.updateScrollbarHover(event.x, event.y);
-		this.requestRender();
+		// Scrolling moves the viewport only. Reusing the previous component output keeps a wheel
+		// frame O(viewport); re-rendering a long transcript on every wheel event saturated a core.
+		this.requestViewRender();
 	}
 
 	private parseSgrMouseEvent(data: string): SgrMouseEvent | undefined {
@@ -1140,8 +1292,19 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		geometry: ScrollbarGeometry,
 		pointerY: number,
 		grabOffset: number,
+		origin?: ScrollbarDrag["origin"],
 	): void {
 		const maxThumbOffset = geometry.trackHeight - geometry.thumbHeight;
+		if (origin && maxThumbOffset > 0) {
+			let top = origin.scrollTop;
+			if (pointerY !== origin.y) {
+				if (pointerY <= geometry.trackTop) top = 0;
+				else if (pointerY >= geometry.trackTop + geometry.trackHeight - 1) top = geometry.maxScrollTop;
+				else top += Math.round(((pointerY - origin.y) / maxThumbOffset) * geometry.maxScrollTop);
+			}
+			scrollView.scrollTo(top);
+			return;
+		}
 		const thumbOffset = Math.max(0, Math.min(maxThumbOffset, pointerY - geometry.trackTop - grabOffset));
 		const scrollTop = maxThumbOffset === 0 ? 0 : Math.round((thumbOffset / maxThumbOffset) * geometry.maxScrollTop);
 		scrollView.scrollTo(scrollTop);
@@ -1150,6 +1313,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private handleScrollbarMouseEvent(event: SgrMouseEvent): boolean {
 		if (this.scrollbarDrag) {
 			if (event.release) {
+				if (this.scrollbarDrag.scrollView === this.getPrimaryScrollView() && this.isFollowingOutput) {
+					this.trimHistoryAtEnd = true;
+					this.requestRender();
+				}
 				this.stopScrollbarDrag();
 				return true;
 			}
@@ -1163,14 +1330,23 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 					geometry,
 					event.y,
 					this.scrollbarDrag.grabOffset,
+					this.scrollbarDrag.origin,
 				);
 			}
 			return true;
 		}
 
 		if (event.release || (event.button & 32) !== 0 || (event.button & 3) !== 0) return false;
-		const target = this.getScrollbarTargetAt(event.x, event.y);
+		let target = this.getScrollbarTargetAt(event.x, event.y);
 		if (!target) return false;
+		const onThumb =
+			event.y >= target.geometry.thumbTop && event.y < target.geometry.thumbTop + target.geometry.thumbHeight;
+		let origin: ScrollbarDrag["origin"];
+		if (target.scrollView === this.getPrimaryScrollView() && this.layoutWholeDocument()) {
+			target = this.getScrollbarTargetAt(event.x, event.y);
+			if (!target) return false;
+			if (onThumb) origin = { y: event.y, scrollTop: target.scrollView.scrollTop };
+		}
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
 		this.selectionAnchor = undefined;
@@ -1181,13 +1357,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.pressedUrl = undefined;
 		this.selectionDragged = false;
 		this.setScrollbarHover(target.scrollView);
-		const onThumb =
-			event.y >= target.geometry.thumbTop && event.y < target.geometry.thumbTop + target.geometry.thumbHeight;
 		const grabOffset = onThumb ? event.y - target.geometry.thumbTop : Math.floor(target.geometry.thumbHeight / 2);
 		if (!onThumb) this.scrollScrollbarToPointer(target.scrollView, target.geometry, event.y, grabOffset);
 		this.scrollbarDrag = {
 			scrollView: target.scrollView,
 			grabOffset,
+			origin,
 		};
 		return true;
 	}
@@ -1361,14 +1536,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.stopSelectionAutoScroll();
 			return;
 		}
-		const remaining = scrollView.scrollBy(direction);
+		const remaining = this.scrollViewBy(scrollView, direction);
 		if (remaining === direction) {
 			this.stopSelectionAutoScroll();
 			return;
 		}
 		const point = this.getScrollSelectionPoint(scrollView, pointer.x, pointer.y);
 		if (point) this.updateSelectionFocus(point);
-		this.requestRender();
+		// Selection is painted onto the screen after layout, so it needs no new component output.
+		this.requestViewRender();
 	}
 
 	private stopSelectionAutoScroll(): void {
@@ -1451,6 +1627,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionAnchor = range?.start ?? anchor;
 		this.selectionFocus = range?.end ?? anchor;
 		this.selectionDragged = false;
+		if (this.beforeViewportScroll && scrollView === this.getPrimaryScrollView()) {
+			if (scrollView.isFollowingEnd) this.trimHistoryAtEnd = true;
+			this.updateViewportWindow(this.currentLayout, scrollView, 0);
+		}
 		this.pressedUrl = range
 			? undefined
 			: getOsc8LinkAtColumn(
@@ -1774,7 +1954,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		// The distance at which most rows are what another row was. Rows that are the same after moving need not be drawn.
 		let best = 0;
 		let up = 0;
-		for (let distance = 1; span - distance > best; distance++) {
+		// Moving d rows exposes at least d new rows. Even a perfect match cannot save
+		// the required writes if d exceeds the number of changed rows minus that saving.
+		const maxDistance = changed - MIN_ROWS_SAVED_BY_SCROLLING;
+		for (let distance = 1; distance <= maxDistance && span - distance > best; distance++) {
 			let sameUp = 0;
 			let sameDown = 0;
 			for (let row = top; row + distance <= bottom; row++) {
@@ -1803,28 +1986,84 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (this.stopped || !this.altScreenActive) return;
 		const width = Math.max(1, this.terminal.columns);
 		const height = Math.max(1, this.terminal.rows);
+		const view = this.getPrimaryScrollView();
+		const wasFollowing = view.isFollowingEnd;
+		let heightBeforeTrim: number | undefined;
+		let documentChanged = false;
+		if (
+			this.currentLayout &&
+			this.beforeViewportScroll &&
+			(width !== this.previousScreenWidth || height !== this.previousScreenHeight)
+		) {
+			if (wasFollowing) this.trimHistoryAtEnd = true;
+			else documentChanged = this.completeDocument();
+		}
+		if (
+			this.trimHistoryAtEnd &&
+			this.onViewportFollowEnd &&
+			!this.layingOutWholeDocument &&
+			view.isFollowingEnd &&
+			!this.activeSearch &&
+			!this.scrollbarDrag &&
+			!this.mouseCapture &&
+			!this.mousePressTarget &&
+			!this.selectionPressActive &&
+			!this.getSelectionBounds()
+		) {
+			this.trimHistoryAtEnd = false;
+			heightBeforeTrim = this.currentLayout && getScrollViewBox(this.currentLayout, view)?.children[0]?.rect.height;
+			this.onViewportFollowEnd();
+			documentChanged = true;
+		}
 		const root = this.layoutRoot ?? this.implicitScrollView;
-		let nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+		const requestViewRender = () => this.requestViewRender();
+		// Without a component change since the last frame (a scroll or selection frame), its output is reused: the frame
+		// then costs O(viewport). Completing or trimming the document above changed it.
+		const reusableOutput = this.contentChanged || documentChanged ? undefined : this.currentLayout?.renderCache;
+		this.contentChanged = false;
+		let nextLayout = renderLayoutFrame(root, width, height, requestViewRender, reusableOutput);
+		const primary = nextLayout.primaryScrollView ?? this.implicitScrollView;
+		if (this.onViewportFollowEnd && view === primary && !wasFollowing && view.isFollowingEnd) {
+			// A shrinking document can bring a detached viewport back to the end without a scroll event.
+			this.trimHistoryAtEnd = true;
+			this.requestRender();
+		}
+		if (heightBeforeTrim !== undefined) {
+			const after = getScrollViewBox(nextLayout, primary)?.children[0]?.rect.height ?? heightBeforeTrim;
+			this.shiftSelection(primary, after - heightBeforeTrim);
+		}
+		// New output can move the visible range relative to the end while its top stays anchored.
+		const updateTail = this.trimHistoryAtEnd && !this.onViewportFollowEnd && primary.isFollowingEnd;
+		if (updateTail) this.trimHistoryAtEnd = false;
+		if (
+			(updateTail || !primary.isFollowingEnd || this.selectionPressActive || this.getSelectionBounds()) &&
+			this.updateViewportWindow(nextLayout, primary, 0)
+		) {
+			// The window took in other rows of the document: nothing of the frame before can be reused.
+			nextLayout = renderLayoutFrame(root, width, height, requestViewRender);
+		}
 		if (this.refreshSearch(nextLayout)) {
-			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+			nextLayout = renderLayoutFrame(root, width, height, requestViewRender, nextLayout.renderCache);
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes. A row that is a row of the frame
 		// before (most of the screen, while a reply streams in) is resolved as that one was, and is that same string.
 		const showHardwareCursor = this.getShowHardwareCursor();
-		const knownResolved = this.resolvedRowsCursor === showHardwareCursor ? this.resolvedRows : undefined;
-		const resolvedRows = new Map<string, string>();
-		const single = [""];
-		let screen = nextLayout.lines.map((line) => {
-			let resolved = knownResolved?.get(line);
-			if (resolved === undefined) {
-				single[0] = line.startsWith("\x1b]133;") ? line.replace(OSC133_ZONE_PREFIX, "") : line;
-				resolved = this.resolveFakeCursors(single)[0]!;
-			}
-			resolvedRows.set(line, resolved);
-			return resolved;
+		const scrollTop = nextLayout.primaryScrollView?.scrollTop ?? 0;
+		const shift = scrollTop - this.frameScrollTop;
+		const previousLayout = this.resolvedRowsCursor === showHardwareCursor ? this.currentLayout?.lines : undefined;
+		const resolve = (line: string): string => {
+			const stripped = line.startsWith("\x1b]133;") ? line.replace(OSC133_ZONE_PREFIX, "") : line;
+			return this.resolveFakeCursors === super.resolveFakeCursors
+				? this.resolveFakeCursorLine(stripped)
+				: this.resolveFakeCursors([stripped])[0]!;
+		};
+		const resolved = nextLayout.lines.map((line, row) => {
+			if (previousLayout?.[row] === line) return this.resolvedRows[row]!;
+			if (shift && previousLayout?.[row + shift] === line) return this.resolvedRows[row + shift]!;
+			return resolve(line);
 		});
-		this.resolvedRows = resolvedRows;
-		this.resolvedRowsCursor = showHardwareCursor;
+		// extractCursorPosition edits its input; the resolved rows still include the markers.
+		let screen = resolved.slice();
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
 		screen = this.compositeOverlays(screen, width, height);
@@ -1835,25 +2074,22 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const cursorPos = this.extractCursorPosition(screen, height);
 		// A row that is what a row of the frame before was (most of the screen, while a reply streams in) is finished as
 		// that one was, and is that same string: comparing it with what is shown then reads neither.
-		const knownRows = this.finishedRowsWidth === width ? this.finishedRows : undefined;
+		const previousInputs = this.previousScreenWidth === width ? this.finishInputs : undefined;
 		const previousImageRows = this.imageRows;
-		const finishedRows = new Map<string, string>();
 		const imageRows = new Set<string>();
-		screen = screen.map((line) => {
-			let finished = knownRows?.get(line);
-			if (finished === undefined) {
-				finished = this.applyLineResets([line])[0];
-				if (isImageLine(finished)) imageRows.add(finished);
-				else if (visibleWidth(finished) > width) finished = sliceByColumn(finished, 0, width, true);
-			} else if (previousImageRows.has(finished)) {
-				imageRows.add(finished);
+		const finishInputs = screen;
+		screen = screen.map((line, row) => {
+			const from = previousInputs?.[row] === line ? row : row + shift;
+			if (previousInputs?.[from] === line) {
+				const finished = this.previousScreen[from]!;
+				if (previousImageRows.size && previousImageRows.has(finished)) imageRows.add(finished);
+				return finished;
 			}
-			finishedRows.set(line, finished);
+			const finished = this.applyLineResets([line])[0]!;
+			if (isImageLine(finished)) imageRows.add(finished);
+			else if (visibleWidth(finished) > width) return sliceByColumn(finished, 0, width, true);
 			return finished;
 		});
-		this.finishedRows = finishedRows;
-		this.finishedRowsWidth = width;
-		this.imageRows = imageRows;
 
 		const fullRedraw =
 			this.previousScreen.length === 0 || this.previousScreenWidth !== width || this.previousScreenHeight !== height;
@@ -1888,11 +2124,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		let buffer = BEGIN_SYNCHRONIZED_OUTPUT;
 		if (fullRedraw) {
 			this.fullRedrawCount += 1;
-			const clearImages =
-				this.imageProtocol === "kitty" && hadUploadedKittyImages
-					? deleteAllKittyPlacements()
-					: this.deleteKittyImages();
-			buffer += `${clearImages}\x1b[2J`;
+			if (this.imageProtocol === "kitty" && hadUploadedKittyImages) {
+				// Kitty frees image data without placements on ED 2, which would break placement-only reuse.
+				// Every row is cleared with EL 2 below, so keep the uploads and skip the screen clear.
+				buffer += deleteAllKittyPlacements();
+			} else {
+				buffer += `${this.deleteKittyImages()}\x1b[2J`;
+			}
 		} else if (imagesNeedRedraw) {
 			if (this.imageProtocol === "iterm2") buffer += "\x1b[2J";
 			else if (this.imageProtocol === "kitty") buffer += deleteAllKittyPlacements();
@@ -1959,6 +2197,11 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		buffer += END_SYNCHRONIZED_OUTPUT;
 		this.terminal.write(buffer);
 
+		this.resolvedRows = resolved;
+		this.resolvedRowsCursor = showHardwareCursor;
+		this.frameScrollTop = scrollTop;
+		this.finishInputs = finishInputs;
+		this.imageRows = imageRows;
 		this.previousScreen = screen;
 		this.previousScreenWidth = width;
 		this.previousScreenHeight = height;

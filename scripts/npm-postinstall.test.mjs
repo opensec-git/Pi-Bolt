@@ -406,8 +406,18 @@ test("Windows: a release without a Windows build, or without the variant asked f
 	await assert.rejects(run(makePackage(t), { fetch, key: signer.key }).promise, /has no Windows build x64 \(pi-bolt-win32-x64\.zip is not in its SHA256SUMS\)/);
 	const other = fakeFetch(githubRoutes(makeRelease({ signer })));
 	await assert.rejects(run(makePackage(t), { fetch: other.fetch, key: signer.key, env: { PIBOLT_VARIANT: "x64-jit" } }).promise, /pi-bolt-win32-x64-jit\.zip is not in its SHA256SUMS/);
-	await assert.rejects(run(makePackage(t), { fetch: other.fetch, key: signer.key, env: { PIBOLT_VARIANT: "arm64" } }).promise, /PIBOLT_VARIANT must be x64, x64-baseline or x64-jit/);
+	await assert.rejects(run(makePackage(t), { fetch: other.fetch, key: signer.key, env: { PIBOLT_VARIANT: "jit" } }).promise, /pi-bolt-win32-x64-jit\.zip is not in its SHA256SUMS/);
+	await assert.rejects(run(makePackage(t), { fetch: other.fetch, key: signer.key, env: { PIBOLT_VARIANT: "arm64" } }).promise, /PIBOLT_VARIANT must be x64, x64-baseline, x64-jit or jit/);
 	await assert.rejects(run(makePackage(t), { fetch: other.fetch, key: signer.key, env: { PIBOLT_SOURCE: "ftp" } }).promise, /PIBOLT_SOURCE must be auto, npm or github/);
+});
+
+test("Windows: PIBOLT_VARIANT=jit installs the signed x64-jit build", async (t) => {
+	const signer = newKey();
+	const zip = buildZip("x64-jit");
+	const release = makeRelease({ signer, zips: { x64: buildZip(), "x64-jit": zip } });
+	const { fetch } = fakeFetch({ ...githubRoutes(release), [npmUrl("x64-jit")]: npmPackage(zip, "x64-jit") });
+	const result = await run(makePackage(t), { fetch, key: signer.key, env: { PIBOLT_VARIANT: "jit" } }).promise;
+	assert.deepEqual(result, { variant: "x64-jit", from: "npm", signed: true });
 });
 
 test("Windows: the baseline build on a CPU without AVX2, when the release has one", async (t) => {
@@ -560,6 +570,43 @@ function fakeUname(dir, system) {
 	chmodSync(join(bin, "uname"), 0o755);
 	return bin;
 }
+
+test("jit selects the host's runtime on first use and reuses the concrete variant", { skip: process.platform === "win32" }, (t) => {
+	for (const [platform, arch, libc, variant] of [
+		["darwin", "arm64", "", "arm64-jit"],
+		["linux", "aarch64", "", "arm64-jit"],
+		["linux", "x86_64", "glibc", "x64-jit"],
+		["linux", "x86_64", "musl", "x64-musl-jit"],
+	]) {
+		const pkgDir = makePackage(t);
+		const marker = join(pkgDir, "macos");
+		if (platform === "darwin") mkdirSync(marker);
+		launcherSeesMacosAt(pkgDir, marker);
+		install.installPosix({ pkgDir });
+		const bin = fakeUname(pkgDir, arch);
+		writeFileSync(join(bin, "ldd"), `#!/bin/sh\necho '${libc}'\n`, { mode: 0o755 });
+		writeFileSync(join(pkgDir, "install.sh"), `set -eu
+test "$PIBOLT_VARIANT" = "${variant}"
+dir="$PIBOLT_INSTALL/pi-bolt-${platform}-$PIBOLT_VARIANT"
+mkdir -p "$dir"
+echo installed >&2
+cat >"$dir/pi" <<'END'
+#!/bin/sh
+printf '%s\\n' "${variant}" "$@"
+END
+chmod 755 "$dir/pi"
+`);
+		const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, PIBOLT_HOME: join(pkgDir, "home"), PIBOLT_VARIANT: "jit" };
+		const args = ["--extension", "my extension.ts"];
+		const exe = join(pkgDir, "bin", "pi-bolt.exe");
+		for (const [requested, first] of [["jit", true], [variant, false], ["jit", false]]) {
+			const result = spawnSync(exe, args, { encoding: "utf8", env: { ...env, PIBOLT_VARIANT: requested } });
+			assert.equal(result.status, 0, result.stderr);
+			assert.equal(result.stdout, [variant, ...args, ""].join("\n"));
+			assert.equal(result.stderr.includes("installed"), first);
+		}
+	}
+});
 
 test("the placeholder, run without the install script: on Linux it starts the launcher; elsewhere it says what to run", { skip: !findSh() && "no sh" }, (t) => {
 	const pkgDir = makePackage(t);

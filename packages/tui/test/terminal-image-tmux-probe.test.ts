@@ -54,17 +54,20 @@ describe("tmux hyperlink probe", { skip: process.platform === "win32", timeout: 
 
 	it("does not wait for tmux and draws again once it reports hyperlinks", async () => {
 		fakeTmux("RGB,hyperlinks,title", 0.05);
-		const changed = new Promise<void>((resolve) => {
-			const unsubscribe = onCapabilitiesChange(() => {
-				unsubscribe();
-				resolve();
-			});
-		});
-		const started = performance.now();
-		assert.strictEqual(getCapabilities().hyperlinks, false);
-		assert.ok(performance.now() - started < 40, "getCapabilities() waited for tmux");
-		await changed;
-		assert.strictEqual(getCapabilities().hyperlinks, true);
+		const changed = Promise.withResolvers<void>();
+		const unsubscribe = onCapabilitiesChange(changed.resolve);
+		// The probe releases its event-loop handles. Model a live terminal while waiting for its answer.
+		const timeout = setTimeout(() => changed.reject(new Error("tmux capability update timed out")), 2000);
+		try {
+			const started = performance.now();
+			assert.strictEqual(getCapabilities().hyperlinks, false);
+			assert.ok(performance.now() - started < 40, "getCapabilities() waited for tmux");
+			await changed.promise;
+			assert.strictEqual(getCapabilities().hyperlinks, true);
+		} finally {
+			clearTimeout(timeout);
+			unsubscribe();
+		}
 	});
 
 	it("keeps hyperlinks off without a change notice when tmux does not forward them", async () => {

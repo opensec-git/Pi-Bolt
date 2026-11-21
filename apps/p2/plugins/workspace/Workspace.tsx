@@ -8,13 +8,16 @@ import {
 	FileIcon,
 	FolderIcon,
 	type Navigation,
+	pressVerb,
 	QueryCache,
 	RefreshIcon,
 	routeKey,
 	SearchIcon,
 	Slot,
 	TerminalIcon,
+	upperFirst,
 	useDragSize,
+	usePointerKind,
 	useScrollMemory,
 	type WorkspaceFileRoute,
 	type WorkspaceRoute,
@@ -36,6 +39,7 @@ import type { Workspace } from "./contract.ts";
 import { type CommentEditor, type FileView, type ReviewComment, reviewMessage, WorkspaceFile } from "./file.tsx";
 import { type FuzzyMatch, rankFiles } from "./fuzzy.ts";
 import type { WorkspaceChange, WorkspaceCommit, WorkspaceQuery, WorkspaceResult } from "./protocol.ts";
+import { showWorkspaceTab } from "./tabs.ts";
 
 const LOG_PAGE = 30;
 /** Name filter results shown, best first. */
@@ -192,6 +196,7 @@ export function WorkspacePanel({
 	/** Deliver review comments as the user's next message; absent for viewers who cannot send. */
 	onSend?: (text: string) => Promise<void>;
 }) {
+	const pointer = usePointerKind();
 	const { tab, directory, file: selection, commit: openCommit, search: submitted } = route;
 	// Docked with room for a file beside the list (measured below): Files, Changes and Search then show the open file
 	// to the left of their list instead of in its place. Phones and narrow windows keep one column.
@@ -247,23 +252,7 @@ export function WorkspacePanel({
 			: void nav.close(update((current) => ({ ...current, commit: undefined, file: undefined })));
 	const setSubmitted = (search: WorkspaceRoute["search"]) =>
 		void nav.replace(update((current) => ({ ...current, search }))(nav.route));
-	// Tabs are lateral: switching returns to where the panel opened, keeping each tab's
-	// folder and search but dropping files and commits visited meanwhile.
-	const setTab = (next: WorkspaceTab) => {
-		const current = nav.route.workspace;
-		if (!current) return;
-		const target: WorkspaceRoute = {
-			tab: next,
-			directory: current.directory,
-			...(current.search ? { search: current.search } : {}),
-			...(current.terminal ? { terminal: current.terminal } : {}),
-			...(next === "terminal" ? { startTerminal: true } : {}),
-		};
-		void nav.reset(
-			(entry) => entry.workspace !== undefined && entry.layers.length === 0,
-			(landed) => ({ ...landed, workspace: target }),
-		);
-	};
+	const setTab = (next: WorkspaceTab) => showWorkspaceTab(nav, next);
 	const [contextLines, setContextLines] = useState(3);
 	// Inputs start from the submitted search a restored entry carries.
 	const [searchText, setSearchText] = useState(submitted?.text ?? "");
@@ -951,7 +940,9 @@ export function WorkspacePanel({
 				))}
 			</div>
 		) : (
-			<p className="notice workspace-note">No unsent comments. Tap a line number in a file or diff to comment.</p>
+			<p className="notice workspace-note">
+				No unsent comments. {upperFirst(pressVerb(pointer))} a line number in a file or diff to comment.
+			</p>
 		);
 	} else if (tab === "search") {
 		const value = search.value;

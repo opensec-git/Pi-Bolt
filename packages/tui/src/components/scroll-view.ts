@@ -26,6 +26,8 @@ export class ScrollView extends Container {
 	readonly overscroll: "chain" | "contain";
 	readonly scrollbarTrackStyle: (text: string) => string;
 	readonly scrollbarThumbStyle: (text: string) => string;
+	/** Unmeasured document lines preceding the laid-out region, used only to paint the scrollbar. */
+	estimatedPrefixHeight?: () => number;
 	private currentScrollbar: ScrollViewScrollbar;
 	private readonly scrollbarHideDelayMs: number;
 	private currentScrollTop = 0;
@@ -212,7 +214,7 @@ export class ScrollView extends Container {
 		throw new Error("ScrollView child cannot be cleared");
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const contentWidth = this.getContentWidth(width);
 		const lines = this.child.render(contentWidth);
 		return contentWidth === width ? lines : lines.map((line) => `${line} `);

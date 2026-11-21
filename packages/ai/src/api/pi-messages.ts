@@ -181,7 +181,7 @@ function appendRewriteDiagnostic(message: AssistantMessage, rewrite: PiMessagesR
 	});
 }
 
-function createEventConverter(model: Model<"pi-messages">) {
+function createEventConverter(model: Model<"pi-messages">, stream: AssistantMessageEventStream) {
 	const partial: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -268,15 +268,15 @@ function createEventConverter(model: Model<"pi-messages">) {
 					name: event.toolName,
 					arguments: {},
 				};
-				toolArguments.set(event.contentIndex, new ToolCallArgumentsStream());
+				toolArguments.set(event.contentIndex, new ToolCallArgumentsStream(stream));
 				break;
 			case "toolcall_delta": {
 				const args = toolArguments.get(event.contentIndex);
-				if (args !== undefined)
-					(partial.content[event.contentIndex] as ToolCall).arguments = args.append(event.delta);
+				args?.appendTo(partial.content[event.contentIndex] as ToolCall, event.delta);
 				break;
 			}
 			case "toolcall_end":
+				toolArguments.get(event.contentIndex)?.endPreview();
 				Object.assign(partial.content[event.contentIndex]!, event.toolCall);
 				toolArguments.delete(event.contentIndex);
 				return {
@@ -375,8 +375,8 @@ export const stream: StreamFunction<"pi-messages", PiMessagesOptions> = (
 	context: TranscriptContext,
 	options?: PiMessagesOptions,
 ): AssistantMessageEventStream => {
-	const eventStream = new AssistantMessageEventStream();
-	const convertEvent = createEventConverter(model);
+	const eventStream = new AssistantMessageEventStream(options);
+	const convertEvent = createEventConverter(model, eventStream);
 
 	void (async () => {
 		try {

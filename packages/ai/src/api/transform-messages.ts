@@ -69,7 +69,7 @@ export function toolCallIds(results: readonly ToolResultMessage[]): string {
 interface TransformedAssistant {
 	message: AssistantMessage;
 	renamedIds: [string, string][] | undefined;
-	toolCalls: ToolCall[];
+	toolCalls: ToolCall[] | undefined;
 }
 
 function transformAssistant<TApi extends Api>(
@@ -78,32 +78,25 @@ function transformAssistant<TApi extends Api>(
 	normalizeToolCallId: ((id: string, model: Model<TApi>, source: AssistantMessage) => string) | undefined,
 ): TransformedAssistant {
 	let renamedIds: [string, string][] | undefined;
+	let toolCalls: ToolCall[] | undefined;
 	const isSameModel =
 		assistantMsg.provider === model.provider && assistantMsg.api === model.api && assistantMsg.model === model.id;
 
-	const transformedContent = assistantMsg.content.flatMap((block) => {
+	const transformedContent: AssistantMessage["content"] = [];
+	assistantMsg.content.forEach((block) => {
 		if (block.type === "thinking") {
 			// Thinking from another model is dropped. Signatures and encrypted reasoning are
 			// only valid for the model that produced them, and sending readable thinking as
 			// plain text makes the new model treat it as part of the visible reply.
-			if (!isSameModel) return [];
+			if (!isSameModel) return;
 			// Keep redacted and signed blocks even if the thinking text is empty
 			// (OpenAI encrypted reasoning); they are needed for replay.
-			if (block.redacted || block.thinkingSignature) return block;
-			if (!block.thinking || block.thinking.trim() === "") return [];
-			return block;
-		}
-
-		if (block.type === "text") {
-			if (isSameModel) return block;
-			return {
-				type: "text" as const,
-				text: block.text,
-			};
-		}
-
-		if (block.type === "toolCall") {
-			const toolCall = block as ToolCall;
+			if (!block.redacted && !block.thinkingSignature && (!block.thinking || block.thinking.trim() === "")) return;
+			transformedContent.push(block);
+		} else if (block.type === "text") {
+			transformedContent.push(isSameModel ? block : { type: "text", text: block.text });
+		} else if (block.type === "toolCall") {
+			const toolCall = block;
 			let normalizedToolCall: ToolCall = toolCall;
 
 			if (!isSameModel && toolCall.thoughtSignature) {
@@ -120,10 +113,12 @@ function transformAssistant<TApi extends Api>(
 				}
 			}
 
-			return normalizedToolCall;
+			transformedContent.push(normalizedToolCall);
+			toolCalls ??= [];
+			toolCalls.push(normalizedToolCall);
+		} else {
+			transformedContent.push(block);
 		}
-
-		return block;
 	});
 
 	const message: AssistantMessage = {
@@ -133,8 +128,16 @@ function transformAssistant<TApi extends Api>(
 	return {
 		message,
 		renamedIds,
-		toolCalls: transformedContent.filter((b) => b.type === "toolCall") as ToolCall[],
+		toolCalls,
 	};
+}
+
+function containsOnlyText(blocks: AssistantMessage["content"]): boolean {
+	for (const block of blocks) {
+		// forEach in transformAssistant skips holes in imported message content.
+		if (block?.type !== "text") return false;
+	}
+	return true;
 }
 
 /**
@@ -152,6 +155,8 @@ export function transformMessages<TApi extends Api>(
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
 	cache?: RequestCacheRun,
 	sources?: (Message | undefined)[],
+	/** A read-only converter that handles cross-model text signatures itself can read text-only replies directly. */
+	options?: { preserveTextOnlyReplies?: boolean },
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
@@ -192,104 +197,86 @@ export function transformMessages<TApi extends Api>(
 			return cache ? cache.derive(source, renamed ? normalizedId : "", make) : make();
 		}
 
-		// Assistant messages need transformation check
 		if (msg.role === "assistant") {
+			if (options?.preserveTextOnlyReplies && containsOnlyText(msg.content)) return msg;
 			const result = cache
 				? cache.derive(source, "", () => transformAssistant(msg as AssistantMessage, model, normalizeToolCallId))
 				: transformAssistant(msg as AssistantMessage, model, normalizeToolCallId);
 			if (result.renamedIds) for (const [id, normalizedId] of result.renamedIds) toolCallIdMap.set(id, normalizedId);
-			toolCallsAt[index] = result.toolCalls;
+			if (result.toolCalls) toolCallsAt[index] = result.toolCalls;
 			return result.message;
 		}
 		return msg;
 	});
 
-	// Second pass: insert synthetic empty tool results for orphaned tool calls
-	// This preserves thinking signatures and satisfies API requirements
-	const result: Message[] = [];
-	const push = (msg: Message, source: Message | undefined): void => {
-		result.push(msg);
-		sources?.push(source);
-	};
-	let pendingToolCalls: ToolCall[] = [];
-	let existingToolResultIds = new Set<string>();
-	// System messages are transparent to tool-call accounting: one that lands between a tool
-	// call and its results is held back and emitted after the results (synthetic ones
-	// included), so it never causes a duplicate result for a call that is answered later.
-	const heldSystemMessages: Message[] = [];
-	const heldSources: Message[] = [];
-	const closePendingToolCalls = () => {
-		if (pendingToolCalls.length > 0) {
-			for (const tc of pendingToolCalls) {
-				if (!existingToolResultIds.has(tc.id)) {
-					push(
-						{
-							role: "toolResult",
-							toolCallId: tc.id,
-							toolName: tc.name,
-							content: [{ type: "text", text: "No result provided" }],
-							isError: true,
-							timestamp: Date.now(),
-						} as ToolResultMessage,
-						undefined,
-					);
-				}
-			}
-			pendingToolCalls = [];
-			existingToolResultIds = new Set();
-		}
-		for (let i = 0; i < heldSystemMessages.length; i++) push(heldSystemMessages[i], heldSources[i]);
-		heldSystemMessages.length = 0;
-		heldSources.length = 0;
+	// Most histories already have replay order. Allocate a second array only when a turn needs
+	// repair. Keep the original source alongside each copied message for the provider cache.
+	let repaired: Message[] | undefined;
+	let unchangedFrom = 0;
+	const copyThrough = (end: number) => {
+		if (repaired) for (let i = unchangedFrom; i < end; i++) repaired.push(transformed[i]);
+		if (sources) for (let i = unchangedFrom; i < end; i++) sources.push(messages[i]);
+		unchangedFrom = end;
 	};
 
 	for (let i = 0; i < transformed.length; i++) {
 		const msg = transformed[i];
-		const source = messages[i];
-
-		if (msg.role === "assistant") {
-			// If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
-			closePendingToolCalls();
-
-			// Skip errored/aborted assistant messages entirely.
-			// These are incomplete turns that shouldn't be replayed:
-			// - May have partial content (reasoning without message, incomplete tool calls)
-			// - Replaying them can cause API errors (e.g., OpenAI "reasoning without following item")
-			// - The model should retry from the last valid state
-			const assistantMsg = msg as AssistantMessage;
-			if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-				continue;
-			}
-
-			// Track tool calls from this assistant message
-			const toolCalls = toolCallsAt[i] ?? [];
-			if (toolCalls.length > 0) {
-				pendingToolCalls = toolCalls;
-				existingToolResultIds = new Set();
-			}
-
-			push(msg, source);
-		} else if (msg.role === "toolResult") {
-			existingToolResultIds.add(msg.toolCallId);
-			push(msg, source);
-		} else if (msg.role === "system") {
-			if (pendingToolCalls.length > 0) {
-				heldSystemMessages.push(msg);
-				heldSources.push(source);
-			} else {
-				push(msg, source);
-			}
-		} else if (msg.role === "user") {
-			// A new user turn interrupts tool flow - insert synthetic results for orphaned calls
-			closePendingToolCalls();
-			push(msg, source);
-		} else {
-			push(msg, source);
+		if (msg.role !== "assistant") continue;
+		if (msg.stopReason === "error" || msg.stopReason === "aborted") {
+			repaired ??= [];
+			copyThrough(i);
+			unchangedFrom = i + 1;
+			continue;
 		}
+		const calls = toolCallsAt[i];
+		if (!calls) continue;
+		let end = i + 1;
+		for (const call of calls) {
+			const reply = transformed[end];
+			if (reply?.role !== "toolResult" || reply.toolCallId !== call.id) break;
+			end++;
+		}
+		const next = transformed[end];
+		if (end === i + 1 + calls.length && (!next || next.role === "assistant" || next.role === "user")) {
+			i = end - 1;
+			continue;
+		}
+
+		// The next user or assistant closes this group. Preserve result order, synthesize
+		// missing results, then emit any system messages that arrived during the group.
+		repaired ??= [];
+		copyThrough(i + 1);
+		const answered = new Set<string>();
+		end = i + 1;
+		for (; end < transformed.length; end++) {
+			const reply = transformed[end];
+			if (reply.role === "assistant" || reply.role === "user") break;
+			if (reply.role === "system") continue;
+			if (reply.role === "toolResult") answered.add(reply.toolCallId);
+			repaired.push(reply);
+			sources?.push(messages[end]);
+		}
+		for (const call of calls) {
+			if (answered.has(call.id)) continue;
+			repaired.push({
+				role: "toolResult",
+				toolCallId: call.id,
+				toolName: call.name,
+				content: [{ type: "text", text: "No result provided" }],
+				isError: true,
+				timestamp: Date.now(),
+			});
+			sources?.push(undefined);
+		}
+		for (let j = i + 1; j < end; j++) {
+			if (transformed[j].role === "system") {
+				repaired.push(transformed[j]);
+				sources?.push(messages[j]);
+			}
+		}
+		unchangedFrom = end;
+		i = end - 1;
 	}
-
-	// If the conversation ends with unresolved tool calls, synthesize results now.
-	closePendingToolCalls();
-
-	return result;
+	copyThrough(transformed.length);
+	return repaired ?? transformed;
 }

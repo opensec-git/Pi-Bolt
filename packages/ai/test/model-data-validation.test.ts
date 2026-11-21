@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { hydrateModelCatalog } from "../scripts/hydrate-model-catalog.ts";
 import { catalogModuleData } from "../scripts/model-catalog-modules.ts";
 import {
-	assertExactModelIds,
 	createModelDataManifest,
 	MODEL_DATA_MANIFEST_FILE,
 	MODEL_DATA_SCHEMA_VERSION,
@@ -203,18 +202,6 @@ describe("published model catalog hydration", () => {
 });
 
 describe("generated model data validation", () => {
-	it("rejects a missing upstream model from an exact generated allowlist", () => {
-		expect(() => assertExactModelIds("qwen-token-plan-individual", ["model-a", "model-b"], ["model-a"])).toThrow(
-			"qwen-token-plan-individual model IDs do not match (missing: model-b)",
-		);
-	});
-
-	it("rejects an unexpected model from an exact generated allowlist", () => {
-		expect(() => assertExactModelIds("test-provider", ["model-a"], ["model-a", "model-b"])).toThrow(
-			"test-provider model IDs do not match (extra: model-b)",
-		);
-	});
-
 	it("reads and validates API-grouped model data", () => {
 		const { dataDir, packageRoot, structure } = createFixture();
 		expect(readModelDataStructure(packageRoot)).toEqual(structure);

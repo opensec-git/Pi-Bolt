@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
+	Response,
 	ResponseConfigurationUpdateItemParam,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
@@ -32,6 +33,7 @@ import type {
 	TranscriptContext,
 	Usage,
 } from "../types.ts";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import type { RequestCacheRun } from "../utils/request-cache.ts";
@@ -126,7 +128,6 @@ export interface OpenAIResponsesStreamOptions {
 }
 
 export interface ConvertResponsesMessagesOptions {
-	includeSystemPrompt?: boolean;
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
 	/** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
 	supportsMidConvoSystemMessages?: boolean;
@@ -203,7 +204,21 @@ export function convertResponsesMessages<TApi extends Api>(
 	allowedToolCallProviders: ReadonlySet<string>,
 	options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
-	const normalizedContext = resolveTranscript(context, options?.supportsMidConvoSystemMessages);
+	return convertResolvedResponsesInput(
+		model,
+		resolveTranscript(context, options?.supportsMidConvoSystemMessages),
+		allowedToolCallProviders,
+		options,
+	).input;
+}
+
+/** Convert the provider's already resolved transcript and derive the top-level tools from that same history. */
+export function convertResolvedResponsesInput<TApi extends Api>(
+	model: Model<TApi>,
+	normalizedContext: TranscriptContext,
+	allowedToolCallProviders: ReadonlySet<string>,
+	options?: ConvertResponsesMessagesOptions,
+): { input: ResponseInput; requestTools: Tool[] } {
 	const messages: ResponseInput = [];
 
 	const normalizeIdPart = (part: string): string => {
@@ -239,6 +254,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		normalizeToolCallId,
 		cache,
 		cache ? sources : undefined,
+		{ preserveTextOnlyReplies: true },
 	);
 	/**
 	 * Converts one message with `convert`, which pushes what it converts to and returns what the loop needs besides;
@@ -288,7 +304,6 @@ export function convertResponsesMessages<TApi extends Api>(
 			tools: convertResponsesTools(tools, { ...options?.toolOptions, toolSearchResult: true }),
 		} satisfies ResponseToolSearchOutputItemParam);
 	};
-	const includeInitialSystemMessage = options?.includeSystemPrompt ?? true;
 	const pushConfigurationUpdate = (effort: string): void => {
 		messages.push({
 			type: "configuration_update",
@@ -308,20 +323,18 @@ export function convertResponsesMessages<TApi extends Api>(
 			// transformMessages keeps system messages in order, so their position matches the transcript.
 			const anchorsToolChanges = systemIndex++ >= transcriptTools.foldedSystemMessages;
 			if (anchorsToolChanges) appendSystemToolAdditions(msg, `system:${msgIndex}`);
-			if (!isLeadingSystemMessage || includeInitialSystemMessage) {
-				const parts = [isLeadingSystemMessage ? getSystemMessageText(msg) : renderSystemMessageUpdate(msg)];
-				if (anchorsToolChanges) {
-					// A redefinition is a removal plus an addition of the same name; only true removals are announced.
-					const added = new Set((msg.toolsAdded ?? []).map((tool) => tool.name));
-					const removed = (msg.toolsRemoved ?? []).map((tool) => tool.name).filter((name) => !added.has(name));
-					if (removed.length > 0) parts.push(renderToolRemovalNotice(removed));
-					// Recorded after this message's additions, whose notice precedes this removal notice.
-					for (const name of removed) unavailableTools.add(name);
-				}
-				const text = parts.filter((part) => part.length > 0).join("\n\n");
-				if (text.length > 0) {
-					messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
-				}
+			const parts = [isLeadingSystemMessage ? getSystemMessageText(msg) : renderSystemMessageUpdate(msg)];
+			if (anchorsToolChanges) {
+				// A redefinition is a removal plus an addition of the same name; only true removals are announced.
+				const added = new Set((msg.toolsAdded ?? []).map((tool) => tool.name));
+				const removed = (msg.toolsRemoved ?? []).map((tool) => tool.name).filter((name) => !added.has(name));
+				if (removed.length > 0) parts.push(renderToolRemovalNotice(removed));
+				// Recorded after this message's additions, whose notice precedes this removal notice.
+				for (const name of removed) unavailableTools.add(name);
+			}
+			const text = parts.filter((part) => part.length > 0).join("\n\n");
+			if (text.length > 0) {
+				messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
 			}
 		} else if (msg.role === "user") {
 			const converted = unit(sources[index], undefined, (out) => {
@@ -356,7 +369,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		} else if (msg.role === "assistant") {
 			// Text items without an id of their own are named after the message's index.
 			const converted = unit(sources[index], msgIndex, (out) => {
-				const output: ResponseInput = [];
+				const firstItem = out.length;
 				const assistantMsg = msg as AssistantMessage;
 				const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
 				const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
@@ -367,11 +380,11 @@ export function convertResponsesMessages<TApi extends Api>(
 					if (block.type === "thinking") {
 						if (block.thinkingSignature) {
 							const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-							output.push(reasoningItem);
+							out.push(reasoningItem);
 						}
 					} else if (block.type === "text") {
 						const textBlock = block as TextContent;
-						const parsedSignature = parseTextSignature(textBlock.textSignature);
+						const parsedSignature = isSameModel ? parseTextSignature(textBlock.textSignature) : undefined;
 						const fallbackMessageId =
 							textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
 						textBlockIndex++;
@@ -382,7 +395,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						} else if (msgId.length > 64) {
 							msgId = `msg_${shortHash(msgId)}`;
 						}
-						output.push({
+						out.push({
 							type: "message",
 							role: "assistant",
 							content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
@@ -408,7 +421,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						}
 
 						if (customInputProperty !== undefined) {
-							output.push({
+							out.push({
 								type: "custom_tool_call",
 								id: itemId,
 								call_id: callId,
@@ -419,7 +432,7 @@ export function convertResponsesMessages<TApi extends Api>(
 								...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
 							} satisfies ResponseOutputItem);
 						} else {
-							output.push({
+							out.push({
 								type: "function_call",
 								id: itemId,
 								call_id: callId,
@@ -430,13 +443,13 @@ export function convertResponsesMessages<TApi extends Api>(
 						}
 					}
 				}
-				if (output.length === 0) return false;
+				if (out.length === firstItem) return false;
 				if (
 					options?.configurationUpdateEffort !== undefined &&
 					isSameModel &&
 					msg.providerThinkingLevel !== undefined
 				) {
-					out.push({
+					out.splice(firstItem, 0, {
 						type: "configuration_update",
 						reasoning: {
 							effort: msg.providerThinkingLevel as NonNullable<
@@ -445,7 +458,6 @@ export function convertResponsesMessages<TApi extends Api>(
 						},
 					} satisfies ResponseConfigurationUpdateItemParam);
 				}
-				out.push(...output);
 				return true;
 			});
 			if (!converted) continue;
@@ -474,7 +486,7 @@ export function convertResponsesMessages<TApi extends Api>(
 	}
 	if (options?.configurationUpdateEffort !== undefined) pushConfigurationUpdate(options.configurationUpdateEffort);
 
-	return messages;
+	return { input: messages, requestTools: transcriptTools.requestTools };
 }
 
 // =============================================================================
@@ -601,14 +613,15 @@ export async function processResponsesStream<TApi extends Api>(
 			return slot;
 		}
 		if (item.type === "function_call") {
-			const args = new ToolCallArgumentsStream();
+			const args = new ToolCallArgumentsStream(stream);
 			const block: ToolCall = {
 				type: "toolCall",
 				id: `${item.call_id}|${item.id}`,
 				name: item.name,
-				arguments: item.arguments ? args.append(item.arguments) : {},
+				arguments: {},
 				...(item.namespace !== undefined ? { namespace: item.namespace } : {}),
 			};
+			if (item.arguments) args.appendTo(block, item.arguments);
 			output.content.push(block);
 			unfinishedToolCalls.add(block);
 			const slot = {
@@ -671,6 +684,7 @@ export async function processResponsesStream<TApi extends Api>(
 	): void => {
 		sawTerminalResponseEvent = true;
 		backfillReasoningSignatures(response.output ?? []);
+		appendReasoningRemovals(output, response.input_transformations);
 		if (response?.id) {
 			output.responseId = response.id;
 		}
@@ -772,14 +786,13 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.function_call_arguments.delta") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (slot?.input.kind !== "json") continue;
-			slot.block.arguments = slot.input.arguments.append(event.delta);
+			slot.input.arguments.appendTo(slot.block, event.delta);
 			pushToolCallDelta(slot, event.delta);
 		} else if (event.type === "response.function_call_arguments.done") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (slot?.input.kind !== "json") continue;
-			const replaced = slot.input.arguments.replace(event.arguments);
-			slot.block.arguments = replaced.arguments;
-			if (replaced.delta) pushToolCallDelta(slot, replaced.delta);
+			const delta = slot.input.arguments.replaceFor(slot.block, event.arguments);
+			if (delta) pushToolCallDelta(slot, delta);
 		} else if (event.type === "response.custom_tool_call_input.delta") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (slot?.input.kind !== "custom") continue;
@@ -817,7 +830,7 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall" && slot.input.kind === "json") {
-				if (item.arguments) slot.input.arguments.replace(item.arguments);
+				if (item.arguments) slot.input.arguments.replaceFor(slot.block, item.arguments);
 				Object.assign(slot.block, slot.input.arguments.finish());
 				if (item.namespace !== undefined) slot.block.namespace = item.namespace;
 				unfinishedToolCalls.delete(slot.block);
@@ -870,6 +883,35 @@ export async function processResponsesStream<TApi extends Api>(
 			);
 		}
 	}
+}
+
+/**
+ * Record the replayed reasoning items the API withheld from the model, with the reason for each.
+ * From GPT-6.2 on, OpenAI removes reasoning that follows an edit of earlier input (`prefix_mismatch`)
+ * and reasoning created under another organization, end user, or model. A removal is reported again
+ * on every later request that replays the item.
+ *
+ * `turn_boundary` removals are left out: models that use only current-turn reasoning (all models
+ * before GPT-5.6) report every earlier turn's reasoning item on every request. That is their normal
+ * behavior, and storing it would grow the session quadratically with the conversation.
+ */
+function appendReasoningRemovals(output: AssistantMessage, transformations: Response["input_transformations"]): void {
+	// Wire input: older servers and proxies omit the field, and Codex tolerates malformed entries too.
+	if (!Array.isArray(transformations)) return;
+	const removals = transformations.filter(
+		(transformation) =>
+			transformation?.type === "reasoning" &&
+			transformation.action === "removed" &&
+			transformation.reason !== "turn_boundary",
+	);
+	if (removals.length === 0) return;
+	appendAssistantMessageDiagnostic(output, {
+		type: "openai_input_transformations",
+		timestamp: Date.now(),
+		details: {
+			transformations: removals.map(({ type, id, action, reason }) => ({ type, id, action, reason })),
+		},
+	});
 }
 
 type CustomInput = Extract<ToolCallInput, { kind: "custom" }>;

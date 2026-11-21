@@ -36,7 +36,7 @@ const { base, dataDir, root } = await todoDirectories();
 
 // 1. Start the app: the kit makes the data directory, the server's store and host, HTTP and the owner link. Nobody is
 //    signed in yet, so the page answers 401. The owner opens the link: its page posts the token from the URL's fragment
-//    and gets a session cookie.
+//    and gets a sign-in cookie.
 const telemetry = await openTelemetry(telemetryFile(dataDir));
 const app = await startTodo(dataDir, root, telemetry, context);
 const link = new URL(app.ownerLink());
@@ -129,6 +129,10 @@ if (sandboxAvailable()) {
 	console.log("5. the terminal shows:");
 	for (const line of screen(frames).trim().split("\r\n")) console.log(`   ${line}`);
 } else console.log("5. (the terminal client needs Node 26.5.1 or later for its sandbox)");
+
+// After the start, the app watches the files its bases were built from. On macOS, adding a watch briefly drops file
+// events for every watch of the process, so the new plugin directory below could go unnoticed: wait for it to finish.
+await app.baseWatched;
 
 // 6. A theme plugin added while the app runs: a new directory in the plugins root marks the set changed, and applying
 //    the changes builds it and rolls it out. Pages and terminals restyle in place.

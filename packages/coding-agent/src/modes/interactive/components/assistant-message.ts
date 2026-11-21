@@ -157,10 +157,9 @@ export class AssistantMessageComponent extends Container {
 	private messageId?: string;
 	private timestamp?: string;
 	private contentIsStale = false;
-	private thinkingVisibilityOverrides = new Map<number, boolean>();
+	private thinkingVisibilityOverrides?: Map<number, boolean>;
 	/** The children's lines with the prompt markers added, and the lines they were added to. */
-	private markedFrom?: string[];
-	private markedLines: string[] = [];
+	private markedShared?: { from: string[]; lines: string[] };
 	/** renderLive()'s lines: the children's live lines with the prompt markers added, and what they were made from. */
 	private markedLive?: { from: LiveLines; revision: number; length: number; lines: LiveLineArray };
 	/**
@@ -238,7 +237,7 @@ export class AssistantMessageComponent extends Container {
 	setHideThinkingBlock(hide: boolean): void {
 		this.built = undefined;
 		this.hideThinkingBlock = hide;
-		this.thinkingVisibilityOverrides.clear();
+		this.thinkingVisibilityOverrides = undefined;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -277,15 +276,14 @@ export class AssistantMessageComponent extends Container {
 			return lines;
 		}
 		// The marked lines are kept with the lines they were made from: same lines, same array (renderShared()).
-		if (lines !== this.markedFrom) {
+		if (lines !== this.markedShared?.from) {
 			const marked = lines.slice();
 			marked[0] = OSC133_ZONE_START + marked[0];
 			marked[marked.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + marked[marked.length - 1];
-			this.markedFrom = lines;
-			this.markedLines = marked;
+			this.markedShared = { from: lines, lines: marked };
 		}
-		this.noteLines(width, undefined, this.markedLines);
-		return this.markedLines;
+		this.noteLines(width, undefined, this.markedShared.lines);
+		return this.markedShared.lines;
 	}
 
 	/**
@@ -374,8 +372,7 @@ export class AssistantMessageComponent extends Container {
 		this.forgetRendered();
 		this.markdownBlocks = [];
 		this.blockTexts = [];
-		this.markedFrom = undefined;
-		this.markedLines = [];
+		this.markedShared = undefined;
 		this.markedLive = undefined;
 		this.built = undefined;
 		return true;
@@ -391,7 +388,8 @@ export class AssistantMessageComponent extends Container {
 	 * in arrays of its own (the containers it is in take them as changed once, and join them again).
 	 */
 	compactedCopy(): AssistantMessageComponent {
-		const copy = freshCopy(this);
+		// The theme belongs to the caller. Spreading it would snapshot its live code-block shading getter.
+		const copy = freshCopy(this, this.markdownTheme);
 		const compacted = this.compacted;
 		if (compacted !== undefined) {
 			const live = new LiveLineArray();
@@ -491,10 +489,6 @@ export class AssistantMessageComponent extends Container {
 		const content = message.content;
 		// Each text and thinking block trimmed (BlockText).
 		this.followTexts(message);
-		const trimmedTexts: Array<TrimmedText | undefined> = [];
-		for (let i = 0; i < content.length; i++) {
-			trimmedTexts.push(this.blockTexts[i]?.trim());
-		}
 
 		// Spacers are added lazily, right before the next visible content block. This puts a blank
 		// line before the first visible block and after each visible thinking run that is followed
@@ -510,10 +504,12 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
+		let hasToolCalls = false;
 		for (let i = 0; i < content.length; i++) {
 			const block = content[i];
-			const trimmed = trimmedTexts[i];
-			if (block.type === "text" && trimmed?.visible) {
+			if (block.type === "text") {
+				const trimmed = this.blockTexts[i]?.trim();
+				if (!trimmed?.visible) continue;
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				addVisiblePart({ kind: "text", text: trimmed.trimmed });
@@ -523,7 +519,7 @@ export class AssistantMessageComponent extends Container {
 					if (content[i].type !== "thinking") {
 						break;
 					}
-					const thinking = trimmedTexts[i];
+					const thinking = this.blockTexts[i]?.trim();
 					if (thinking?.visible) {
 						thinkingBlocks.push(thinking.trimmed);
 					}
@@ -535,7 +531,7 @@ export class AssistantMessageComponent extends Container {
 				}
 
 				const runIndex = thinkingRunIndex++;
-				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const hidden = this.thinkingVisibilityOverrides?.get(runIndex) ?? this.hideThinkingBlock;
 				// A hidden run with an empty label renders nothing, including no spacing.
 				if (hidden && !this.hiddenThinkingLabel.trim()) {
 					continue;
@@ -546,13 +542,14 @@ export class AssistantMessageComponent extends Container {
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
 				needsSpacer = true;
+			} else if (block.type === "toolCall") {
+				hasToolCalls = true;
 			}
 		}
 
 		// Check if incomplete/failed - show after partial content.
 		// For aborted/error tool calls, tool execution components show the error.
 		// Length stops can happen before a tool call is complete, so surface them here too.
-		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
 		parts.push({ kind: "toolCalls", present: hasToolCalls });
 		if (message.stopReason === "length") {
 			parts.push({ kind: "spacer" });
@@ -673,6 +670,7 @@ export class AssistantMessageComponent extends Container {
 				this.contentContainer.addChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type !== "click" || event.button !== "left") return undefined;
+						this.thinkingVisibilityOverrides ??= new Map();
 						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
 						if (this.lastMessage) this.updateContent(this.lastMessage);
 						return { handled: true };

@@ -211,16 +211,15 @@ export function getPowerShellConfig(): ShellConfig {
 
 export function getShellEnv(): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
-	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
-	const currentPath = process.env[pathKey] ?? "";
+	const env = { ...process.env };
+	const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+	const currentPath = env[pathKey] ?? "";
 	const pathEntries = currentPath.split(delimiter).filter(Boolean);
 	const hasBinDir = pathEntries.includes(binDir);
 	const updatedPath = hasBinDir ? currentPath : [binDir, currentPath].filter(Boolean).join(delimiter);
 
-	return {
-		...process.env,
-		[pathKey]: updatedPath,
-	};
+	env[pathKey] = updatedPath;
+	return env;
 }
 
 /**

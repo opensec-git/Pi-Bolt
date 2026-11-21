@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ProcessTerminal } from "./terminal.ts";
 import { deleteKittyImage, isImageLine } from "./terminal-image.ts";
+import { BoundedTerminalWriter } from "./terminal-writer.ts";
 import { type LiveLines, renderLiveLines, renderSharedLines, type TUI, TuiBase, type TuiStopOptions } from "./tui.ts";
 import { visibleWidth } from "./utils.ts";
 
@@ -10,75 +11,9 @@ import { visibleWidth } from "./utils.ts";
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
-const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
 /** What ProcessTerminal's showCursor() and hideCursor() write. */
 const CURSOR_SHOW = "\x1b[?25h";
 const CURSOR_HIDE = "\x1b[?25l";
-
-/**
- * Streams terminal output in 1 MiB chunks so a full render never forms one string large enough to exceed V8's limit.
- *
- * `append()` fills the current chunk and flushes it when full. Oversized input is split at chunk boundaries, preserving
- * surrogate pairs so each write remains valid UTF-16. Callers append synchronized-output begin/end sequences themselves;
- * the final `flush()` writes any remainder, including the end sequence.
- */
-class BoundedTerminalWriter {
-	private buffer = "";
-	private writtenChars = 0;
-	private readonly write: (data: string) => void;
-
-	constructor(write: (data: string) => void) {
-		this.write = write;
-	}
-
-	/**
-	 * Append terminal data, flushing full chunks as needed. Callers must call `flush()` after the final append.
-	 * @param value Terminal data to write in order; oversized values are split without splitting surrogate pairs.
-	 */
-	append(value: string): void {
-		let offset = 0;
-		while (offset < value.length) {
-			const capacity = MAX_RENDER_WRITE_CHARS - this.buffer.length;
-			if (capacity === 0) {
-				this.flush();
-				continue;
-			}
-
-			let end = Math.min(value.length, offset + capacity);
-			if (
-				end < value.length &&
-				value.charCodeAt(end - 1) >= 0xd800 &&
-				value.charCodeAt(end - 1) <= 0xdbff &&
-				value.charCodeAt(end) >= 0xdc00 &&
-				value.charCodeAt(end) <= 0xdfff
-			) {
-				end--;
-			}
-			if (end === offset) {
-				this.flush();
-				continue;
-			}
-
-			this.buffer += value.slice(offset, end);
-			offset = end;
-			if (this.buffer.length === MAX_RENDER_WRITE_CHARS) {
-				this.flush();
-			}
-		}
-	}
-
-	/** Write the current chunk, if any, and retain only its character count for debug output. */
-	flush(): void {
-		if (!this.buffer) return;
-		this.write(this.buffer);
-		this.writtenChars += this.buffer.length;
-		this.buffer = "";
-	}
-
-	get length(): number {
-		return this.writtenChars + this.buffer.length;
-	}
-}
 
 interface KittyImageHeader {
 	ids: number[];
@@ -105,24 +40,39 @@ function parseKittyImageHeader(line: string): KittyImageHeader | undefined {
 	return { ids, rows };
 }
 
-function extractKittyImageIds(line: string): number[] {
-	return parseKittyImageHeader(line)?.ids ?? [];
+interface KittyImageRow extends KittyImageHeader {
+	row: number;
+	/** Furthest possible extent (exclusive) of this image or any image before it. */
+	prefixEnd: number;
 }
 
-function extractKittyImageRows(line: string): number {
-	return parseKittyImageHeader(line)?.rows ?? 1;
+/** Update the sorted image index from the first row that could have changed.
+ * Text-only edits below the last image reuse the index itself.
+ */
+function indexKittyImages(
+	lines: readonly string[],
+	from: number,
+	previous: readonly KittyImageRow[],
+): readonly KittyImageRow[] {
+	let keep = previous.length;
+	while (keep > 0 && previous[keep - 1]!.row >= from) keep--;
+	let images = keep === previous.length ? undefined : previous.slice(0, keep);
+	for (let row = from; row < lines.length; row++) {
+		const header = parseKittyImageHeader(lines[row]!);
+		if (!header?.ids.length) continue;
+		images ??= previous.slice();
+		const prefixEnd = Math.max(images[images.length - 1]?.prefixEnd ?? 0, row + header.rows);
+		images.push({ row, ...header, prefixEnd });
+	}
+	return images ?? previous;
 }
 
 /** A frame's lines as written (applyLineResets()), made when read. */
 interface FrameRows {
+	readonly images: readonly KittyImageRow[];
 	readonly length: number;
 	/** Line `row` as written. */
 	written(row: number): string;
-	/**
-	 * Line `row` before applyLineResets() (or as written, for lines kept as written): it has the kitty image ids the line
-	 * written has, as applyLineResets() leaves image lines as they are and adds none to the others.
-	 */
-	source(row: number): string;
 }
 
 function isTermuxSession(): boolean {
@@ -151,7 +101,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	private shownLength = 0;
 	/** The lines written as captured, after restoreRenderState() and until the next frame is drawn: rawLines is not used then. */
 	private restoredLines?: readonly string[];
-	private previousKittyImageIds = new Set<number>();
+	private images: readonly KittyImageRow[] = [];
 	private previousWidth = 0;
 	private previousHeight = 0;
 	private cursorRow = 0;
@@ -177,7 +127,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		this.frameLive = undefined;
 		this.restoredLines = state.previousLines.map((line) => (isImageLine(line) ? "" : line));
 		this.shownLength = this.restoredLines.length;
-		this.previousKittyImageIds = new Set();
+		this.images = [];
 		this.previousWidth = state.previousWidth;
 		this.previousHeight = state.previousHeight;
 		this.cursorRow = state.cursorRow;
@@ -213,49 +163,9 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return this.captureRenderState().previousLines;
 	}
 
-	/** The lines of the last frame before and after resolveFakeCursors(), and whether the hardware cursor was shown. */
-	private unresolvedLines: string[] = [];
-	private resolvedLines: string[] = [];
-	private resolvedWithHardwareCursor = false;
-
-	/**
-	 * resolveFakeCursors() for a frame, taking each line that is the same string as the frame before from the frame
-	 * before: resolving looks for a cursor in every line of the transcript, each frame (0.5 ms at 27,500 lines). Returns
-	 * a new array, which the frame may change (extractCursorPosition() does).
-	 */
-	private resolveFrameFakeCursors(lines: string[], unchanged: number): string[] {
-		const showHardwareCursor = this.getShowHardwareCursor();
-		const previous = showHardwareCursor === this.resolvedWithHardwareCursor ? this.unresolvedLines : [];
-		const previousResolved = this.resolvedLines;
-		// (The first `unchanged` lines are those of the frame before: taken as they were resolved, without reading them.)
-		const from = previous.length === 0 ? 0 : Math.min(unchanged, previous.length, lines.length);
-		const resolved: string[] = from > 0 ? previousResolved.slice(0, from) : [];
-		resolved.length = lines.length;
-		const single = [""];
-		for (let i = from; i < lines.length; i++) {
-			const line = lines[i]!;
-			if (i < previous.length && line === previous[i]) {
-				resolved[i] = previousResolved[i]!;
-			} else {
-				// Drop OSC 133 markers: the terminal reads 133;A as a new shell prompt, which ends program status (OSC 7501)
-				single[0] = line.replace(OSC133_ZONE_PREFIX, "");
-				resolved[i] = this.resolveFakeCursors(single)[0]!;
-			}
-		}
-		this.unresolvedLines = lines;
-		this.resolvedLines = resolved;
-		this.resolvedWithHardwareCursor = showHardwareCursor;
-		return resolved.slice();
-	}
-
-	/**
-	 * The lines of the last frame before applyLineResets() (its raw lines), and the rows of them that are images
-	 * (applyLineResets() leaves only those as they are), in order.
-	 */
+	/** One owned snapshot, after overlays and cursor extraction, before terminal resets. */
 	private rawLines: string[] = [];
-	private rawImageRows: number[] = [];
-	/** The root's live lines and the revision the last frame was rendered from (renderLiveLines()). */
-	private frameLive?: { live: LiveLines; revision: number; width: number; lines: string[] };
+	private frameLive?: { live: LiveLines; revision: number; hardwareCursor: boolean; decoratedFrom: number };
 	/** applyLineResets()' argument for one line (writtenLine()). */
 	private readonly singleLine = [""];
 
@@ -273,120 +183,24 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		return this.restoredLines !== undefined ? this.restoredLines[row]! : this.writtenLine(this.rawLines[row]!);
 	}
 
-	/**
-	 * Records `raw` as the frame's raw lines and counts the image lines in it, taking each row whose line is the same string
-	 * as the frame before's from the frame before: most lines of a long transcript are. `previousRawTail` holds the frame
-	 * before's raw lines from `unchanged` on when `raw` is that frame's array, changed in place from there
-	 * (renderChangedLines()); otherwise rawLines is that frame's.
-	 */
-	private finishLines(raw: string[], unchanged: number, previousRawTail?: readonly string[]): { imageLines: number } {
-		const previousRawLength =
-			previousRawTail === undefined ? this.rawLines.length : unchanged + previousRawTail.length;
-		const previousRaw = this.rawLines;
-		// (The first `unchanged` lines are those of the frame before: their rows are taken as they were, without reading them.)
-		const from = Math.min(unchanged, previousRawLength, raw.length);
-		const previousRows = this.rawImageRows;
-		const imageRows = previousRows.filter((row) => row < from);
-		let next = imageRows.length;
-		for (let i = from; i < raw.length; i++) {
-			const line = raw[i]!;
-			let image: boolean;
-			if (
-				i < previousRawLength &&
-				line === (previousRawTail === undefined ? previousRaw[i] : previousRawTail[i - unchanged])
-			) {
-				while (next < previousRows.length && previousRows[next]! < i) next++;
-				image = previousRows[next] === i;
-			} else {
-				image = isImageLine(line);
-			}
-			if (image) imageRows.push(i);
-		}
-		this.rawLines = raw;
-		this.rawImageRows = imageRows;
-		return { imageLines: imageRows.length };
-	}
-
-	/**
-	 * The lines of a frame whose first `unchanged` lines are those of the frame before (renderLiveLines() says so, and no
-	 * overlay is shown), made by changing the last frame's arrays in place from that line on: the root's lines
-	 * (frameLive.lines), resolveFakeCursors()'s, and the raw lines after the cursor marker is taken out. Line for line
-	 * what resolveFrameFakeCursors() and extractCursorPosition() make of a copy of the root's lines, but without copying the
-	 * lines above `unchanged`: a frame then costs time in proportion to what changed, not to the length of the transcript.
-	 * Also returns the raw lines of the frame before from `unchanged` on, which the array no longer holds. Undefined when the
-	 * last frame's arrays are not those this needs (resolveFrameFakeCursors() then makes the frame).
-	 */
-	private renderChangedLines(
-		live: LiveLines,
-		root: string[],
-		unchanged: number,
-		height: number,
-	):
-		| { raw: string[]; previousRawTail: string[]; imageLines: number; cursorPos: { row: number; col: number } | null }
-		| undefined {
-		const resolved = this.resolvedLines;
-		const raw = this.rawLines;
-		if (
-			unchanged <= 0 ||
-			this.unresolvedLines !== root ||
-			resolved.length !== root.length ||
-			raw === resolved ||
-			raw === root ||
-			raw.length < unchanged ||
-			this.restoredLines !== undefined ||
-			this.shownLength !== raw.length
-		) {
-			return undefined;
-		}
-		const source = live.lines;
-		const rootTail = root.slice(unchanged);
-		root.length = unchanged;
-		for (let i = unchanged; i < source.length; i++) root.push(source[i]!);
-
-		const resolvedTail = resolved.slice(unchanged);
-		resolved.length = unchanged;
-		const single = [""];
-		for (let i = unchanged; i < root.length; i++) {
-			const line = root[i]!;
-			const k = i - unchanged;
-			if (k < rootTail.length && line === rootTail[k]) {
-				resolved.push(resolvedTail[k]!);
-			} else {
-				// (OSC 133 markers dropped as resolveFrameFakeCursors() drops them.)
-				single[0] = line.replace(OSC133_ZONE_PREFIX, "");
-				resolved.push(this.resolveFakeCursors(single)[0]!);
-			}
-		}
-
-		const rawTail = raw.slice(unchanged);
-		raw.length = unchanged;
-		for (let i = unchanged; i < resolved.length; i++) raw.push(resolved[i]!);
-		// (Only the last `height` lines are read, all of them from `unchanged` on.)
-		const cursorPos = this.extractCursorPosition(raw, height);
-		const finished = this.finishLines(raw, unchanged, rawTail);
-		return { raw, previousRawTail: rawTail, imageLines: finished.imageLines, cursorPos };
-	}
-
-	private collectKittyImageIds(rows: FrameRows): Set<number> {
+	private deleteKittyImages(images: readonly KittyImageRow[], first = 0, last = Infinity): string {
+		if (images.length === 0 || images[images.length - 1]!.row < first) return "";
 		const ids = new Set<number>();
-		for (let i = 0; i < rows.length; i++) {
-			for (const id of extractKittyImageIds(rows.source(i))) {
-				ids.add(id);
-			}
+		for (const image of images) {
+			if (image.row > last) break;
+			if (image.row >= first) for (const id of image.ids) ids.add(id);
 		}
-		return ids;
-	}
-
-	private deleteKittyImages(ids: Iterable<number>): string {
 		let buffer = "";
-		for (const id of ids) {
-			buffer += deleteKittyImage(id);
-		}
+		for (const id of ids) buffer += deleteKittyImage(id);
 		return buffer;
 	}
 
-	private getKittyImageReservedRows(rows: FrameRows, index: number, maxIndex = rows.length - 1): number {
-		const imageRows = extractKittyImageRows(index < rows.length ? rows.written(index) : "");
+	private getKittyImageReservedRows(
+		rows: FrameRows,
+		index: number,
+		maxIndex = rows.length - 1,
+		imageRows = parseKittyImageHeader(rows.written(index))?.rows ?? 1,
+	): number {
 		if (imageRows <= 1) return 1;
 
 		const maxRows = Math.min(imageRows, maxIndex - index + 1, rows.length - index);
@@ -407,10 +221,21 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	): { firstChanged: number; lastChanged: number } {
 		let expandedFirstChanged = firstChanged;
 		let expandedLastChanged = lastChanged;
+		// A custom line reset can change the image's displayed height.
+		const standardResets = this.applyLineResets === super.applyLineResets;
 		const expandForLines = (rows: FrameRows): void => {
-			for (let i = 0; i < rows.length; i++) {
-				if (extractKittyImageIds(rows.source(i)).length === 0) continue;
-				const blockEnd = i + this.getKittyImageReservedRows(rows, i) - 1;
+			if (
+				rows.images.length === 0 ||
+				(standardResets && rows.images[rows.images.length - 1]!.prefixEnd <= firstChanged)
+			)
+				return;
+			for (const image of rows.images) {
+				const i = image.row;
+				if (standardResets && i + image.rows <= firstChanged) continue;
+				const blockEnd =
+					i +
+					this.getKittyImageReservedRows(rows, i, rows.length - 1, standardResets ? image.rows : undefined) -
+					1;
 				if (i >= firstChanged || (i <= lastChanged && blockEnd >= firstChanged)) {
 					expandedFirstChanged = Math.min(expandedFirstChanged, i);
 					expandedLastChanged = Math.max(expandedLastChanged, blockEnd);
@@ -421,20 +246,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		expandForLines(shown);
 		expandForLines(frame);
 		return { firstChanged: expandedFirstChanged, lastChanged: expandedLastChanged };
-	}
-
-	private deleteChangedKittyImages(firstChanged: number, lastChanged: number, shown: FrameRows): string {
-		if (firstChanged < 0 || lastChanged < firstChanged || this.previousKittyImageIds.size === 0) return "";
-
-		const ids = new Set<number>();
-		const maxLine = Math.min(lastChanged, shown.length - 1);
-		for (let i = firstChanged; i <= maxLine; i++) {
-			for (const id of extractKittyImageIds(shown.source(i))) {
-				ids.add(id);
-			}
-		}
-
-		return this.deleteKittyImages(ids);
 	}
 
 	/** Records the frame whose raw lines are rawLines as the lines shown (shownLine()). */
@@ -458,80 +269,68 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			const targetScreenRow = targetRow - viewportTop;
 			return targetScreenRow - currentScreenRow;
 		};
-		// The last frame's lines, read before this frame changes their array in place (renderChangedLines()).
 		const shownLength = this.shownLength;
 		const shownRaw = this.rawLines;
 		const restoredLines = this.restoredLines;
-
-		// Render all components to get new lines
-		// Resolve fake cursors before compositing so overlays and line slicing see plain SGR codes
-		// The leading lines that are what they were the frame before: the root's lines up to the first one changed
-		// (renderLiveLines()), above the rows the cursor and overlays are drawn in, this frame and the one before. Those are
-		// not read again: a frame costs time in proportion to what changed, not to the length of the transcript.
+		const previousImages = this.images;
 		const live = renderLiveLines(this, width);
+		const source = live?.lines ?? renderSharedLines(this, width);
 		const before = this.frameLive;
-		let unchanged = 0;
+		const hardwareCursor = this.getShowHardwareCursor();
+		// Only the visible rows can contain an overlay or an extracted cursor. Keep the prefix
+		// above both viewports when its owner confirms it is unchanged, even while a modal is open.
+		let rebuildFrom = 0;
+		const standardOverlay = this.compositeOverlays === super.compositeOverlays;
 		if (
-			live !== undefined &&
+			live &&
 			before?.live === live &&
-			before.width === width &&
+			this.extractCursorPosition === super.extractCursorPosition &&
+			before.hardwareCursor === hardwareCursor &&
 			this.previousWidth === width &&
 			this.previousHeight === height &&
-			this.getShowHardwareCursor() === this.resolvedWithHardwareCursor &&
-			!this.hasOverlayEntries
+			!restoredLines &&
+			(!this.hasOverlayEntries || standardOverlay)
 		) {
-			unchanged = Math.min(
-				live.changedSince(before.revision),
-				before.lines.length,
-				live.lines.length - height,
-				shownLength - height,
-			);
+			rebuildFrom = Math.min(live.changedSince(before.revision), before.decoratedFrom, source.length);
 		}
-		unchanged = Math.max(0, unchanged);
-		// (When the lines above `unchanged` are those of the last frame, its arrays are changed from there on.)
-		const changed =
-			live !== undefined && before !== undefined && unchanged > 0
-				? this.renderChangedLines(live, before.lines, unchanged, height)
-				: undefined;
-		let raw: string[];
-		let cursorPos: { row: number; col: number } | null;
-		let finished: { imageLines: number };
-		/** The last frame's raw lines from `unchanged` on, when their array now holds this frame's. */
-		let shownRawTail: readonly string[] | undefined;
-		if (changed !== undefined) {
-			this.frameLive = { live: live!, revision: live!.revision, width, lines: before!.lines };
-			raw = changed.raw;
-			shownRawTail = changed.previousRawTail;
-			cursorPos = changed.cursorPos;
-			finished = changed;
-		} else {
-			// (A copy of the live lines, which change at the next render: made again only when they changed.)
-			const root =
-				live === undefined
-					? renderSharedLines(this, width)
-					: before?.live === live && before.width === width && before.revision === live.revision
-						? before.lines
-						: live.lines.slice();
-			this.frameLive = live === undefined ? undefined : { live, revision: live.revision, width, lines: root };
-			raw = this.resolveFrameFakeCursors(root, unchanged);
-
-			// Composite overlays into the rendered lines (before differential compare)
-			if (this.hasOverlayEntries) {
-				raw = this.compositeOverlays(raw, width, height);
+		const unchanged = Math.max(0, Math.min(rebuildFrom, source.length - height, shownLength - height));
+		// Preserve just the old suffix for the diff. A full rebuild swaps arrays so the old frame
+		// stays readable without copying it. The mutable array returned by a component is never ours.
+		const shownRawTail = rebuildFrom > 0 ? shownRaw.slice(unchanged) : undefined;
+		let raw = shownRawTail ? shownRaw : new Array<string>(source.length);
+		raw.length = source.length;
+		const single = [""];
+		const defaultResolver = this.resolveFakeCursors === super.resolveFakeCursors;
+		for (let i = shownRawTail ? rebuildFrom : 0; i < source.length; i++) {
+			let line = source[i]!;
+			if (line.startsWith("\x1b]133;")) line = line.replace(OSC133_ZONE_PREFIX, "");
+			if (defaultResolver) raw[i] = this.resolveFakeCursorLine(line);
+			else {
+				single[0] = line;
+				raw[i] = this.resolveFakeCursors(single)[0]!;
 			}
-
-			// Extract cursor position before applying line resets (marker must be found first)
-			cursorPos = this.extractCursorPosition(raw, height);
-
-			finished = this.finishLines(raw, unchanged);
 		}
-		// The lines this frame writes are its raw lines after applyLineResets(), made when they are read; those the last
-		// frame wrote are made from its raw lines the same way (or are the lines restored).
+		if (this.hasOverlayEntries) {
+			raw = standardOverlay
+				? this.compositeOverlays(raw, width, height, true)
+				: this.compositeOverlays(raw, width, height);
+		}
+		const cursorPos = this.extractCursorPosition(raw, height);
+		this.rawLines = raw;
+		const decoratedFrom = this.hasOverlayEntries
+			? standardOverlay
+				? Math.max(0, raw.length - height)
+				: 0
+			: (cursorPos?.row ?? source.length);
+		this.frameLive = live
+			? { live, revision: live.revision, hardwareCursor, decoratedFrom: Math.min(source.length, decoratedFrom) }
+			: undefined;
+		this.images = indexKittyImages(raw, unchanged, previousImages);
 		const frameLength = raw.length;
 		const frame: FrameRows = {
 			length: frameLength,
+			images: this.images,
 			written: (row) => this.writtenLine(raw[row]!),
-			source: (row) => raw[row]!,
 		};
 		const shownSource = (row: number): string =>
 			restoredLines !== undefined
@@ -542,12 +341,9 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		const shown: FrameRows = {
 			length: shownLength,
 			written: (row) => (restoredLines !== undefined ? restoredLines[row]! : this.writtenLine(shownSource(row))),
-			source: shownSource,
+			images: shownLength > 0 ? previousImages : [],
 		};
-		// Kitty image bookkeeping scans every line: only needed while an image is shown or was shown the frame before.
-		const imagesShown = finished.imageLines > 0 || this.previousKittyImageIds.size > 0;
-		const collectKittyImageIds = (rows: FrameRows): Set<number> =>
-			imagesShown ? this.collectKittyImageIds(rows) : new Set();
+		const imagesShown = this.images.length > 0 || previousImages.length > 0;
 
 		// Helper to clear scrollback and viewport and render all new lines
 		const fullRender = (clear: boolean): void => {
@@ -555,14 +351,15 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 			output.append("\x1b[?2026h"); // Begin synchronized output
 			if (clear) {
-				output.append(this.deleteKittyImages(this.previousKittyImageIds));
+				output.append(this.deleteKittyImages(previousImages));
 				output.append("\x1b[2J\x1b[H\x1b[3J"); // Clear screen, home, then clear scrollback
 			}
 			for (let i = 0; i < frameLength; i++) {
 				if (i > 0) output.append("\r\n");
 				const line = frame.written(i);
-				const isImage = isImageLine(line);
-				const imageReservedRows = isImage ? this.getKittyImageReservedRows(frame, i) : 1;
+				const imageRows = parseKittyImageHeader(line)?.rows ?? 1;
+				const imageReservedRows =
+					imageRows > 1 ? this.getKittyImageReservedRows(frame, i, frameLength - 1, imageRows) : 1;
 				if (imageReservedRows > 1 && imageReservedRows <= height) {
 					for (let row = 1; row < imageReservedRows; row++) {
 						output.append("\r\n");
@@ -588,7 +385,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			this.previousViewportTop = Math.max(0, bufferLength - height);
 			this.positionHardwareCursor(cursorPos, frameLength, output);
 			this.noteShown(frameLength);
-			this.previousKittyImageIds = collectKittyImageIds(frame);
 			this.previousWidth = width;
 			this.previousHeight = height;
 		};
@@ -634,44 +430,36 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			return;
 		}
 
-		// Find first and last changed lines
-		let firstChanged = -1;
-		let lastChanged = -1;
+		// A differential frame rewrites everything between its two boundaries. Once both
+		// boundaries are known, comparing the rows inside them would format them twice.
 		const maxLines = Math.max(frameLength, shownLength);
-		// (The first `unchanged` lines are the lines shown. A line written is made from its raw line: two lines whose raw lines
-		// are the same string are the same; others are compared as written.)
-		for (let i = Math.min(unchanged, shownLength); i < maxLines; i++) {
-			let same: boolean;
+		const sameRow = (i: number): boolean => {
 			if (i >= shownLength || i >= frameLength) {
-				// (A line beyond either frame is "", which a line written never is; a line restored can be: an image's.)
-				same = restoredLines !== undefined && i < shownLength && restoredLines[i] === "";
-			} else if (restoredLines !== undefined) {
-				same = restoredLines[i] === frame.written(i);
-			} else {
-				const before = shownSource(i);
-				const after = raw[i]!;
-				same = before === after || this.writtenLine(before) === this.writtenLine(after);
+				// Restoring a screen replaces images with empty strings. Removing those rows alone draws nothing.
+				return restoredLines !== undefined && i < shownLength && restoredLines[i] === "";
 			}
-			if (!same) {
-				if (firstChanged === -1) {
-					firstChanged = i;
-					// (A line above the viewport that changed is drawn by drawing all of them again, whatever else changed: the
-					// lines after it are not made to be compared.)
-					if (i < prevViewportTop && i < frameLength && !imagesShown) {
-						lastChanged = i;
-						break;
-					}
-				}
-				lastChanged = i;
-			}
-		}
+			if (restoredLines !== undefined) return restoredLines[i] === frame.written(i);
+			const before = shownSource(i);
+			const after = raw[i]!;
+			return before === after || this.writtenLine(before) === this.writtenLine(after);
+		};
 		const appendedLines = frameLength > shownLength;
-		if (appendedLines) {
-			if (firstChanged === -1) {
-				firstChanged = shownLength;
+		let firstChanged = Math.min(unchanged, shownLength);
+		while (firstChanged < maxLines && sameRow(firstChanged)) firstChanged++;
+		let lastChanged = firstChanged;
+		if (firstChanged === maxLines) {
+			firstChanged = -1;
+		} else if (imagesShown || firstChanged >= prevViewportTop || firstChanged >= frameLength) {
+			// A change above the viewport already requires a full redraw.
+			if (this.applyLineResets !== super.applyLineResets) {
+				// A custom formatter can observe both order and calls. Preserve the original forward pass.
+				for (let i = firstChanged + 1; i < maxLines; i++) if (!sameRow(i)) lastChanged = i;
+			} else if (!appendedLines) {
+				lastChanged = maxLines - 1;
+				while (lastChanged > firstChanged && sameRow(lastChanged)) lastChanged--;
 			}
-			lastChanged = frameLength - 1;
 		}
+		if (appendedLines) lastChanged = frameLength - 1;
 		if (firstChanged !== -1 && imagesShown) {
 			const expandedRange = this.expandChangedRangeForKittyImages(firstChanged, lastChanged, shown, frame);
 			firstChanged = expandedRange.firstChanged;
@@ -699,7 +487,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 			if (shownLength > frameLength) {
 				output.append("\x1b[?2026h");
-				output.append(this.deleteChangedKittyImages(firstChanged, lastChanged, shown));
+				output.append(this.deleteKittyImages(shown.images, firstChanged, lastChanged));
 				// Move to end of new content (clamp to 0 for empty content)
 				const targetRow = Math.max(0, frameLength - 1);
 				if (targetRow < prevViewportTop) {
@@ -736,7 +524,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			}
 			this.positionHardwareCursor(cursorPos, frameLength, output);
 			this.noteShown(frameLength);
-			this.previousKittyImageIds = collectKittyImageIds(frame);
 			this.previousWidth = width;
 			this.previousHeight = height;
 			this.previousViewportTop = prevViewportTop;
@@ -755,7 +542,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// Keep updates wrapped in synchronized output while writing bounded chunks.
 		const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 		output.append("\x1b[?2026h"); // Begin synchronized output
-		output.append(this.deleteChangedKittyImages(firstChanged, lastChanged, shown));
+		output.append(this.deleteKittyImages(shown.images, firstChanged, lastChanged));
 		const prevViewportBottom = prevViewportTop + height - 1;
 		const moveTargetRow = appendStart ? firstChanged - 1 : firstChanged;
 		if (moveTargetRow > prevViewportBottom) {
@@ -916,7 +703,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		this.positionHardwareCursor(cursorPos, frameLength, output);
 
 		this.noteShown(frameLength);
-		this.previousKittyImageIds = collectKittyImageIds(frame);
 		this.previousWidth = width;
 		this.previousHeight = height;
 	}

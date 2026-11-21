@@ -141,6 +141,23 @@ stage_assets() {
 	cp "$AGENT"/src/core/export-html/vendor/*.js "$dir/export-html/vendor/" 2>/dev/null || true
 	cp "$root/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm" "$dir/"
 	cp -R "$root/packages/tui/native/$PIBOLT_OS/prebuilds/$PIBOLT_PLATFORM" "$dir/native/$PIBOLT_OS/prebuilds/"
+	# The counter is optional for builders without development headers. Both the
+	# normal JavaScript fallback and the addon work with the JIT disabled.
+	local cc="${CC:-cc}" node_include
+	local -a addon_flags=(-shared -fPIC -O3 -DNAPI_VERSION=8)
+	[[ "$PIBOLT_OS" != darwin ]] || addon_flags+=(-arch "${PIBOLT_ARCH/x64/x86_64}" -mmacosx-version-min=13.0 -undefined dynamic_lookup)
+	if [[ "$PIBOLT_OS" == linux || "$PIBOLT_OS" == darwin ]] && command -v "$cc" >/dev/null && command -v node >/dev/null; then
+		node_include="$(node -p 'require("node:path").resolve(process.execPath, "../../include/node")')" || return 0
+		# A standalone Node executable may use the distribution's separately installed Node-API headers.
+		if [[ ! -f "$node_include/node_api.h" && "$PIBOLT_OS" == linux ]]; then
+			node_include=/usr/include/node
+		fi
+		[[ -f "$node_include/node_api.h" ]] || return 0
+		if ! "$cc" "${addon_flags[@]}" -I"$node_include" "$PIBOLT_ROOT/scripts/lib/count-lines.c" -o "$dir/native/count-lines.node"; then
+			rm -f "$dir/native/count-lines.node"
+			log "native line counter unavailable; using the JavaScript counter"
+		fi
+	fi
 }
 
 rm -rf "$OUT" && mkdir -p "$OUT"
@@ -233,6 +250,18 @@ executable="$OUT/pi"; [ -f "$OUT/pi-bin" ] && executable="$OUT/pi-bin"
 # restart or an update: 65 ms rather than 180). Only advice: without it Pi starts as before.
 if [ "$PIBOLT_OS" = darwin ]; then
 	python3 "$PIBOLT_ROOT/scripts/lib/darwin_hot_pages.py" "$OUT" || { rm -f "$OUT/pi-bin.hot"; log "no pi-bin.hot (see above)"; }
+fi
+# Keep pi usable as a standalone executable. The npm launcher uses the optional
+# companion to overlap Linux executable reads with startup on a cold page cache.
+if [[ "$PIBOLT_RELEASE_PLATFORM" = linux-x64 && "$CPU" = native && "$JIT" = off && -z "$PLUGINS" ]]; then
+	hot_dir="$(mktemp -d "${TEMP_DIR%/}/pibolt-pages.XXXXXX")"
+	if python3 "$PIBOLT_ROOT/scripts/lib/linux_hot_pages.py" "$OUT/pi" >"$hot_dir/linux-hot-pages.h" &&
+		"${CC:-cc}" -static -Os -s -Wall -Wextra -I"$hot_dir" "$PIBOLT_ROOT/scripts/lib/linux-launcher.c" -o "$hot_dir/pi-start"; then
+		mv "$hot_dir/pi-start" "$OUT/pi-start"
+	else
+		log "Linux startup profile unavailable; using pi directly"
+	fi
+	rm -rf "$hot_dir"
 fi
 log "done: $OUT/pi ($(du -h "$executable" | cut -f1), Pi $(tail -1 <<<"$check"))"
 

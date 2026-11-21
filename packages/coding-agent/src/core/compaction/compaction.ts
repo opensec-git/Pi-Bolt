@@ -32,6 +32,7 @@ import {
 	buildSessionProjection,
 	type CompactionEntry,
 	type ProjectedSessionEntry,
+	type ProjectionUsageBoundaries,
 	type SessionEntry,
 	type SessionProjection,
 	sessionEntryToContextMessages,
@@ -230,6 +231,13 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 		};
 	}
 
+	return estimateFromAssistantUsage(messages, usageInfo);
+}
+
+function estimateFromAssistantUsage(
+	messages: AgentMessage[],
+	usageInfo: { usage: Usage; index: number },
+): ContextUsageEstimate {
 	const usageTokens = calculateContextTokens(usageInfo.usage);
 	let trailingTokens = 0;
 	for (let i = usageInfo.index + 1; i < messages.length; i++) {
@@ -274,12 +282,37 @@ export function estimateProjectedContextTokens(
 		if (usageEntryIndex > latestInvalidatingEntryIndex) return estimate;
 	}
 
-	const currentSystem = getCurrentSystemMessage(projection.messages);
+	const tokens = estimateEffectiveMessageTokens(projection.messages);
+	return { tokens, usageTokens: 0, trailingTokens: tokens, lastUsageIndex: null };
+}
+
+/** Estimate the active session without looking up source IDs in the raw branch on every turn. @internal */
+export function estimateSessionContextUsage(
+	messages: AgentMessage[],
+	boundaries: ProjectionUsageBoundaries,
+): {
+	tokens: number;
+	knownAfterCompaction: boolean;
+} {
+	const info = getLastAssistantUsageInfo(messages);
+	const tokens =
+		info && info.index >= boundaries.afterInvalidation
+			? estimateFromAssistantUsage(messages, info).tokens
+			: estimateEffectiveMessageTokens(messages);
+	return {
+		tokens,
+		knownAfterCompaction:
+			boundaries.afterCompaction === null || (info !== undefined && info.index >= boundaries.afterCompaction),
+	};
+}
+
+function estimateEffectiveMessageTokens(messages: AgentMessage[]): number {
+	const currentSystem = getCurrentSystemMessage(messages);
 	let tokens = currentSystem ? estimateTokens(currentSystem) : 0;
-	for (const message of projection.messages) {
+	for (const message of messages) {
 		if (message.role !== "system") tokens += estimateTokens(message);
 	}
-	return { tokens, usageTokens: 0, trailingTokens: tokens, lastUsageIndex: null };
+	return tokens;
 }
 
 /**

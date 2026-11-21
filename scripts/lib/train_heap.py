@@ -37,7 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "bench"))
 import winproc  # noqa: E402
-from harness import DONE, MODEL_ARGS, PROMPT, Tty, done, fake_model, pi_env, pi_home, workdir  # noqa: E402
+from harness import ANSI, DONE, MODEL_ARGS, PROMPT, Tty, done, fake_model, pi_env, pi_home, workdir  # noqa: E402
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 k32.VirtualProtectEx.argtypes = [w.HANDLE, ctypes.c_void_p, ctypes.c_size_t, w.DWORD, ctypes.POINTER(w.DWORD)]
@@ -217,6 +217,7 @@ def trace(start, region_rva, ranges):
             elif exception != STATUS_BREAKPOINT:
                 status = DBG_EXCEPTION_NOT_HANDLED
         elif code == EXIT_PROCESS_DEBUG_EVENT:
+            trace.exit_code = struct.unpack_from("<I", u, 0)[0]
             k32.ContinueDebugEvent(event.dwProcessId, event.dwThreadId, DBG_CONTINUE)
             return order
         k32.ContinueDebugEvent(event.dwProcessId, event.dwThreadId, status)
@@ -290,6 +291,30 @@ def main():
                 sys.exit(f"{name}: the run did not complete")
             print(f"{name}: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
 
+        # The TUI session once untraced first: a session that fails on its own is the build's fault, not the tracer's.
+        # (Started as an ordinary process: without the debugger flag set above, which no debugger would answer here.)
+        traced_flags = winproc.CREATE_SUSPENDED
+        winproc.CREATE_SUSPENDED = traced_flags & ~DEBUG_ONLY_THIS_PROCESS
+        try:
+            check = Tty([exe, "--no-session", *MODEL_ARGS], env, cwd)
+        finally:
+            winproc.CREATE_SUSPENDED = traced_flags
+        check_deadline = time.perf_counter() + 300
+        check_ok = check.wait_for("fake-model", 0, check_deadline)
+        if check_ok:
+            check.settle(0.2, check_deadline)
+            check_since = len(check.buf)
+            check.send(PROMPT.encode() + b"\r")
+            check_ok = check.wait_for(done(1), check_since, check_deadline)
+        check_screen = ANSI.sub(b"", check.buf[-4000:]).decode("utf-8", "replace")
+        check_ended = check.eof
+        check.send(b"/quit\r")
+        check.console.close()
+        if not check_ok:
+            print(f"TUI without tracing: no answer; ended: {check_ended}; the output's last part:\n{check_screen}", flush=True)
+            sys.exit("TUI: the session does not complete even without tracing")
+        print("TUI without tracing: the session completes", flush=True)
+
         plain("--version", ["--version"], "Pi-Bolt")
         plain("headless", ["-p", "--no-session", *MODEL_ARGS, PROMPT], DONE)
         # The TUI: started on this thread (a debuggee is the thread's that made it), driven from another.
@@ -306,11 +331,13 @@ def main():
             tty = box["tty"]
             deadline = time.perf_counter() + 1800
             box["ok"] = tty.wait_for("fake-model", 0, deadline)
+            box["step"] = "the first frame (fake-model on the screen)"
             if box["ok"]:
                 tty.settle(0.2, deadline)
                 since = len(tty.buf)
                 tty.send(PROMPT.encode() + b"\r")
                 box["ok"] = tty.wait_for(done(1), since, deadline)
+                box["step"] = f"the answer ({done(1)!r} on the screen)"
                 tty.settle(0.2, deadline)
             tty.send(b"/quit\r")
 
@@ -318,9 +345,19 @@ def main():
         driver.start()
         touched.append(trace(start, strings.region_rva, ranges))
         driver.join(30)
+        tty = box.get("tty")
         if not box.get("ok"):
-            sys.exit("TUI: the session did not complete")
-        box["tty"].console.close()
+            # The same session completed untraced above, so this is the tracer's: a guarded page that the kernel reads
+            # (a write straight from the heap) fails the call instead of trapping. What the run touched until then (its
+            # start and first frame) is kept, and the order is still this build's.
+            screen = ANSI.sub(b"", tty.buf[-4000:]).decode("utf-8", "replace") if tty is not None else ""
+            code = getattr(trace, "exit_code", None)
+            exit_text = "running" if code is None else f"exit code {code:#x}"
+            print(f"::warning::TUI traced: no {box.get('step')} ({exit_text}); the order keeps what it touched until then",
+                  flush=True)
+            print(f"TUI traced: the output's last part:\n{screen}", flush=True)
+        if tty is not None:
+            tty.console.close()
         print(f"TUI: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
     # --version's first (every run starts with what it touches), then the TUI's, then the headless run's.
     first_strings, seen_strings = [], set()

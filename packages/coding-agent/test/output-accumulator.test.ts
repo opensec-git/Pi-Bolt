@@ -104,6 +104,35 @@ describe("OutputAccumulator.snapshot", () => {
 		}
 	});
 
+	it("preserves streamed UTF-8, interior BOMs, and malformed sequences across large chunks", () => {
+		const budget = { maxBytes: 500, maxLines: 1000 };
+		const output = new OutputAccumulator(budget);
+		const reference = new TextDecoder();
+		let text = "";
+		try {
+			const body = Buffer.from("é日本😀\n".repeat(1200));
+			const parts = [
+				Buffer.from([0xef]),
+				Buffer.concat([Buffer.from([0xbb, 0xbf]), body, Buffer.from([0xf0, 0x9f])]),
+				Buffer.concat([Buffer.from([0x98, 0x80, 0x0a]), body, Buffer.from("\ufeffinside\n")]),
+				Buffer.concat([body, Buffer.from([0x80, 0x0a, 0xff, 0xf0])]),
+				Buffer.from([0x9f]),
+			];
+			for (const part of parts) {
+				output.append(part);
+				text += reference.decode(part, { stream: true });
+				expect(output.snapshot().truncation).toEqual(truncateTail(text, budget));
+				expect(output.getLastLineBytes()).toBe(Buffer.byteLength(text.slice(text.lastIndexOf("\n") + 1)));
+			}
+			output.finish();
+			text += reference.decode();
+			expect(output.snapshot().truncation).toEqual(truncateTail(text, budget));
+			expect(output.getLastLineBytes()).toBe(Buffer.byteLength(text.slice(text.lastIndexOf("\n") + 1)));
+		} finally {
+			output.closeTempFile();
+		}
+	});
+
 	it("keeps the same tail with ASCII chunks larger than the rolling window as with small ones", () => {
 		const text = lines(30_000, 70);
 		const bytes = Buffer.from(text, "utf-8");

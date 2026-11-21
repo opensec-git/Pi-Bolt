@@ -333,12 +333,24 @@ function applyModelsJson(
 		}
 		return { ...model, baseUrl };
 	});
-	for (const definition of config.models ?? []) {
-		const existingIndex = models.findIndex((model) => isModelType(model, "chat") && model.id === definition.id);
-		const defaults = findModelDefaults(models, definition.id, definition.api ?? config.api);
+	if (!config.models?.length) return models;
+	const chatPositions = new Map<string, number>();
+	for (let i = 0; i < models.length; i++) {
+		const model = models[i];
+		if (isModelType(model, "chat") && !chatPositions.has(model.id)) chatPositions.set(model.id, i);
+	}
+	for (const definition of config.models) {
+		const existingIndex = chatPositions.get(definition.id);
+		// API and base URL are the only fields modelFromJson inherits from the catalog.
+		const api = definition.api ?? config.api;
+		const defaults =
+			api && (definition.baseUrl ?? config.baseUrl) ? undefined : findModelDefaults(models, definition.id, api);
 		const model = modelFromJson(providerId, definition, config, defaults);
-		if (existingIndex >= 0) models[existingIndex] = model;
-		else models.push(model);
+		if (existingIndex !== undefined) models[existingIndex] = model;
+		else {
+			chatPositions.set(model.id, models.length);
+			models.push(model);
+		}
 	}
 	return models;
 }

@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
-import { readFile } from "fs/promises";
+import { appendFileSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "fs";
+import { type FileHandle, open, readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 
 /** Deterministic pseudo-random numbers, so a failing case can be found again. */
@@ -52,23 +52,31 @@ describe("read tool on files read in chunks", () => {
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pi-read-large-"));
+		// Fixtures are written just before they are read. Index reuse waits until a change is older than two seconds.
+		const now = Date.now.bind(Date);
+		vi.spyOn(Date, "now").mockImplementation(() => now() + 60_000);
 	});
 
 	afterAll(() => {
+		vi.restoreAllMocks();
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	async function expectSame(file: string, args: { offset?: number; limit?: number }): Promise<void> {
+	async function expectSame(
+		file: string,
+		args: { offset?: number; limit?: number },
+		local = chunked(),
+	): Promise<void> {
 		const run = async (tool: ReturnType<typeof createReadToolDefinition>) => {
 			try {
 				const result = await tool.execute("id", { path: file, ...args }, undefined, undefined, undefined as never);
-				return { content: result.content, details: result.details };
+				return result;
 			} catch (error) {
 				return { error: (error as Error).message };
 			}
 		};
 		const expected = await run(whole());
-		const actual = await run(chunked());
+		const actual = await run(local);
 		expect(actual, `${file} ${JSON.stringify(args)}`).toStrictEqual(expected);
 	}
 
@@ -134,7 +142,186 @@ describe("read tool on files read in chunks", () => {
 			writeFileSync(join(dir, name), content);
 			let lines = 1;
 			for (const byte of content) if (byte === 0x0a) lines++;
-			for (const args of offsets(lines, next)) await expectSame(name, args);
+			const local = chunked();
+			for (const args of offsets(lines, next)) await expectSame(name, args, local);
+		}
+	});
+
+	it("reads either side of indexed chunk boundaries and invalidates after writes or file replacement", async () => {
+		const name = "changing.log";
+		const path = join(dir, name);
+		const local = chunked();
+		const chunkSize = 1024 * 1024;
+		const initial = `${"a".repeat(chunkSize - 1)}\n${"é\r\n".repeat(chunkSize / 2)}last`;
+		writeFileSync(path, initial);
+		const originalTime = new Date("2025-01-01T00:00:00Z");
+		utimesSync(path, originalTime, originalTime);
+		await expectSame(name, { offset: 2, limit: 2 }, local);
+		await expectSame(name, { offset: 3, limit: 2 }, local);
+		await expectSame(name, { offset: chunkSize / 4 + 20, limit: 3 }, local);
+		writeFileSync(path, initial.replaceAll("é\r\n", "abcd"));
+		utimesSync(path, originalTime, originalTime);
+		await expectSame(name, { offset: 3, limit: 2 }, local);
+		writeFileSync(`${path}.replacement`, initial);
+		utimesSync(`${path}.replacement`, originalTime, originalTime);
+		renameSync(`${path}.replacement`, path);
+		await expectSame(name, { offset: 3, limit: 2 }, local);
+		appendFileSync(path, "\nnew\n");
+		await expectSame(name, { offset: chunkSize / 2 + 3, limit: 2 }, local);
+		writeFileSync(path, "shortened");
+		await expectSame(name, { offset: 2, limit: 2 }, local);
+	});
+
+	it("continues at the verified byte position for an adjacent page, including long and empty final lines", async () => {
+		const name = "adjacent.log";
+		const path = join(dir, name);
+		const prefix = Buffer.from("é\r\n".repeat(300_000));
+		writeFileSync(path, Buffer.concat([prefix, Buffer.from([0xff, 10]), Buffer.from(`${"a".repeat(90_000)}\n`)]));
+		const local = chunked();
+		await expectSame(name, { offset: 299_999, limit: 2 }, local);
+		const handle = await open(path, "r");
+		const prototype: FileHandle = Object.getPrototypeOf(handle);
+		await handle.close();
+		const pageReadSizes: number[] = [];
+		const intercept = new Proxy(prototype.read, {
+			apply(target, receiver, args) {
+				// The MIME signature probe also reads from byte zero.
+				if (args[3] === prefix.length) pageReadSizes.push(args[2]);
+				return Reflect.apply(target, receiver, args);
+			},
+		});
+		const spy = vi.spyOn(prototype, "read").mockImplementation(intercept);
+		try {
+			await expectSame(name, { offset: 300_001, limit: 1 }, local);
+			expect(pageReadSizes).toHaveLength(1);
+			expect(pageReadSizes[0]).toBeLessThan(1024 * 1024);
+			await expectSame(name, { offset: 300_002, limit: 1 }, local);
+			await expectSame(name, { offset: 300_003, limit: 1 }, local);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("follows two open-ended pages across malformed UTF-8 without rereading the tail", async () => {
+		const name = "malformed-pages.txt";
+		const path = join(dir, name);
+		const page = Buffer.concat([Buffer.from("é\r\n".repeat(1999)), Buffer.from([0xff, 10])]);
+		writeFileSync(path, Buffer.concat(Array(150).fill(page)));
+		const local = chunked();
+		await expectSame(name, {}, local);
+		const handle = await open(path, "r");
+		const prototype: FileHandle = Object.getPrototypeOf(handle);
+		await handle.close();
+		let requested = 0;
+		const intercept = new Proxy(prototype.read, {
+			apply(target, receiver, args) {
+				requested += args[2];
+				return Reflect.apply(target, receiver, args);
+			},
+		});
+		const spy = vi.spyOn(prototype, "read").mockImplementation(intercept);
+		try {
+			await expectSame(name, { offset: 2001 }, local);
+			await expectSame(name, { offset: 4001 }, local);
+			expect(requested).toBeLessThan(256 * 1024);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("reuses measured totals across arbitrary jumps in a byte-preserving suffix", async () => {
+		const name = "scattered-reads.txt";
+		// This unfinished four-byte sequence decodes to one three-byte replacement character.
+		const line = Buffer.concat([Buffer.from("record É "), Buffer.from([0xf0, 0x9f, 0x98, 13, 10])]);
+		const records = Buffer.concat(Array(150_000).fill(line));
+		for (const ending of ["last line", ""]) {
+			writeFileSync(join(dir, name), Buffer.concat([records, Buffer.from(ending)]));
+			const local = chunked();
+			await expectSame(name, { offset: 1001 }, local);
+			await expectSame(name, { offset: 90_001 }, local);
+			await expectSame(name, { offset: 75_321, limit: 10 }, local);
+			await expectSame(name, { offset: 1201 }, local);
+			await expectSame(name, { offset: 150_001 }, local);
+			await expectSame(name, { offset: 150_002 }, local);
+		}
+	});
+
+	it("measures an oversized first line on a continuation and keeps the final empty line addressable", async () => {
+		const name = "giant-following-line.txt";
+		writeFileSync(
+			join(dir, name),
+			Buffer.concat([Buffer.from("a\n".repeat(2000)), Buffer.alloc(1_100_000, 0xff), Buffer.from("\n")]),
+		);
+		const local = chunked();
+		await expectSame(name, {}, local);
+		await expectSame(name, { offset: 2001 }, local);
+		await expectSame(name, { offset: 2002 }, local);
+	});
+
+	it("rereads the visible prefix when returning to a measured oversized line after a bounded read", async () => {
+		const name = "repeated-oversized.txt";
+		const path = join(dir, name);
+		writeFileSync(
+			path,
+			Buffer.concat([Buffer.from("entry\n"), Buffer.alloc(1_200_000, 0xff), Buffer.from("\ntail")]),
+		);
+		const local = chunked();
+		await expectSame(name, { offset: 2 }, local);
+		await expectSame(name, { offset: 3, limit: 1 }, local);
+		const handle = await open(path, "r");
+		const prototype: FileHandle = Object.getPrototypeOf(handle);
+		await handle.close();
+		const reads: { position: number; length: number }[] = [];
+		const intercept = new Proxy(prototype.read, {
+			apply(target, receiver, args) {
+				if (args[3] !== 0) reads.push({ position: args[3], length: args[2] });
+				return Reflect.apply(target, receiver, args);
+			},
+		});
+		const spy = vi.spyOn(prototype, "read").mockImplementation(intercept);
+		try {
+			await expectSame(name, { offset: 2 }, local);
+			expect(reads).toHaveLength(1);
+			expect(reads[0]?.position).toBe(6);
+			expect(reads[0]?.length).toBeLessThan(128 * 1024);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it.each([
+		{ offset: 400_000, limit: undefined },
+		{ offset: 400_000, limit: 2 },
+		{ offset: 400_002, limit: 2 },
+		{ offset: 402_000, limit: undefined },
+	])("restarts from byte zero if a rewrite races an indexed read at $offset", async ({ offset, limit }) => {
+		const path = join(dir, "racing.log");
+		writeFileSync(path, "abc\n".repeat(1024 * 1024));
+		const local = chunked();
+		const args = { path, offset, limit };
+		const page = (tool: ReturnType<typeof chunked>) =>
+			tool.execute("id", args, undefined, undefined, undefined as never);
+		await local.execute("id", { path, offset: 400_000, limit }, undefined, undefined, undefined as never);
+		const handle = await open(path, "r");
+		const prototype: FileHandle = Object.getPrototypeOf(handle);
+		await handle.close();
+		let rewrote = false;
+		const intercept = new Proxy(prototype.read, {
+			apply(target, receiver, args) {
+				if (!rewrote && args[3] > 0) {
+					rewrote = true;
+					writeFileSync(path, "changed\n".repeat(512 * 1024));
+				}
+				return Reflect.apply(target, receiver, args);
+			},
+		});
+		const spy = vi.spyOn(prototype, "read").mockImplementation(intercept);
+		try {
+			const actual = await page(local);
+			expect(rewrote).toBe(true);
+			expect(actual).toStrictEqual(await page(whole()));
+		} finally {
+			spy.mockRestore();
 		}
 	});
 

@@ -71,18 +71,23 @@ export class ModelConfig {
 			);
 		}
 
+		content = stripBom(content);
 		let parsed: unknown;
 		try {
-			parsed = JSON.parse(stripJsonComments(stripBom(content)));
-		} catch (error) {
-			return ModelConfig.loaded(
-				path,
-				revision,
-				new ModelConfig(
-					new Map(),
-					`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
-				),
-			);
+			parsed = JSON.parse(content);
+		} catch {
+			try {
+				parsed = JSON.parse(stripJsonComments(content));
+			} catch (error) {
+				return ModelConfig.loaded(
+					path,
+					revision,
+					new ModelConfig(
+						new Map(),
+						`Failed to parse models.json: ${error instanceof Error ? error.message : error}\n\nFile: ${path}`,
+					),
+				);
+			}
 		}
 
 		// (TypeBox's check, generated at build time: TypeBox itself is loaded only to explain an invalid file.)
@@ -102,7 +107,7 @@ export class ModelConfig {
 		const config = parsed as ModelsJson;
 		const providers = new Map<string, ModelsJsonProvider>();
 		for (const [providerId, provider] of Object.entries(config.providers)) {
-			providers.set(providerId, deepFreeze(structuredClone(provider)));
+			providers.set(providerId, deepFreeze(provider));
 		}
 		return ModelConfig.loaded(path, revision, new ModelConfig(providers));
 	}

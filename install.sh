@@ -15,9 +15,10 @@
 #   PIBOLT_VARIANT   on Linux x86-64, x64, x64-baseline or x64-jit (default: x64 on CPUs with AVX2, x64-baseline otherwise);
 #                    with musl (Alpine), x64-musl, x64-musl-baseline or x64-musl-jit (the same default);
 #                    on Linux ARM64 and in Termux, arm64 or arm64-jit (default arm64); on macOS arm64 or arm64-jit (Apple
-#                    silicon; default arm64)
+#                    silicon; default arm64). "jit" selects the JIT build for the current platform.
 #   PIBOLT_INSTALL   where to install (default: ~/.pi-bolt)
 #   PIBOLT_BIN_DIR   where to link the `pi-bolt` command (default: ~/.local/bin; in Termux $PREFIX/bin)
+#   PIBOLT_NO_PATH=1  install without changing the pi-bolt command on PATH
 #   PIBOLT_YES=1     do not ask: take the default action and do not offer to start Pi-Bolt
 #   PIBOLT_LAUNCHER=1  used by the npm package's first run: download only, no menu, link or prompts
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
@@ -53,6 +54,7 @@ main() {
 	if [ "$(uname -s)" = Darwin ]; then PLATFORM=darwin; else PLATFORM=linux; fi
 	VERSION="${PIBOLT_VERSION:-latest}"
 	INSTALL="${PIBOLT_INSTALL:-$HOME/.pi-bolt}"
+	case "$INSTALL" in /*) ;; *) INSTALL="$PWD/$INSTALL" ;; esac
 	TERMUX=""
 	if is_termux; then TERMUX=1; fi
 	# "-musl" on a musl-based Linux such as Alpine: its builds are named so (pi-bolt-linux-x64-musl). Not in Termux, which runs
@@ -112,7 +114,9 @@ main() {
 	fi
 
 	VARIANT="${PIBOLT_VARIANT:-}"
-	if [ -z "$VARIANT" ]; then
+	if [ "$VARIANT" = jit ]; then
+		if [ "$PLATFORM" = darwin ] || is_arm64; then VARIANT=arm64-jit; else VARIANT=x64$MUSL-jit; fi
+	elif [ -z "$VARIANT" ]; then
 		if [ "$PLATFORM" = darwin ] || is_arm64; then VARIANT=arm64
 		elif grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$MUSL; else VARIANT=x64$MUSL-baseline; fi
 	fi
@@ -134,6 +138,12 @@ main() {
 	*) fail "PIBOLT_SOURCE must be auto, npm or github" ;;
 	esac
 	NAME="pi-bolt-$PLATFORM-$VARIANT"
+	build_entry="$NAME/$(command_of_build)"
+	build_command="$INSTALL/$build_entry"
+	installed_command="$BIN_DIR/pi-bolt"
+	if [ "${PIBOLT_NO_PATH:-0}" = 1 ]; then
+		case "$VARIANT" in *-jit) installed_command="$INSTALL/pi-bolt-jit" ;; *) installed_command="$build_command" ;; esac
+	fi
 	if [ "$VERSION" = latest ]; then BASE="$REPO/releases/latest/download"; else BASE="$REPO/releases/download/$VERSION"; fi
 	BASE="${PIBOLT_DOWNLOAD_BASE:-$BASE}"
 
@@ -157,25 +167,46 @@ main() {
 	esac
 
 	install_release
+	# PATH must keep working if compile or rollback swaps in a package without pi-start.
+	if [ "$PLATFORM-$VARIANT" = linux-x64 ] && [ -z "$TERMUX" ] && { [ -x "$INSTALL/$NAME/pi-start" ] || [ -f "$INSTALL/$NAME.start" ]; }; then
+		write_linux_start_command
+		build_command="$INSTALL/$NAME.start"
+		if [ "${PIBOLT_NO_PATH:-0}" = 1 ]; then installed_command="$build_command"; fi
+	fi
 	# The channel this installation's updates take (Pi-Bolt reads <install>/channel; stable, the default, is no file).
 	case "${PIBOLT_CHANNEL:-}" in
 	beta) printf 'beta\n' >"$INSTALL/channel" ;;
 	stable) rm -f "$INSTALL/channel" ;;
 	esac
-	mkdir -p "$BIN_DIR"
-	ln -sfn "$INSTALL/$NAME/$(command_of_build)" "$BIN_DIR/pi-bolt"
+	if [ "${PIBOLT_NO_PATH:-0}" != 1 ]; then
+		mkdir -p "$BIN_DIR"
+		ln -sfn "$build_command" "$BIN_DIR/pi-bolt"
+	fi
+	if [ "$installed_command" = "$INSTALL/pi-bolt-jit" ] && [ "$(readlink "$installed_command" 2>/dev/null || true)" != "$build_entry" ]; then
+		if [ -e "$installed_command" ] || [ -L "$installed_command" ]; then
+			printf '%s already exists. Use the JIT executable directly.\n' "$installed_command" >&2
+			installed_command="$build_command"
+		else
+			ln -s "$build_entry" "$installed_command"
+		fi
+	fi
 	# Pi-Bolt keeps the packages only it runs (OpenSec's extensions) out of Pi's list, which it does as it starts: once now, so
 	# that Pi, if it is started before Pi-Bolt, does not find them (an earlier installer put them there).
 	(cd "$INSTALL" && "$INSTALL/$NAME/pi" list >/dev/null 2>&1) || true
 	# A remote control service that runs (an earlier version's) is restarted, so it runs this version; nothing when none runs.
-	(cd "$INSTALL" && "$INSTALL/$NAME/pi" service restart >/dev/null 2>&1) || true
+	active_link=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
+	if [ "${PIBOLT_NO_PATH:-0}" != 1 ] || [ "$active_link" = "$build_command" ] || [ "$active_link" = "$INSTALL/$build_entry" ]; then
+		(cd "$INSTALL" && "$INSTALL/$NAME/pi" service restart >/dev/null 2>&1) || true
+	fi
 	if [ "$ACTION" = reinstall ] && [ -n "${installed:-}" ] && [ "${installed:-}" != "$SHOWN_VERSION" ]; then word=updated
 	elif [ "$ACTION" = reinstall ]; then word=reinstalled
 	else word=installed; fi
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
 	compiled_extensions_note "$COMPILED_BEFORE"
 	offer_extensions
-	if [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
+	if [ "${PIBOLT_NO_PATH:-0}" = 1 ]; then
+		printf '\nRun it with: %s%s%s\n' "$bold" "$(tilde "$installed_command")" "$reset"
+	elif [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
 		printf '\nRun it with: %spi-bolt%s\n' "$bold" "$reset"
 	else
 		path_hint
@@ -884,10 +915,13 @@ uninstall() {
 	# what automatic updates keep: when the last one ran, its output, and its lock.)
 	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-* \
 		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock"
+	rm -f "$INSTALL/pi-bolt-linux-x64.start"
 	target=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
 	case "$target" in
 	"$INSTALL"/*) rm -f "$BIN_DIR/pi-bolt" ;;
 	esac
+	target=$(readlink "$INSTALL/pi-bolt-jit" 2>/dev/null || true)
+	case "$target" in pi-bolt-*-jit/pi | pi-bolt-*-jit/pi-termux) rm -f "$INSTALL/pi-bolt-jit" ;; esac
 	rmdir "$INSTALL" 2>/dev/null || true
 }
 
@@ -947,7 +981,7 @@ choose_action() {
 	printf '%sInstallation:%s\n\n' "$bold" "$reset"
 	printf '  %sPi-Bolt %s%s, %s-%s build %s\n' "$amber" "$SHOWN_VERSION" "$reset" "$PLATFORM" "$VARIANT" "$cpu"
 	printf '  %sinstalls to%s  %s\n' "$dim" "$reset" "$(tilde "$INSTALL/$NAME")"
-	printf '  %scommand%s      %s\n\n' "$dim" "$reset" "$(tilde "$BIN_DIR/pi-bolt")"
+	printf '  %scommand%s      %s\n\n' "$dim" "$reset" "$(tilde "$installed_command")"
 	printf '%sChoose an action:%s\n\n' "$bold" "$reset"
 	if [ -n "$EXISTING" ]; then
 		if [ -n "$installed" ] && [ "$installed" != "$SHOWN_VERSION" ]; then action="Update to Pi-Bolt $SHOWN_VERSION"; else action="Reinstall Pi-Bolt"; fi
@@ -1144,7 +1178,7 @@ offer_start() {
 	terminal=/dev/tty
 	name=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
 	case "$name" in "" | "?" | "??") ;; *) [ -c "/dev/$name" ] && terminal="/dev/$name" ;; esac
-	exec "$INSTALL/$NAME/$(command_of_build)" <"$terminal"
+	exec "$build_command" <"$terminal"
 }
 
 # --- Linux on ARM64, and Termux ---------------------------------------------------------------------------------------
@@ -1161,8 +1195,19 @@ is_termux() {
 	return 1
 }
 
-# What `pi-bolt` runs: in Termux the launcher beside pi (write_termux_launcher), elsewhere pi itself.
+# Entry inside the package, also used when a Linux package lacks its read-ahead helper.
 command_of_build() { if [ -n "$TERMUX" ]; then printf pi-termux; else printf pi; fi; }
+
+# A stable command outside the package directory that update and rollback swap.
+write_linux_start_command() (
+	dir=$(printf '%s' "$INSTALL/$NAME" | sed "s/'/'\\\\''/g")
+	tmp=$(mktemp "$INSTALL/.$NAME.start.XXXXXX") || exit 1
+	trap 'rm -f "$tmp"' EXIT
+	{
+		printf "#!/bin/sh\ndir='%s'\n" "$dir"
+		printf '%s\n' 'if [ -x "$dir/pi-start" ]; then exec "$dir/pi-start" "$@"; fi' 'exec "$dir/pi" "$@"'
+	} >"$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$INSTALL/$NAME.start"
+)
 
 # Pi-Bolt is a glibc program. Android's libc is another (bionic), so in Termux it runs with Termux's glibc (the packages of
 # glibc-repo): its loader is set as the executable's (set_interpreter), and what Termux's glibc reads from $PREFIX/glibc/etc

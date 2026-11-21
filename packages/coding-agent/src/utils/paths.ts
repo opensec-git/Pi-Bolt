@@ -80,8 +80,8 @@ export function shortenHomePath(path: string, homeDir: string = homedir()): stri
 export function getFileRevision(path: string): string | undefined {
 	let revision: string | undefined;
 	try {
-		const stats = statSync(path, { bigint: true });
-		revision = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+		const stats = statSync(path, { bigint: true, throwIfNoEntry: false });
+		if (stats) revision = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
 	} catch {
 		revision = undefined;
 	}
@@ -161,10 +161,9 @@ export function normalizePath(input: string, options: PathInputOptions = {}): st
 	}
 
 	if (options.expandTilde ?? true) {
-		const home = options.homeDir ?? homedir();
-		if (normalized === "~") return home;
+		if (normalized === "~") return options.homeDir ?? homedir();
 		if (normalized.startsWith("~/") || (process.platform === "win32" && normalized.startsWith("~\\"))) {
-			return join(home, normalized.slice(2));
+			return join(options.homeDir ?? homedir(), normalized.slice(2));
 		}
 	}
 

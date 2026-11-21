@@ -119,6 +119,59 @@ describe("OpenAI to Anthropic session migration for Copilot Claude", () => {
 		});
 	});
 
+	it("preserves source identity across complete, interrupted and aborted tool turns", () => {
+		const call = (id: string): ToolCall => ({ type: "toolCall", id, name: "read", arguments: {} });
+		const result = (id: string): Message => ({
+			role: "toolResult",
+			toolCallId: id,
+			toolName: "read",
+			content: [],
+			isError: false,
+			timestamp: 0,
+		});
+		const complete = makeAssistantMessage([call("first|id")]);
+		const interrupted = makeAssistantMessage([call("second"), call("missing")]);
+		const system: Message = { role: "system", content: "update", timestamp: 0 };
+		const aborted: AssistantMessage = { ...complete, stopReason: "aborted" };
+		const messages = [
+			complete,
+			result("first|id"),
+			interrupted,
+			system,
+			result("second"),
+			aborted,
+			complete,
+			result("first|id"),
+		];
+		const sources: (Message | undefined)[] = [];
+		const replay = transformMessages(
+			messages,
+			makeCopilotClaudeModel(),
+			anthropicNormalizeToolCallId,
+			undefined,
+			sources,
+		);
+		expect(replay.filter((m) => m.role === "toolResult").map((m) => m.toolCallId)).toEqual([
+			"first_id",
+			"second",
+			"missing",
+			"first_id",
+		]);
+		const expected = [
+			messages[0],
+			messages[1],
+			messages[2],
+			messages[4],
+			undefined,
+			system,
+			messages[6],
+			messages[7],
+		];
+		expect(sources).toHaveLength(replay.length);
+		expect(sources).toHaveLength(expected.length);
+		for (const [i, message] of expected.entries()) expect(sources[i]).toBe(message);
+	});
+
 	it("adds synthetic results only for trailing tool calls that are still missing results", () => {
 		const model = makeCopilotClaudeModel();
 		const messages: Message[] = [

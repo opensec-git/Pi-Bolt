@@ -129,7 +129,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 	context: TranscriptContext,
 	options?: MistralOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
@@ -308,7 +308,7 @@ async function requestMistralStream(
 		response = await (options?.fetch ?? globalThis.fetch)(url, {
 			method: "POST",
 			headers,
-			body: JSON.stringify(toMistralWirePayload(payload)),
+			body: JSON.stringify(toMistralWirePayload(payload, options?.sessionId)),
 			signal: combinedSignal.signal,
 		});
 	} catch (error) {
@@ -376,7 +376,7 @@ function hasMistralHeaderOverride(overrides: Record<string, string | null> | und
 	return !!overrides && Object.keys(overrides).some((name) => name.toLowerCase() === target);
 }
 
-function toMistralWirePayload(payload: MistralChatPayload): Record<string, unknown> {
+function toMistralWirePayload(payload: MistralChatPayload, sessionId?: string): Record<string, unknown> {
 	const wirePayload: Record<string, unknown> = { ...payload };
 	for (const [source, target] of [
 		["topP", "top_p"],
@@ -395,7 +395,7 @@ function toMistralWirePayload(payload: MistralChatPayload): Record<string, unkno
 		remapMistralProperty(wirePayload, source, target);
 	}
 	wirePayload.messages = payload.messages.map((message) => toMistralWireMessage(message));
-	cacheJsonSerialization(wirePayload.messages);
+	cacheJsonSerialization(wirePayload.messages, sessionId);
 
 	const responseFormat = wirePayload.response_format;
 	if (isMistralRecord(responseFormat)) {
@@ -531,7 +531,9 @@ function buildChatPayload(
 	};
 
 	const currentTools = getCurrentTools(context.messages);
-	if (currentTools.length > 0) payload.tools = toFunctionTools(currentTools);
+	// Strict tools are opt-in: Mistral Large 4 can go silent for minutes before a strict tool call (#12148).
+	if (currentTools.length > 0)
+		payload.tools = toFunctionTools(currentTools, model.compat?.supportsStrictMode ?? false);
 	if (options?.temperature !== undefined) payload.temperature = options.temperature;
 	if (options?.maxTokens !== undefined) payload.maxTokens = options.maxTokens;
 	if (options?.toolChoice) payload.toolChoice = mapToolChoice(options.toolChoice);
@@ -716,7 +718,7 @@ async function consumeChatStream(
 			let open = toolCallsByKey.get(key);
 			if (!open) {
 				output.content.push({ type: "toolCall", id: callId, name: toolCall.function.name, arguments: {} });
-				open = { contentIndex: output.content.length - 1, arguments: new ToolCallArgumentsStream() };
+				open = { contentIndex: output.content.length - 1, arguments: new ToolCallArgumentsStream(stream) };
 				toolCallsByKey.set(key, open);
 				stream.push({ type: "toolcall_start", contentIndex: open.contentIndex, partial: output });
 			}
@@ -725,7 +727,7 @@ async function consumeChatStream(
 				typeof toolCall.function.arguments === "string"
 					? toolCall.function.arguments
 					: JSON.stringify(toolCall.function.arguments || {});
-			(output.content[open.contentIndex] as ToolCall).arguments = open.arguments.append(argsDelta);
+			open.arguments.appendTo(output.content[open.contentIndex] as ToolCall, argsDelta);
 			stream.push({
 				type: "toolcall_delta",
 				contentIndex: open.contentIndex,
@@ -748,9 +750,9 @@ async function consumeChatStream(
 	}
 }
 
-function toFunctionTools(tools: Tool[]): MistralFunctionTool[] {
+function toFunctionTools(tools: Tool[], supportsStrictMode: boolean): MistralFunctionTool[] {
 	return tools.map((tool) => {
-		const strict = resolveJsonSchemaStrictSampling(tool, true);
+		const strict = resolveJsonSchemaStrictSampling(tool, supportsStrictMode);
 		return {
 			type: "function",
 			function: {

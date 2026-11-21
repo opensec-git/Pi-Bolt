@@ -1921,3 +1921,364 @@ export const checkKeybindingValue: (value: unknown) => boolean = (() => {
 			value.every((element, index) => typeof element === "string" && External[1].test(element)));
 	return (value) => check_0(value);
 })();
+/** Whether a theme document matches ThemeJsonSchema. */
+export const checkThemeDocument: (value: unknown) => boolean = (() => {
+	const External = [
+		new RegExp("(^\\$schema$|^name$|^appearance$|^vars$|^colors$|^export$)", "u"),
+		new RegExp("^[^/]+$", "u"),
+		new RegExp("^.*$", "u"),
+		new RegExp(
+			"(^accent$|^border$|^borderAccent$|^borderMuted$|^success$|^error$|^warning$|^muted$|^dim$|^text$|^thinkingText$|^scrollbarTrack$|^scrollbarThumb$|^selectedBg$|^searchMatchBg$|^searchMatchText$|^userMessageBg$|^userMessageText$|^customMessageBg$|^customMessageText$|^customMessageLabel$|^toolPendingBg$|^toolSuccessBg$|^toolErrorBg$|^toolTitle$|^toolOutput$|^mdHeading$|^mdLink$|^mdLinkUrl$|^mdCode$|^mdCodeBlock$|^mdCodeBlockBorder$|^mdCodeBlockBg$|^mdQuote$|^mdQuoteBorder$|^mdHr$|^mdListBullet$|^toolDiffAdded$|^toolDiffRemoved$|^toolDiffContext$|^syntaxComment$|^syntaxKeyword$|^syntaxFunction$|^syntaxVariable$|^syntaxString$|^syntaxNumber$|^syntaxType$|^syntaxOperator$|^syntaxPunctuation$|^thinkingOff$|^thinkingMinimal$|^thinkingLow$|^thinkingMedium$|^thinkingHigh$|^thinkingXhigh$|^thinkingMax$|^bashMode$)",
+			"u",
+		),
+		new RegExp("(^pageBg$|^cardBg$|^infoBg$)", "u"),
+	];
+	const check_0 = (value) =>
+		typeof value === "object" &&
+		value !== null &&
+		!Array.isArray(value) &&
+		"name" in value &&
+		"colors" in value &&
+		Object.getOwnPropertyNames(value).every((var_54, var_55) => External[0].test(var_54) || false) &&
+		(value.$schema === undefined || !("$schema" in value) || typeof value.$schema === "string") &&
+		typeof value.name === "string" &&
+		External[1].test(value.name) &&
+		(value.appearance === undefined ||
+			!("appearance" in value) ||
+			(typeof value.appearance === "string" && value.appearance === "dark") ||
+			(typeof value.appearance === "string" && value.appearance === "light")) &&
+		(value.vars === undefined ||
+			!("vars" in value) ||
+			(typeof value.vars === "object" &&
+				value.vars !== null &&
+				!Array.isArray(value.vars) &&
+				Object.entries(value.vars).every(
+					([var_56, var_57], _) =>
+						!External[2].test(var_56) ||
+						typeof var_57 === "string" ||
+						(Number.isInteger(var_57) &&
+							(!(Number.isFinite(var_57) || typeof var_57 === "bigint") || (var_57 <= 255 && var_57 >= 0))),
+				))) &&
+		typeof value.colors === "object" &&
+		value.colors !== null &&
+		!Array.isArray(value.colors) &&
+		"accent" in value.colors &&
+		"border" in value.colors &&
+		"borderAccent" in value.colors &&
+		"borderMuted" in value.colors &&
+		"success" in value.colors &&
+		"error" in value.colors &&
+		"warning" in value.colors &&
+		"muted" in value.colors &&
+		"dim" in value.colors &&
+		"text" in value.colors &&
+		"thinkingText" in value.colors &&
+		"selectedBg" in value.colors &&
+		"userMessageBg" in value.colors &&
+		"userMessageText" in value.colors &&
+		"customMessageBg" in value.colors &&
+		"customMessageText" in value.colors &&
+		"customMessageLabel" in value.colors &&
+		"toolPendingBg" in value.colors &&
+		"toolSuccessBg" in value.colors &&
+		"toolErrorBg" in value.colors &&
+		"toolTitle" in value.colors &&
+		"toolOutput" in value.colors &&
+		"mdHeading" in value.colors &&
+		"mdLink" in value.colors &&
+		"mdLinkUrl" in value.colors &&
+		"mdCode" in value.colors &&
+		"mdCodeBlock" in value.colors &&
+		"mdCodeBlockBorder" in value.colors &&
+		"mdQuote" in value.colors &&
+		"mdQuoteBorder" in value.colors &&
+		"mdHr" in value.colors &&
+		"mdListBullet" in value.colors &&
+		"toolDiffAdded" in value.colors &&
+		"toolDiffRemoved" in value.colors &&
+		"toolDiffContext" in value.colors &&
+		"syntaxComment" in value.colors &&
+		"syntaxKeyword" in value.colors &&
+		"syntaxFunction" in value.colors &&
+		"syntaxVariable" in value.colors &&
+		"syntaxString" in value.colors &&
+		"syntaxNumber" in value.colors &&
+		"syntaxType" in value.colors &&
+		"syntaxOperator" in value.colors &&
+		"syntaxPunctuation" in value.colors &&
+		"thinkingOff" in value.colors &&
+		"thinkingMinimal" in value.colors &&
+		"thinkingLow" in value.colors &&
+		"thinkingMedium" in value.colors &&
+		"thinkingHigh" in value.colors &&
+		"thinkingXhigh" in value.colors &&
+		"bashMode" in value.colors &&
+		Object.getOwnPropertyNames(value.colors).every((var_58, var_59) => External[3].test(var_58) || false) &&
+		(typeof value.colors.accent === "string" ||
+			(Number.isInteger(value.colors.accent) &&
+				(!(Number.isFinite(value.colors.accent) || typeof value.colors.accent === "bigint") ||
+					(value.colors.accent <= 255 && value.colors.accent >= 0)))) &&
+		(typeof value.colors.border === "string" ||
+			(Number.isInteger(value.colors.border) &&
+				(!(Number.isFinite(value.colors.border) || typeof value.colors.border === "bigint") ||
+					(value.colors.border <= 255 && value.colors.border >= 0)))) &&
+		(typeof value.colors.borderAccent === "string" ||
+			(Number.isInteger(value.colors.borderAccent) &&
+				(!(Number.isFinite(value.colors.borderAccent) || typeof value.colors.borderAccent === "bigint") ||
+					(value.colors.borderAccent <= 255 && value.colors.borderAccent >= 0)))) &&
+		(typeof value.colors.borderMuted === "string" ||
+			(Number.isInteger(value.colors.borderMuted) &&
+				(!(Number.isFinite(value.colors.borderMuted) || typeof value.colors.borderMuted === "bigint") ||
+					(value.colors.borderMuted <= 255 && value.colors.borderMuted >= 0)))) &&
+		(typeof value.colors.success === "string" ||
+			(Number.isInteger(value.colors.success) &&
+				(!(Number.isFinite(value.colors.success) || typeof value.colors.success === "bigint") ||
+					(value.colors.success <= 255 && value.colors.success >= 0)))) &&
+		(typeof value.colors.error === "string" ||
+			(Number.isInteger(value.colors.error) &&
+				(!(Number.isFinite(value.colors.error) || typeof value.colors.error === "bigint") ||
+					(value.colors.error <= 255 && value.colors.error >= 0)))) &&
+		(typeof value.colors.warning === "string" ||
+			(Number.isInteger(value.colors.warning) &&
+				(!(Number.isFinite(value.colors.warning) || typeof value.colors.warning === "bigint") ||
+					(value.colors.warning <= 255 && value.colors.warning >= 0)))) &&
+		(typeof value.colors.muted === "string" ||
+			(Number.isInteger(value.colors.muted) &&
+				(!(Number.isFinite(value.colors.muted) || typeof value.colors.muted === "bigint") ||
+					(value.colors.muted <= 255 && value.colors.muted >= 0)))) &&
+		(typeof value.colors.dim === "string" ||
+			(Number.isInteger(value.colors.dim) &&
+				(!(Number.isFinite(value.colors.dim) || typeof value.colors.dim === "bigint") ||
+					(value.colors.dim <= 255 && value.colors.dim >= 0)))) &&
+		(typeof value.colors.text === "string" ||
+			(Number.isInteger(value.colors.text) &&
+				(!(Number.isFinite(value.colors.text) || typeof value.colors.text === "bigint") ||
+					(value.colors.text <= 255 && value.colors.text >= 0)))) &&
+		(typeof value.colors.thinkingText === "string" ||
+			(Number.isInteger(value.colors.thinkingText) &&
+				(!(Number.isFinite(value.colors.thinkingText) || typeof value.colors.thinkingText === "bigint") ||
+					(value.colors.thinkingText <= 255 && value.colors.thinkingText >= 0)))) &&
+		(value.colors.scrollbarTrack === undefined ||
+			!("scrollbarTrack" in value.colors) ||
+			typeof value.colors.scrollbarTrack === "string" ||
+			(Number.isInteger(value.colors.scrollbarTrack) &&
+				(!(Number.isFinite(value.colors.scrollbarTrack) || typeof value.colors.scrollbarTrack === "bigint") ||
+					(value.colors.scrollbarTrack <= 255 && value.colors.scrollbarTrack >= 0)))) &&
+		(value.colors.scrollbarThumb === undefined ||
+			!("scrollbarThumb" in value.colors) ||
+			typeof value.colors.scrollbarThumb === "string" ||
+			(Number.isInteger(value.colors.scrollbarThumb) &&
+				(!(Number.isFinite(value.colors.scrollbarThumb) || typeof value.colors.scrollbarThumb === "bigint") ||
+					(value.colors.scrollbarThumb <= 255 && value.colors.scrollbarThumb >= 0)))) &&
+		(typeof value.colors.selectedBg === "string" ||
+			(Number.isInteger(value.colors.selectedBg) &&
+				(!(Number.isFinite(value.colors.selectedBg) || typeof value.colors.selectedBg === "bigint") ||
+					(value.colors.selectedBg <= 255 && value.colors.selectedBg >= 0)))) &&
+		(value.colors.searchMatchBg === undefined ||
+			!("searchMatchBg" in value.colors) ||
+			typeof value.colors.searchMatchBg === "string" ||
+			(Number.isInteger(value.colors.searchMatchBg) &&
+				(!(Number.isFinite(value.colors.searchMatchBg) || typeof value.colors.searchMatchBg === "bigint") ||
+					(value.colors.searchMatchBg <= 255 && value.colors.searchMatchBg >= 0)))) &&
+		(value.colors.searchMatchText === undefined ||
+			!("searchMatchText" in value.colors) ||
+			typeof value.colors.searchMatchText === "string" ||
+			(Number.isInteger(value.colors.searchMatchText) &&
+				(!(Number.isFinite(value.colors.searchMatchText) || typeof value.colors.searchMatchText === "bigint") ||
+					(value.colors.searchMatchText <= 255 && value.colors.searchMatchText >= 0)))) &&
+		(typeof value.colors.userMessageBg === "string" ||
+			(Number.isInteger(value.colors.userMessageBg) &&
+				(!(Number.isFinite(value.colors.userMessageBg) || typeof value.colors.userMessageBg === "bigint") ||
+					(value.colors.userMessageBg <= 255 && value.colors.userMessageBg >= 0)))) &&
+		(typeof value.colors.userMessageText === "string" ||
+			(Number.isInteger(value.colors.userMessageText) &&
+				(!(Number.isFinite(value.colors.userMessageText) || typeof value.colors.userMessageText === "bigint") ||
+					(value.colors.userMessageText <= 255 && value.colors.userMessageText >= 0)))) &&
+		(typeof value.colors.customMessageBg === "string" ||
+			(Number.isInteger(value.colors.customMessageBg) &&
+				(!(Number.isFinite(value.colors.customMessageBg) || typeof value.colors.customMessageBg === "bigint") ||
+					(value.colors.customMessageBg <= 255 && value.colors.customMessageBg >= 0)))) &&
+		(typeof value.colors.customMessageText === "string" ||
+			(Number.isInteger(value.colors.customMessageText) &&
+				(!(Number.isFinite(value.colors.customMessageText) || typeof value.colors.customMessageText === "bigint") ||
+					(value.colors.customMessageText <= 255 && value.colors.customMessageText >= 0)))) &&
+		(typeof value.colors.customMessageLabel === "string" ||
+			(Number.isInteger(value.colors.customMessageLabel) &&
+				(!(
+					Number.isFinite(value.colors.customMessageLabel) || typeof value.colors.customMessageLabel === "bigint"
+				) ||
+					(value.colors.customMessageLabel <= 255 && value.colors.customMessageLabel >= 0)))) &&
+		(typeof value.colors.toolPendingBg === "string" ||
+			(Number.isInteger(value.colors.toolPendingBg) &&
+				(!(Number.isFinite(value.colors.toolPendingBg) || typeof value.colors.toolPendingBg === "bigint") ||
+					(value.colors.toolPendingBg <= 255 && value.colors.toolPendingBg >= 0)))) &&
+		(typeof value.colors.toolSuccessBg === "string" ||
+			(Number.isInteger(value.colors.toolSuccessBg) &&
+				(!(Number.isFinite(value.colors.toolSuccessBg) || typeof value.colors.toolSuccessBg === "bigint") ||
+					(value.colors.toolSuccessBg <= 255 && value.colors.toolSuccessBg >= 0)))) &&
+		(typeof value.colors.toolErrorBg === "string" ||
+			(Number.isInteger(value.colors.toolErrorBg) &&
+				(!(Number.isFinite(value.colors.toolErrorBg) || typeof value.colors.toolErrorBg === "bigint") ||
+					(value.colors.toolErrorBg <= 255 && value.colors.toolErrorBg >= 0)))) &&
+		(typeof value.colors.toolTitle === "string" ||
+			(Number.isInteger(value.colors.toolTitle) &&
+				(!(Number.isFinite(value.colors.toolTitle) || typeof value.colors.toolTitle === "bigint") ||
+					(value.colors.toolTitle <= 255 && value.colors.toolTitle >= 0)))) &&
+		(typeof value.colors.toolOutput === "string" ||
+			(Number.isInteger(value.colors.toolOutput) &&
+				(!(Number.isFinite(value.colors.toolOutput) || typeof value.colors.toolOutput === "bigint") ||
+					(value.colors.toolOutput <= 255 && value.colors.toolOutput >= 0)))) &&
+		(typeof value.colors.mdHeading === "string" ||
+			(Number.isInteger(value.colors.mdHeading) &&
+				(!(Number.isFinite(value.colors.mdHeading) || typeof value.colors.mdHeading === "bigint") ||
+					(value.colors.mdHeading <= 255 && value.colors.mdHeading >= 0)))) &&
+		(typeof value.colors.mdLink === "string" ||
+			(Number.isInteger(value.colors.mdLink) &&
+				(!(Number.isFinite(value.colors.mdLink) || typeof value.colors.mdLink === "bigint") ||
+					(value.colors.mdLink <= 255 && value.colors.mdLink >= 0)))) &&
+		(typeof value.colors.mdLinkUrl === "string" ||
+			(Number.isInteger(value.colors.mdLinkUrl) &&
+				(!(Number.isFinite(value.colors.mdLinkUrl) || typeof value.colors.mdLinkUrl === "bigint") ||
+					(value.colors.mdLinkUrl <= 255 && value.colors.mdLinkUrl >= 0)))) &&
+		(typeof value.colors.mdCode === "string" ||
+			(Number.isInteger(value.colors.mdCode) &&
+				(!(Number.isFinite(value.colors.mdCode) || typeof value.colors.mdCode === "bigint") ||
+					(value.colors.mdCode <= 255 && value.colors.mdCode >= 0)))) &&
+		(typeof value.colors.mdCodeBlock === "string" ||
+			(Number.isInteger(value.colors.mdCodeBlock) &&
+				(!(Number.isFinite(value.colors.mdCodeBlock) || typeof value.colors.mdCodeBlock === "bigint") ||
+					(value.colors.mdCodeBlock <= 255 && value.colors.mdCodeBlock >= 0)))) &&
+		(typeof value.colors.mdCodeBlockBorder === "string" ||
+			(Number.isInteger(value.colors.mdCodeBlockBorder) &&
+				(!(Number.isFinite(value.colors.mdCodeBlockBorder) || typeof value.colors.mdCodeBlockBorder === "bigint") ||
+					(value.colors.mdCodeBlockBorder <= 255 && value.colors.mdCodeBlockBorder >= 0)))) &&
+		(value.colors.mdCodeBlockBg === undefined ||
+			!("mdCodeBlockBg" in value.colors) ||
+			typeof value.colors.mdCodeBlockBg === "string" ||
+			(Number.isInteger(value.colors.mdCodeBlockBg) &&
+				(!(Number.isFinite(value.colors.mdCodeBlockBg) || typeof value.colors.mdCodeBlockBg === "bigint") ||
+					(value.colors.mdCodeBlockBg <= 255 && value.colors.mdCodeBlockBg >= 0)))) &&
+		(typeof value.colors.mdQuote === "string" ||
+			(Number.isInteger(value.colors.mdQuote) &&
+				(!(Number.isFinite(value.colors.mdQuote) || typeof value.colors.mdQuote === "bigint") ||
+					(value.colors.mdQuote <= 255 && value.colors.mdQuote >= 0)))) &&
+		(typeof value.colors.mdQuoteBorder === "string" ||
+			(Number.isInteger(value.colors.mdQuoteBorder) &&
+				(!(Number.isFinite(value.colors.mdQuoteBorder) || typeof value.colors.mdQuoteBorder === "bigint") ||
+					(value.colors.mdQuoteBorder <= 255 && value.colors.mdQuoteBorder >= 0)))) &&
+		(typeof value.colors.mdHr === "string" ||
+			(Number.isInteger(value.colors.mdHr) &&
+				(!(Number.isFinite(value.colors.mdHr) || typeof value.colors.mdHr === "bigint") ||
+					(value.colors.mdHr <= 255 && value.colors.mdHr >= 0)))) &&
+		(typeof value.colors.mdListBullet === "string" ||
+			(Number.isInteger(value.colors.mdListBullet) &&
+				(!(Number.isFinite(value.colors.mdListBullet) || typeof value.colors.mdListBullet === "bigint") ||
+					(value.colors.mdListBullet <= 255 && value.colors.mdListBullet >= 0)))) &&
+		(typeof value.colors.toolDiffAdded === "string" ||
+			(Number.isInteger(value.colors.toolDiffAdded) &&
+				(!(Number.isFinite(value.colors.toolDiffAdded) || typeof value.colors.toolDiffAdded === "bigint") ||
+					(value.colors.toolDiffAdded <= 255 && value.colors.toolDiffAdded >= 0)))) &&
+		(typeof value.colors.toolDiffRemoved === "string" ||
+			(Number.isInteger(value.colors.toolDiffRemoved) &&
+				(!(Number.isFinite(value.colors.toolDiffRemoved) || typeof value.colors.toolDiffRemoved === "bigint") ||
+					(value.colors.toolDiffRemoved <= 255 && value.colors.toolDiffRemoved >= 0)))) &&
+		(typeof value.colors.toolDiffContext === "string" ||
+			(Number.isInteger(value.colors.toolDiffContext) &&
+				(!(Number.isFinite(value.colors.toolDiffContext) || typeof value.colors.toolDiffContext === "bigint") ||
+					(value.colors.toolDiffContext <= 255 && value.colors.toolDiffContext >= 0)))) &&
+		(typeof value.colors.syntaxComment === "string" ||
+			(Number.isInteger(value.colors.syntaxComment) &&
+				(!(Number.isFinite(value.colors.syntaxComment) || typeof value.colors.syntaxComment === "bigint") ||
+					(value.colors.syntaxComment <= 255 && value.colors.syntaxComment >= 0)))) &&
+		(typeof value.colors.syntaxKeyword === "string" ||
+			(Number.isInteger(value.colors.syntaxKeyword) &&
+				(!(Number.isFinite(value.colors.syntaxKeyword) || typeof value.colors.syntaxKeyword === "bigint") ||
+					(value.colors.syntaxKeyword <= 255 && value.colors.syntaxKeyword >= 0)))) &&
+		(typeof value.colors.syntaxFunction === "string" ||
+			(Number.isInteger(value.colors.syntaxFunction) &&
+				(!(Number.isFinite(value.colors.syntaxFunction) || typeof value.colors.syntaxFunction === "bigint") ||
+					(value.colors.syntaxFunction <= 255 && value.colors.syntaxFunction >= 0)))) &&
+		(typeof value.colors.syntaxVariable === "string" ||
+			(Number.isInteger(value.colors.syntaxVariable) &&
+				(!(Number.isFinite(value.colors.syntaxVariable) || typeof value.colors.syntaxVariable === "bigint") ||
+					(value.colors.syntaxVariable <= 255 && value.colors.syntaxVariable >= 0)))) &&
+		(typeof value.colors.syntaxString === "string" ||
+			(Number.isInteger(value.colors.syntaxString) &&
+				(!(Number.isFinite(value.colors.syntaxString) || typeof value.colors.syntaxString === "bigint") ||
+					(value.colors.syntaxString <= 255 && value.colors.syntaxString >= 0)))) &&
+		(typeof value.colors.syntaxNumber === "string" ||
+			(Number.isInteger(value.colors.syntaxNumber) &&
+				(!(Number.isFinite(value.colors.syntaxNumber) || typeof value.colors.syntaxNumber === "bigint") ||
+					(value.colors.syntaxNumber <= 255 && value.colors.syntaxNumber >= 0)))) &&
+		(typeof value.colors.syntaxType === "string" ||
+			(Number.isInteger(value.colors.syntaxType) &&
+				(!(Number.isFinite(value.colors.syntaxType) || typeof value.colors.syntaxType === "bigint") ||
+					(value.colors.syntaxType <= 255 && value.colors.syntaxType >= 0)))) &&
+		(typeof value.colors.syntaxOperator === "string" ||
+			(Number.isInteger(value.colors.syntaxOperator) &&
+				(!(Number.isFinite(value.colors.syntaxOperator) || typeof value.colors.syntaxOperator === "bigint") ||
+					(value.colors.syntaxOperator <= 255 && value.colors.syntaxOperator >= 0)))) &&
+		(typeof value.colors.syntaxPunctuation === "string" ||
+			(Number.isInteger(value.colors.syntaxPunctuation) &&
+				(!(Number.isFinite(value.colors.syntaxPunctuation) || typeof value.colors.syntaxPunctuation === "bigint") ||
+					(value.colors.syntaxPunctuation <= 255 && value.colors.syntaxPunctuation >= 0)))) &&
+		(typeof value.colors.thinkingOff === "string" ||
+			(Number.isInteger(value.colors.thinkingOff) &&
+				(!(Number.isFinite(value.colors.thinkingOff) || typeof value.colors.thinkingOff === "bigint") ||
+					(value.colors.thinkingOff <= 255 && value.colors.thinkingOff >= 0)))) &&
+		(typeof value.colors.thinkingMinimal === "string" ||
+			(Number.isInteger(value.colors.thinkingMinimal) &&
+				(!(Number.isFinite(value.colors.thinkingMinimal) || typeof value.colors.thinkingMinimal === "bigint") ||
+					(value.colors.thinkingMinimal <= 255 && value.colors.thinkingMinimal >= 0)))) &&
+		(typeof value.colors.thinkingLow === "string" ||
+			(Number.isInteger(value.colors.thinkingLow) &&
+				(!(Number.isFinite(value.colors.thinkingLow) || typeof value.colors.thinkingLow === "bigint") ||
+					(value.colors.thinkingLow <= 255 && value.colors.thinkingLow >= 0)))) &&
+		(typeof value.colors.thinkingMedium === "string" ||
+			(Number.isInteger(value.colors.thinkingMedium) &&
+				(!(Number.isFinite(value.colors.thinkingMedium) || typeof value.colors.thinkingMedium === "bigint") ||
+					(value.colors.thinkingMedium <= 255 && value.colors.thinkingMedium >= 0)))) &&
+		(typeof value.colors.thinkingHigh === "string" ||
+			(Number.isInteger(value.colors.thinkingHigh) &&
+				(!(Number.isFinite(value.colors.thinkingHigh) || typeof value.colors.thinkingHigh === "bigint") ||
+					(value.colors.thinkingHigh <= 255 && value.colors.thinkingHigh >= 0)))) &&
+		(typeof value.colors.thinkingXhigh === "string" ||
+			(Number.isInteger(value.colors.thinkingXhigh) &&
+				(!(Number.isFinite(value.colors.thinkingXhigh) || typeof value.colors.thinkingXhigh === "bigint") ||
+					(value.colors.thinkingXhigh <= 255 && value.colors.thinkingXhigh >= 0)))) &&
+		(value.colors.thinkingMax === undefined ||
+			!("thinkingMax" in value.colors) ||
+			typeof value.colors.thinkingMax === "string" ||
+			(Number.isInteger(value.colors.thinkingMax) &&
+				(!(Number.isFinite(value.colors.thinkingMax) || typeof value.colors.thinkingMax === "bigint") ||
+					(value.colors.thinkingMax <= 255 && value.colors.thinkingMax >= 0)))) &&
+		(typeof value.colors.bashMode === "string" ||
+			(Number.isInteger(value.colors.bashMode) &&
+				(!(Number.isFinite(value.colors.bashMode) || typeof value.colors.bashMode === "bigint") ||
+					(value.colors.bashMode <= 255 && value.colors.bashMode >= 0)))) &&
+		(value.export === undefined ||
+			!("export" in value) ||
+			(typeof value.export === "object" &&
+				value.export !== null &&
+				!Array.isArray(value.export) &&
+				Object.getOwnPropertyNames(value.export).every((var_60, var_61) => External[4].test(var_60) || false) &&
+				(value.export.pageBg === undefined ||
+					!("pageBg" in value.export) ||
+					typeof value.export.pageBg === "string" ||
+					(Number.isInteger(value.export.pageBg) &&
+						(!(Number.isFinite(value.export.pageBg) || typeof value.export.pageBg === "bigint") ||
+							(value.export.pageBg <= 255 && value.export.pageBg >= 0)))) &&
+				(value.export.cardBg === undefined ||
+					!("cardBg" in value.export) ||
+					typeof value.export.cardBg === "string" ||
+					(Number.isInteger(value.export.cardBg) &&
+						(!(Number.isFinite(value.export.cardBg) || typeof value.export.cardBg === "bigint") ||
+							(value.export.cardBg <= 255 && value.export.cardBg >= 0)))) &&
+				(value.export.infoBg === undefined ||
+					!("infoBg" in value.export) ||
+					typeof value.export.infoBg === "string" ||
+					(Number.isInteger(value.export.infoBg) &&
+						(!(Number.isFinite(value.export.infoBg) || typeof value.export.infoBg === "bigint") ||
+							(value.export.infoBg <= 255 && value.export.infoBg >= 0))))));
+	return (value) => check_0(value);
+})();

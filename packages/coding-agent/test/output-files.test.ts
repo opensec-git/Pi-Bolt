@@ -38,6 +38,18 @@ describe("OutputFile", () => {
 		expect(readFileSync(path, "utf-8")).toBe("12345678ab\n[Output beyond 10 bytes was not saved]\n");
 	});
 
+	it("counts UTF-8 bytes across string and buffer writes, including a cap inside a character", () => {
+		const path = join(scratch(), "out.log");
+		const file = new OutputFile(path, 8);
+		file.write("😀");
+		file.write(Buffer.from("!"));
+		file.write("😀");
+		file.close();
+		expect(readFileSync(path)).toEqual(
+			Buffer.concat([Buffer.from("😀!😀").subarray(0, 8), Buffer.from("\n[Output beyond 8 bytes was not saved]\n")]),
+		);
+	});
+
 	it("does not open a path that exists, and reports that on close instead of on write", () => {
 		const path = join(scratch(), "out.log");
 		new OutputFile(path).close();

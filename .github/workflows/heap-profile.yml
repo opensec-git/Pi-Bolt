@@ -6,7 +6,9 @@ name: heap-profile
 # opened by hand (one opened with this workflow's token would not run ci).
 #
 # The runtime is the latest release's, and only when it is the engine this commit builds (scripts/runtime-stamp.sh): the order
-# names where the build puts each function, which the engine decides.
+# names where the build puts each function, which the engine decides. When the engine changed, it is the Windows runtime the
+# runtime workflow attached to the draft of this version (VERSION), attested by runtime.yml run from pi-bolt, as the release
+# workflow takes it.
 #
 # Run it from the branch with the new profile:
 #   gh workflow run heap-profile.yml -R opensec-git/Pi-Bolt --ref <branch>
@@ -25,9 +27,13 @@ jobs:
     name: Pi version and runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # (Write, only to see a draft release: a read token does not list drafts. This job runs no dependency code.)
+    permissions:
+      contents: write
     outputs:
       pi: ${{ steps.check.outputs.pi }}
       runtime_from: ${{ steps.check.outputs.runtime_from }}
+      runtime_draft: ${{ steps.check.outputs.runtime_draft }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,14 +52,34 @@ jobs:
           [ "$(head -n 1 .work/latest/SHA256SUMS)" = "# pi-bolt ${latest#bolt-v}" ] || { echo "the checksums are not $latest's"; exit 1; }
           (cd .work/latest && grep ' RUNTIME_STAMP$' SHA256SUMS | sha256sum -c --strict --quiet -)
           released=$(cat .work/latest/RUNTIME_STAMP)
-          if [ "$released" != "$stamp" ]; then
-            echo "::error title=Runtime needed::The engine changed since $latest (runtime stamp $released, now $stamp): release this engine first."
+          if [ "$released" = "$stamp" ]; then
+            echo "Pi $pi, with $latest's runtime ($stamp)" | tee -a "$GITHUB_STEP_SUMMARY"
+            { echo "pi=$pi"; echo "runtime_from=$latest"; } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The engine changed: the Windows runtime the runtime workflow attached to this version's draft, accepted as the
+          # release workflow accepts it (attested by runtime.yml run from pi-bolt).
+          tag="bolt-v$(cat VERSION)"
+          mkdir -p .work/draft
+          if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" != true ] ||
+             ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir .work/draft --pattern pi-bolt-runtime-win32-x64.zip; then
+            echo "::error title=Runtime needed::The engine changed since $latest (runtime stamp $released, now $stamp), and the draft of $tag has no Windows runtime: build it with the runtime workflow from pi-bolt (gh workflow run runtime.yml -R $GITHUB_REPOSITORY -f tag=$tag)."
             exit 1
           fi
-          echo "Pi $pi, with $latest's runtime ($stamp)" | tee -a "$GITHUB_STEP_SUMMARY"
-          { echo "pi=$pi"; echo "runtime_from=$latest"; } >> "$GITHUB_OUTPUT"
+          gh attestation verify .work/draft/pi-bolt-runtime-win32-x64.zip --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/runtime.yml" --source-ref refs/heads/pi-bolt
+          sum=$(sha256sum .work/draft/pi-bolt-runtime-win32-x64.zip | cut -c1-64)
+          echo "Pi $pi, with the Windows runtime of the draft of $tag (\`$sum\`, attested by runtime.yml from pi-bolt)" | tee -a "$GITHUB_STEP_SUMMARY"
+          { echo "pi=$pi"; echo "runtime_from=$tag"; echo "runtime_draft=$sum"; } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
+      - if: steps.check.outputs.runtime_draft != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-win32-x64
+          path: .work/draft/pi-bolt-runtime-win32-x64.zip
+          if-no-files-found: error
+          retention-days: 1
 
   train:
     name: Heap order on Windows x64
@@ -67,6 +93,7 @@ jobs:
     env:
       PI: ${{ needs.runtime.outputs.pi }}
       RUNTIME_FROM: ${{ needs.runtime.outputs.runtime_from }}
+      RUNTIME_DRAFT: ${{ needs.runtime.outputs.runtime_draft }}
     steps:
       # (No token kept in .git: the build runs code from dependencies.)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,18 +116,29 @@ jobs:
             Add-Content -Encoding utf8 $env:GITHUB_PATH $shim
           }
           python --version
+      - if: env.RUNTIME_DRAFT != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-win32-x64
+          path: .work/rt
       - name: Runtime
         run: |
           New-Item -ItemType Directory -Force .work\rt, .work\runtime | Out-Null
-          # The release's checksums, signed by the release key and saying they are that release's, say what it is.
-          gh release download $env:RUNTIME_FROM --repo $env:GITHUB_REPOSITORY --pattern pi-bolt-runtime-win32-x64.zip --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir .work\rt
-          $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe'
-          & $openssl pkeyutl -verify -pubin -inkey keys\release.pub -rawin -in .work\rt\SHA256SUMS -sigfile .work\rt\SHA256SUMS.sig
-          if ($LASTEXITCODE -ne 0) { Write-Host 'the runtime release''s signature does not verify'; exit 1 }
-          $lines = Get-Content -LiteralPath .work\rt\SHA256SUMS
-          if ($lines[0] -ne "# pi-bolt $($env:RUNTIME_FROM -replace '^bolt-v', '')") { Write-Host "the checksums are not $env:RUNTIME_FROM's"; exit 1 }
-          $sum = (Get-FileHash .work\rt\pi-bolt-runtime-win32-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($lines -notcontains "$sum  pi-bolt-runtime-win32-x64.zip") { Write-Host 'the runtime is not the one its release lists'; exit 1 }
+          if ($env:RUNTIME_DRAFT) {
+            # The draft's runtime, attested in the job before: the same file, by its SHA-256.
+            $sum = (Get-FileHash .work\rt\pi-bolt-runtime-win32-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($sum -ne $env:RUNTIME_DRAFT) { Write-Host 'the runtime is not the one the draft holds'; exit 1 }
+          } else {
+            # The release's checksums, signed by the release key and saying they are that release's, say what it is.
+            gh release download $env:RUNTIME_FROM --repo $env:GITHUB_REPOSITORY --pattern pi-bolt-runtime-win32-x64.zip --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir .work\rt
+            $openssl = 'C:\Program Files\Git\usr\bin\openssl.exe'
+            & $openssl pkeyutl -verify -pubin -inkey keys\release.pub -rawin -in .work\rt\SHA256SUMS -sigfile .work\rt\SHA256SUMS.sig
+            if ($LASTEXITCODE -ne 0) { Write-Host 'the runtime release''s signature does not verify'; exit 1 }
+            $lines = Get-Content -LiteralPath .work\rt\SHA256SUMS
+            if ($lines[0] -ne "# pi-bolt $($env:RUNTIME_FROM -replace '^bolt-v', '')") { Write-Host "the checksums are not $env:RUNTIME_FROM's"; exit 1 }
+            $sum = (Get-FileHash .work\rt\pi-bolt-runtime-win32-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($lines -notcontains "$sum  pi-bolt-runtime-win32-x64.zip") { Write-Host 'the runtime is not the one its release lists'; exit 1 }
+          }
           Expand-Archive .work\rt\pi-bolt-runtime-win32-x64.zip -DestinationPath .work\rt -Force
           Copy-Item .work\rt\pi-bolt-runtime-win32-x64\bun.exe .work\runtime\bun.exe
           & .work\runtime\bun.exe --version

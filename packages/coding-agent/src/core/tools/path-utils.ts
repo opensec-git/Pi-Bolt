@@ -49,70 +49,27 @@ export function resolveToCwd(filePath: string, cwd: string): string {
 	return resolvePath(filePath, cwd, { normalizeUnicodeSpaces: true, stripAtPrefix: true });
 }
 
+/** Alternate spellings are relevant only if normalization changes the pathname. */
+function readPathVariants(resolved: string): string[] {
+	const nfd = tryNFDVariant(resolved);
+	return [tryMacOSScreenshotPath(resolved), nfd, tryCurlyQuoteVariant(resolved), tryCurlyQuoteVariant(nfd)].filter(
+		(path, index, variants) => path !== resolved && variants.indexOf(path) === index,
+	);
+}
+
 export function resolveReadPath(filePath: string, cwd: string): string {
 	const resolved = resolveToCwd(filePath, cwd);
-
-	if (fileExists(resolved)) {
-		return resolved;
-	}
-
-	// Try macOS AM/PM variant (narrow no-break space before AM/PM)
-	const amPmVariant = tryMacOSScreenshotPath(resolved);
-	if (amPmVariant !== resolved && fileExists(amPmVariant)) {
-		return amPmVariant;
-	}
-
-	// Try NFD variant (macOS stores filenames in NFD form)
-	const nfdVariant = tryNFDVariant(resolved);
-	if (nfdVariant !== resolved && fileExists(nfdVariant)) {
-		return nfdVariant;
-	}
-
-	// Try curly quote variant (macOS uses U+2019 in screenshot names)
-	const curlyVariant = tryCurlyQuoteVariant(resolved);
-	if (curlyVariant !== resolved && fileExists(curlyVariant)) {
-		return curlyVariant;
-	}
-
-	// Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
-	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-	if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
-		return nfdCurlyVariant;
-	}
-
-	return resolved;
+	const variants = readPathVariants(resolved);
+	if (variants.length === 0 || fileExists(resolved)) return resolved;
+	return variants.find(fileExists) ?? resolved;
 }
 
 export async function resolveReadPathAsync(filePath: string, cwd: string): Promise<string> {
 	const resolved = resolveToCwd(filePath, cwd);
-
-	if (await pathExists(resolved)) {
-		return resolved;
+	const variants = readPathVariants(resolved);
+	if (variants.length === 0 || (await pathExists(resolved))) return resolved;
+	for (const variant of variants) {
+		if (await pathExists(variant)) return variant;
 	}
-
-	// Try macOS AM/PM variant (narrow no-break space before AM/PM)
-	const amPmVariant = tryMacOSScreenshotPath(resolved);
-	if (amPmVariant !== resolved && (await pathExists(amPmVariant))) {
-		return amPmVariant;
-	}
-
-	// Try NFD variant (macOS stores filenames in NFD form)
-	const nfdVariant = tryNFDVariant(resolved);
-	if (nfdVariant !== resolved && (await pathExists(nfdVariant))) {
-		return nfdVariant;
-	}
-
-	// Try curly quote variant (macOS uses U+2019 in screenshot names)
-	const curlyVariant = tryCurlyQuoteVariant(resolved);
-	if (curlyVariant !== resolved && (await pathExists(curlyVariant))) {
-		return curlyVariant;
-	}
-
-	// Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
-	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-	if (nfdCurlyVariant !== resolved && (await pathExists(nfdCurlyVariant))) {
-		return nfdCurlyVariant;
-	}
-
 	return resolved;
 }

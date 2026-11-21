@@ -1,0 +1,35 @@
+import 'dart:async';
+
+class Reading<T> {
+  final String tag;
+  final T? value;
+  const Reading(this.tag, this.value);
+}
+
+/* Format the current reading.
+   Preserve unknown values. */
+Future<String> label(Reading<int> item) async {
+  final value = item.value ?? 0;
+  final note = r'raw $value';
+  return """
+${item.tag}: $value
+$note
+""";
+}
+
+Future<void> main() async {
+  final values = [Reading<int>('café', 42), Reading<int>('quiet', null)];
+  for (final value in values) {
+    print(await label(value));
+  }
+}
+
+/// Read a [Reading] from the input.
+/// Keep `null` when the input is empty.
+int? firstValue(List<int?> readings) => readings.firstOrNull;
+
+/** Example
+ *
+ *     final label = "café";
+ */
+String describe(int number) => 'value: $number';

@@ -70,7 +70,19 @@ type ManualTimer = { readonly ms: number; readonly fire: () => void };
 async function setup(
 	initial: readonly RegisteredScript[],
 	available: readonly RegisteredScript[] = [],
-	more: { readonly failing?: number; readonly manual?: ManualTimer[]; readonly styles?: ClientStyles } = {},
+	more: {
+		readonly failing?: number;
+		readonly manual?: ManualTimer[];
+		readonly styles?: ClientStyles;
+		readonly follow?: false;
+		/** The server never answers: the client's sockets never open. */
+		readonly offline?: true;
+		/** The set the server shows from the start (default: `initial`'s). */
+		readonly shown?: readonly RegisteredScript[];
+		/** Holds the server's base answers until it settles (a slow network). */
+		readonly baseAnswers?: Promise<void>;
+		readonly limits?: chordNext.PartLimits;
+	} = {},
 ) {
 	let failing = more.failing ?? 0;
 	const server = createHost<TestPrincipal>({
@@ -79,7 +91,7 @@ async function setup(
 		onError: () => {},
 	});
 	await server.load(
-		[{ name: "chord.web", facet: scriptsFacet<TestPrincipal>("web", { set: setOf("B1", initial) }) }],
+		[{ name: "chord.web", facet: scriptsFacet<TestPrincipal>("web", { set: setOf("B1", more.shown ?? initial) }) }],
 		context,
 	);
 	const fetched: string[] = [];
@@ -87,6 +99,8 @@ async function setup(
 	const outdated: string[] = [];
 	const sockets: { events: SocketEvents; link: chordNext.Link }[] = [];
 	let serverBase = "B1";
+	const asked: string[] = [];
+	const states: chordNext.ConnectionState[] = [];
 	const client = await startClient<TestPrincipal>({
 		scripts: WebScripts,
 		base: "B1",
@@ -97,8 +111,9 @@ async function setup(
 		],
 		open: (events) => {
 			const [mine, theirs] = memoryLinkPair();
-			server.accept(theirs, { principal: { kind: "user", id: "u" } }, context);
 			sockets.push({ events, link: mine });
+			if (more.offline === true) return mine;
+			server.accept(theirs, { principal: { kind: "user", id: "u" } }, context);
 			queueMicrotask(() => events.opened());
 			return mine;
 		},
@@ -112,9 +127,17 @@ async function setup(
 			if (found === undefined) throw new Error(`no ${entry.url}`);
 			return found;
 		},
-		serverBase: async () => serverBase,
-		outdated: () => outdated.push("outdated"),
+		serverBase: async () => {
+			asked.push(serverBase);
+			await more.baseAnswers;
+			return serverBase;
+		},
+		// With the connection state then: the loop has stopped (`waiting`) before the app starts over.
+		outdated: () => outdated.push(`outdated (${states.at(-1)})`),
+		onConnection: (state) => states.push(state),
 		...(more.styles === undefined ? {} : { styles: more.styles }),
+		...(more.follow === undefined ? {} : { follow: more.follow }),
+		...(more.limits === undefined ? {} : { limits: more.limits }),
 		environment: {
 			now: () => Date.now(),
 			after: (ms, callback) => {
@@ -141,6 +164,7 @@ async function setup(
 		errors,
 		outdated,
 		sockets,
+		asked,
 		setServerBase: (base: string) => {
 			serverBase = base;
 		},
@@ -166,7 +190,30 @@ describe("loading", () => {
 	});
 });
 
+describe("starting offline", () => {
+	it("starts with its initial scripts while the server does not answer", async () => {
+		const { client, server, sockets } = await setup([script("notes", "d1", "one")], [], { offline: true });
+		expect(sockets.length).toBeGreaterThan(0);
+		const greeting = await client.host.get(Greeting, {}, context);
+		expect(greeting.text.value).toBe("one");
+		greeting.release();
+		await client.stop(context);
+		await server.close(context);
+	});
+});
+
 describe("applying a new set in place", () => {
+	it("applies the set the server shows when it starts following, though no frame brought it", async () => {
+		const a1 = script("@test/a", "d1", "hello");
+		const a2 = script("@test/a", "d2", "hello again");
+		const { client, fetched, server } = await setup([a1], [a2], { shown: [a2] });
+		const greeting = await client.host.get(Greeting, {}, context);
+		await until(() => greeting.text.value === "hello again");
+		expect(fetched).toEqual(["/@test/a.d2.js"]);
+		await client.stop(context);
+		await server.close(context);
+	});
+
 	it("fetches only changed scripts, reloads the host, keeps an unchanged plugin's facet", async () => {
 		const a1 = script("@test/a", "d1", "hello");
 		const a2 = script("@test/a", "d2", "hello again");
@@ -322,13 +369,74 @@ describe("outdated clients", () => {
 		await server.close(context);
 	});
 
-	it("asks the server's base before reconnecting: another one calls outdated and stops", async () => {
+	it("asks the server's base at a reconnect: another one stops the loop, then calls outdated", async () => {
 		const { client, server, outdated, sockets, setServerBase } = await setup([]);
 		setServerBase("B2");
 		sockets[0]!.link.close();
 		await until(() => outdated.length === 1);
 		await new Promise((resolve) => setTimeout(resolve, 400));
-		expect(sockets).toHaveLength(1);
+		expect([sockets.length <= 2, outdated]).toEqual([true, ["outdated (waiting)"]]);
+		await client.stop(context);
+		await server.close(context);
+	});
+
+	it("a slow base answer after the next link opened: that link ends before outdated is called", async () => {
+		const gate = Promise.withResolvers<void>();
+		const { client, server, outdated, sockets, setServerBase } = await setup([], [], { baseAnswers: gate.promise });
+		setServerBase("B2");
+		sockets[0]!.link.close();
+		await until(() => sockets.length === 2);
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		gate.resolve();
+		await until(() => outdated.length === 1);
+		expect(outdated).toEqual(["outdated (waiting)"]);
+		await client.stop(context);
+		await server.close(context);
+	});
+});
+
+describe("part limits", () => {
+	it("takes parts from the server within the limits it was given, and none past them", async () => {
+		const a1 = script("@test/a", "d1", "hello");
+		const a2 = script("@test/a", "d2", "hello again");
+		const within = await setup([a1], [a2], { shown: [a2], limits: { part: 1024 * 1024 } });
+		const greeting = await within.client.host.get(Greeting, {}, context);
+		await until(() => greeting.text.value === "hello again");
+		await within.client.stop(context);
+		await within.server.close(context);
+		// The scripts object's set is past 32 bytes: the client never gets it, so it keeps the code it started with.
+		const past = await setup([a1], [a2], { shown: [a2], limits: { part: 32 } });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(past.fetched).toEqual([]);
+		expect((await past.client.host.get(Greeting, {}, context)).text.value).toBe("hello");
+		await past.client.stop(context);
+		await past.server.close(context);
+	});
+});
+
+describe("a static client (follow: false)", () => {
+	it("applies no new set and is never outdated by one", async () => {
+		const one = script("notes", "d1", "one");
+		const { client, server, fetched, outdated } = await setup([one], [script("notes", "d2", "two")], {
+			follow: false,
+		});
+		await publishTo(server, "web", setOf("B1", [script("notes", "d2", "two")]), context);
+		await publishTo(server, "web", setOf("B2", []), context);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect([fetched, outdated]).toEqual([[], []]);
+		const greeting = await client.host.get(Greeting, {}, context);
+		expect(greeting.text.value).toBe("one");
+		greeting.release();
+		await client.stop(context);
+		await server.close(context);
+	});
+
+	it("reconnects without asking the server's base", async () => {
+		const { client, server, outdated, sockets, asked, setServerBase } = await setup([], [], { follow: false });
+		setServerBase("B2");
+		sockets[0]!.link.close();
+		await until(() => sockets.length === 2);
+		expect([asked, outdated]).toEqual([[], []]);
 		await client.stop(context);
 		await server.close(context);
 	});

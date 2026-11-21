@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelsStore, ModelsStoreEntry, ModelsStoreOperationOptions } from "@earendil-works/pi-ai";
 import { getAgentDir } from "../config.ts";
@@ -18,6 +19,7 @@ type ModelsFileReadState = {
 	data: StoredModels;
 	revision?: string;
 	reload?: ModelsFileReload;
+	missingCheck?: Promise<StoredModels | undefined>;
 };
 
 /** The file's new content, or undefined when it would be what the file holds: a refresh that changes nothing writes nothing. */
@@ -92,6 +94,19 @@ export class FileModelsStore implements ModelsStore {
 		options?.signal?.throwIfAborted();
 		const revision = getFileRevisionThisTurn(this.path);
 		if (revision !== undefined && revision === readState.revision) return readState.data;
+		if (revision === undefined && !readState.reload) {
+			// Check once after concurrent providers have joined. A file created during that
+			// burst is observed, and a dangling symlink still goes through the locked backend.
+			readState.missingCheck ??= Promise.resolve().then(() => {
+				readState.missingCheck = undefined;
+				if (lstatSync(this.path, { throwIfNoEntry: false }) !== undefined) return undefined;
+				this.updateReadState(readState, {});
+				return readState.data;
+			});
+			const empty = await readState.missingCheck;
+			options?.signal?.throwIfAborted();
+			if (empty) return empty;
+		}
 		if (!readState.reload) {
 			const controller = new AbortController();
 			const reload: ModelsFileReload = {

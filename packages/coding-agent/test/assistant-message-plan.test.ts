@@ -71,7 +71,14 @@ interface Settings {
 	overrides: Map<number, boolean>;
 }
 
-function fresh(msg: AssistantMessage, streaming: boolean, settings: Settings, width: number): string[] {
+/** The randomized replay can toggle a logical run even at a width where it has no mouse target. */
+function overridesFor(component: AssistantMessageComponent): Map<number, boolean> {
+	const state = component as unknown as { thinkingVisibilityOverrides?: Map<number, boolean> };
+	state.thinkingVisibilityOverrides ??= new Map();
+	return state.thinkingVisibilityOverrides;
+}
+
+function fresh(msg: AssistantMessage, streaming: boolean, settings: Settings, width: number): readonly string[] {
 	const component = new AssistantMessageComponent(
 		undefined,
 		settings.hide,
@@ -79,8 +86,7 @@ function fresh(msg: AssistantMessage, streaming: boolean, settings: Settings, wi
 		settings.label,
 		settings.pad,
 	);
-	const overrides = (component as unknown as { thinkingVisibilityOverrides: Map<number, boolean> })
-		.thinkingVisibilityOverrides;
+	const overrides = overridesFor(component);
 	for (const [run, shown] of settings.overrides) overrides.set(run, shown);
 	component.updateContent(msg, streaming);
 	return component.render(width);
@@ -154,8 +160,7 @@ describe("assistant message plan", () => {
 					component.invalidate();
 				} else if (r < 0.865) {
 					// A click on a thinking run toggles it (what its MouseRegion does): the run's own override, not a setter.
-					const overrides = (component as unknown as { thinkingVisibilityOverrides: Map<number, boolean> })
-						.thinkingVisibilityOverrides;
+					const overrides = overridesFor(component);
 					const run = Math.floor(next() * 3);
 					overrides.set(run, !(overrides.get(run) ?? settings.hide));
 					settings.overrides.set(run, overrides.get(run)!);
@@ -168,7 +173,7 @@ describe("assistant message plan", () => {
 				const before = made;
 				component.updateContent(msg, streaming);
 				const width = next() < 0.8 ? 80 : 37;
-				let lines: string[];
+				let lines: readonly string[];
 				if (step % 2 === 0) {
 					lines = component.render(width);
 				} else {

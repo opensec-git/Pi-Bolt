@@ -23,14 +23,13 @@ import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
-import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
+import { getDeclaredTools, resolveTranscript } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
-	convertResponsesMessages,
+	convertResolvedResponsesInput,
 	convertResponsesTools,
-	getResponsesToolSupport,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 import { iterateOpenAIStream } from "./openai-sse.ts";
@@ -160,7 +159,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	context: TranscriptContext,
 	options?: OpenAIResponsesOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages);
 
 	// Start async processing
@@ -193,7 +192,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
 			const grammarToolInputProperties = createGrammarToolInputProperties(
-				getDeclaredTools(normalizedContext.messages),
+				compat.supportsOpenAIGrammarTools ? getDeclaredTools(normalizedContext.messages) : undefined,
 				compat.supportsOpenAIGrammarTools,
 			);
 			const client = createClient(
@@ -367,8 +366,7 @@ function buildParams(
 	configurationUpdateEffort: string | undefined,
 	cache?: RequestCacheRun,
 ) {
-	const transcriptTools = resolveTranscriptTools(context.messages, getResponsesToolSupport(compat));
-	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+	const { input: messages, requestTools } = convertResolvedResponsesInput(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages,
 		supportsAdditionalTools: compat.supportsAdditionalTools,
@@ -407,8 +405,8 @@ function buildParams(
 		params.service_tier = options.serviceTier;
 	}
 
-	if (transcriptTools.requestTools.length > 0) {
-		params.tools = convertResponsesTools(transcriptTools.requestTools, {
+	if (requestTools.length > 0) {
+		params.tools = convertResponsesTools(requestTools, {
 			supportsStrictMode: compat.supportsStrictMode,
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
 		});

@@ -15,7 +15,7 @@ import {
 import { applyBackgroundAround, flattenLines, INTERNED_LINE_LENGTH, internLine, visibleWidth } from "../utils.ts";
 
 type RenderCache = {
-	childLines: string[];
+	childLines: readonly string[];
 	width: number;
 	bgSample: string | undefined;
 	lines: string[];
@@ -26,6 +26,7 @@ type RenderCache = {
  */
 export class Box implements Component {
 	private childList: Component[] = [];
+	private childrenExposed = false;
 	private paddingX: number;
 	private paddingY: number;
 	private bgFn?: (text: string) => string;
@@ -45,12 +46,14 @@ export class Box implements Component {
 
 	/** The children. Using the array, which may change it, is reported as a change (markReportsChanges()). */
 	get children(): Component[] {
+		this.childrenExposed = true;
 		reportRenderChange(this);
 		return this.childList;
 	}
 
 	set children(children: Component[]) {
 		this.childList = children;
+		this.childrenExposed = true;
 		reportRenderChange(this);
 	}
 
@@ -79,6 +82,7 @@ export class Box implements Component {
 	clear(): void {
 		if (Object.hasOwn(this, "children")) (this as { children: Component[] }).children = [];
 		else this.childList = [];
+		this.childrenExposed = false;
 		this.invalidateCache();
 	}
 
@@ -148,7 +152,7 @@ export class Box implements Component {
 	render(width: number): string[] {
 		const children = this.ownChildren();
 		if (children.length === 0) {
-			setSubtreeReportsChanges(this, children === this.childList);
+			setSubtreeReportsChanges(this, !this.childrenExposed && children === this.childList);
 			return this.emptyLines;
 		}
 
@@ -161,7 +165,8 @@ export class Box implements Component {
 		const rendered = renderChildren(children, contentWidth, this.rendered);
 		this.rendered = rendered;
 		// (Told of the children's changes; its own are reported only if theirs all are.)
-		let reports = children === this.childList && (this.bgFn === undefined || this.backgroundReported);
+		let reports =
+			!this.childrenExposed && children === this.childList && (this.bgFn === undefined || this.backgroundReported);
 		for (const child of children) {
 			setRenderOwner(child, this);
 			if (!reportsChanges(child)) reports = false;

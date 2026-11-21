@@ -4,7 +4,7 @@ Pi-Bolt compared with the same Pi release on stock Bun and on Node.js. Every fig
 [`bench/`](../bench), and the raw results are in [`bench/results/`](../bench/results). The charts are drawn from those files by
 [`bench/report.py`](../bench/report.py).
 
-**Versions.** [1.2.0 against 1.1.7](#120-against-117) is the latest: Pi-Bolt 1.2.0 against Pi-Bolt 1.1.7 on an M5 Mac. [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099) is the one before: Pi-Bolt 1.0.0 against PiG 0.5.1 and Pi-Bolt 0.9.9, on GitHub's Linux and Windows runners and an M5 Mac. [0.9.7 against Pi as released](#097-against-pi-as-released) is earlier: Pi-Bolt 0.9.7 against Pi 1.3.0 as released on npm, run by stock Bun 1.4.2, Node 22 and Node 24, on GitHub's runners. [0.9.6 against PiG 0.5.1](#096-against-pig-051) is earlier: Pi-Bolt 0.9.6 against PiG 0.5.1, Pi-Bolt 0.9.5 and Pi 1.3.0 on Node 24, on GitHub's runners and an M5 Mac. [0.9.2 on GitHub's runners](#092-on-githubs-runners) is earlier: Pi-Bolt 0.9.2 (Pi 1.2.0) on GitHub's Linux
+**Versions.** [1.3.0 against 1.2.1](#130-against-121) is the latest: Pi-Bolt 1.3.0 against the published Pi-Bolt 1.2.1 on an M5 Mac and a Linux x86-64 server. [1.2.0 against 1.1.7](#120-against-117) is the one before: Pi-Bolt 1.2.0 against Pi-Bolt 1.1.7 on an M5 Mac. [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099) is earlier: Pi-Bolt 1.0.0 against PiG 0.5.1 and Pi-Bolt 0.9.9, on GitHub's Linux and Windows runners and an M5 Mac. [0.9.7 against Pi as released](#097-against-pi-as-released) is earlier: Pi-Bolt 0.9.7 against Pi 1.3.0 as released on npm, run by stock Bun 1.4.2, Node 22 and Node 24, on GitHub's runners. [0.9.6 against PiG 0.5.1](#096-against-pig-051) is earlier: Pi-Bolt 0.9.6 against PiG 0.5.1, Pi-Bolt 0.9.5 and Pi 1.3.0 on Node 24, on GitHub's runners and an M5 Mac. [0.9.2 on GitHub's runners](#092-on-githubs-runners) is earlier: Pi-Bolt 0.9.2 (Pi 1.2.0) on GitHub's Linux
 x86-64 and ARM64 runners. The sections after it are earlier measurements: Pi-Bolt 0.8.5 (Pi 1.1.0), against Pi 1.1.0 as released on stock Bun 1.4.2 and on Node, every build installed from
 its release archive; [against PiG and oh-my-pi](#against-pig-and-oh-my-pi) in the same runs. [With a real model](#with-a-real-model) is an earlier measurement, of Pi-Bolt 0.6.1.
 
@@ -14,6 +14,7 @@ carries over is the comparison, because every run interleaves the runtimes on th
 sooner than Pi on Bun and uses about a quarter of its CPU over an interactive session. The ratio varies by scenario: see
 each table.
 
+- [1.3.0 against 1.2.1](#130-against-121)
 - [1.2.0 against 1.1.7](#120-against-117)
 - [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099)
 - [0.9.7 against Pi as released](#097-against-pi-as-released)
@@ -36,6 +37,49 @@ each table.
   - [Why is a run-time plugin's loop slow on the default build?](#why-is-a-run-time-plugins-loop-slow-on-the-default-build)
 - [Reproduce](#reproduce)
 - [Correctness](#correctness)
+
+## 1.3.0 against 1.2.1
+
+What 1.3.0 changed, measured against the published 1.2.1 packages on an Apple M5 MacBook Air (macOS, on battery, not pinned)
+and an AMD EPYC 9355P server (Linux x86-64, shared with other users at a load average of 35 to 95). 1.3.0 was built with the
+release runtimes; on Linux it started with `pi-start`, 1.2.1 with `pi`. Builds interleaved in every run, model on loopback.
+Instructions are retired instructions of the Pi process (M = millions; macOS only, the Linux server gives no access to the
+counters). Medians; n is the runs per build. Lower is better; 1.2.1 / **1.3.0**. Raw results and the scripts:
+[`bench/results/2026-11-22-1.3.0-vs-1.2.1`](../bench/results/2026-11-22-1.3.0-vs-1.2.1).
+
+| Scenario | Metric | macOS | Linux |
+|---|---|---:|---:|
+| `pi --version` (n=22) | CPU / peak memory | 4 / **4** ms; 6 / **6** MB | 5 / **5** ms; 2 / **2** MB |
+| `pi -p`, blank home (n=22) | instructions / CPU | 188 / **169** M; 17 / **15** ms | 30 / **29** ms |
+| `pi -p`, typical home (n=22) | instructions / CPU | 206 / **186** M; 18 / **17** ms | 32 / **30** ms |
+| `pi -p`, typical home with extensions (n=22) | instructions / CPU | 435 / **420** M; 42 / **40** ms | 80 / **77** ms |
+| Interactive, 5 prompts (n=22) | instructions / CPU | 561 / **434** M; 84 / **78** ms | 124 / **106** ms |
+| Launch to visible typing, blank home (n=60) | time | 21.2 / **20.0** ms | 23.7 / **21.0** ms |
+| 101 interactive tool prompts over HTTPS (n=10) | CPU per prompt | 22.2 / **20.3** ms | 35.2 / **29.5** ms |
+| | private memory at the end | 95.0 / **59.0** MiB | 91.0 / **58.5** MiB |
+| 6,000 restored messages, RPC (n=12) | CPU per prompt | 2.94 / **2.16** ms | 7.67 / **5.21** ms |
+| Resume 2,292 entries, fullscreen (n=14) | instructions / CPU to the first frame | 492 / **386** M | 86 / **61** ms |
+| | until drawing settles | 6,278 / **453** M; 357 / **35** ms | 896 / **81** ms |
+| | memory once settled | 78 / **30** MB | 76 / **26** MB |
+| `get_entries`, 12,000 entries (n=12) | CPU per query | 0.122 / **0.0085** ms | 0.274 / **0.0092** ms |
+| `get_session_stats`, 12,000 entries (n=12) | CPU per query | 0.204 / **0.0083** ms | 0.317 / **0.0094** ms |
+| Tree search, linear 12,000 messages (n=12) | per keystroke | 5.15 / **3.91** ms | 8.17 / **3.90** ms |
+| Tree search, branched 1,024 leaves (n=12) | per keystroke | 34.2 / **1.37** ms | 47.0 / **1.27** ms |
+| Nested edit preview, 8 Mi characters (n=12) | time to delivery / memory | 2,818 / **19.8** ms; 163 / **38** MiB | 2,825 / **21.8** ms; 176 / **30** MiB |
+| Nested edit preview, 32 Mi characters (n=12) | time to delivery / memory | 10,474 / **33.9** ms; 988 / **41** MiB | 10,601 / **49.6** ms; 1,119 / **35** MiB |
+| Long answer, 60,000 characters (n=10) | per frame | 1.26 / **1.24** M | 0.95 / **0.91** ms CPU |
+| Single answer, RPC (n=24) | CPU after readiness | 2.05 / 2.19 ms | 5.03 / 5.37 ms |
+| Single answer, TUI (n=24) | CPU after readiness | 11.69 / 12.22 ms | 17.14 / 18.36 ms |
+| Idle at the prompt (n=10 / 20) | CPU per second | 0.70 / 0.79 ms | 0.91 / **0.48** ms |
+| | private memory | 18.7 / **17.8** MiB | 13.9 / 14.6 MiB |
+
+- Resuming in fullscreen draws the rows in view and the rest of the transcript when it is scrolled to; 1.2.1 drew all of it
+  within half a second of the first frame. The instructions of 1.3.0 stayed at 454 M from 0.5 s to 12 s after the first frame.
+- The single-answer rows time one 5,000-character answer right after launch. 1.3.0 retires fewer instructions in the TUI
+  answer (89.3 / 87.3 M, n=24) and more in the RPC answer (22.4 / 23.6 M, n=24); its TUI answer takes more CPU time, most of
+  it system time, and a second answer in the same process takes less (10.9 / 10.7 ms, 36.1 / 31.2 M, n=12).
+- Idle CPU on macOS was 0.70 / 0.79 ms per second in one set of 10 runs and 0.72 / 0.74 in another (alternating order); the
+  1.3.0 process wakes less often (1.6 / 1.3 per second).
 
 ## 1.2.0 against 1.1.7
 

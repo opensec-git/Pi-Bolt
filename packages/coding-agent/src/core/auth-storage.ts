@@ -10,6 +10,7 @@ import lockfile from "proper-lockfile";
 import { setTimeout as sleep } from "timers/promises";
 import { getAgentDir } from "../config.ts";
 import { raceWithAbortSignal } from "../utils/abort.ts";
+import { waitForLockRetry } from "../utils/lock-retry.ts";
 import { getFileRevision, getFileRevisionThisTurn, normalizePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { isCommandConfigValue, resolveConfigValue } from "./resolve-config-value.ts";
@@ -87,10 +88,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 				return lockfile.lockSync(path);
 			} catch (error) {
 				if (!getRetryableLockErrorCode(error) || attempt === maxAttempts) throw error;
-				const start = Date.now();
-				while (Date.now() - start < delayMs) {
-					// Sleep synchronously to avoid changing callers to async.
-				}
+				waitForLockRetry(delayMs);
 			}
 		}
 	}

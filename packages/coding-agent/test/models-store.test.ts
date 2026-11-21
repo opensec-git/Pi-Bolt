@@ -37,6 +37,22 @@ function model(provider: string, id: string): Model<"openai-completions"> {
 }
 
 describe("FileModelsStore", () => {
+	it("reads a missing catalog without creating it and sees later changes", async () => {
+		const path = sharedModelsPath;
+		const store = new FileModelsStore(path);
+		const lock = vi.spyOn(lockfile, "lock");
+		await expect(store.read("one")).resolves.toBeUndefined();
+		expect(existsSync(path)).toBe(false);
+		expect(lock).not.toHaveBeenCalled();
+
+		writeFileSync(path, JSON.stringify({ one: { models: [model("one", "added")] } }));
+		await expect(store.read("one")).resolves.toMatchObject({ models: [{ id: "added" }] });
+		expect(lock).toHaveBeenCalledOnce();
+		rmSync(path);
+		await expect(store.read("one")).resolves.toBeUndefined();
+		expect(existsSync(path)).toBe(false);
+	});
+
 	it("persists provider catalogs without replacing unrelated providers", async () => {
 		const store = new FileModelsStore(sharedModelsPath);
 
@@ -51,6 +67,18 @@ describe("FileModelsStore", () => {
 		await reloaded.delete("one");
 		expect(await reloaded.read("one")).toBeUndefined();
 		expect((await reloaded.read("two"))?.models.map((entry) => entry.id)).toEqual(["m2"]);
+	});
+
+	it("observes a file created between concurrent catalog reads and honors cancellation per reader", async () => {
+		const path = join(sharedTempDir, "created-during-refresh.json");
+		const store = new FileModelsStore(path);
+		const controller = new AbortController();
+		const cancelled = store.read("one", { signal: controller.signal });
+		writeFileSync(path, JSON.stringify({ one: { models: [model("one", "added")] } }));
+		const live = store.read("one");
+		controller.abort();
+		await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+		await expect(live).resolves.toMatchObject({ models: [{ id: "added" }] });
 	});
 
 	it("returns the entry as the file was parsed, which later writes replace rather than change", async () => {

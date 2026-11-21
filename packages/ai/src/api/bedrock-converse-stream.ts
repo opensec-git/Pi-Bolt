@@ -144,7 +144,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 	context: TranscriptContext,
 	options: BedrockOptions = {},
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	// Bedrock has no mid-conversation system messages; fold them into the leading prompt.
 	const normalizedContext = collapseSystemMessages(context);
 
@@ -646,7 +646,7 @@ function handleContentBlockStart(
 			arguments: {},
 		});
 		const contentIndex = output.content.length - 1;
-		openBlocks.set(event.contentBlockIndex!, { contentIndex, arguments: new ToolCallArgumentsStream() });
+		openBlocks.set(event.contentBlockIndex!, { contentIndex, arguments: new ToolCallArgumentsStream(stream) });
 		stream.push({ type: "toolcall_start", contentIndex, partial: output });
 	}
 }
@@ -676,7 +676,7 @@ function handleContentBlockDelta(
 			stream.push({ type: "text_delta", contentIndex: open.contentIndex, delta: delta.text, partial: output });
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall" && open?.arguments !== undefined) {
-		block.arguments = open.arguments.append(delta.toolUse.input || "");
+		open.arguments.appendTo(block, delta.toolUse.input || "");
 		stream.push({
 			type: "toolcall_delta",
 			contentIndex: open.contentIndex,

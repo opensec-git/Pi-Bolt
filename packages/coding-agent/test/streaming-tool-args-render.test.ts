@@ -99,6 +99,7 @@ interface StreamingHost {
 	outputPad: number;
 	toolOutputExpanded: boolean;
 	ui: TUI;
+	renderer: Pick<TUI, "requestRender">;
 	sessionManager: { getCwd(): string };
 	getRegisteredToolDefinition(name: string): ReturnType<typeof createWriteToolDefinition>;
 	toolRowsCompactable(name: string): boolean;
@@ -116,6 +117,11 @@ function createHost(expanded: boolean): { host: StreamingHost; renderRequests: (
 	const streamingComponent = new AssistantMessageComponent();
 	const chatContainer = new Container();
 	chatContainer.addChild(streamingComponent);
+	const ui = {
+		requestRender: () => {
+			requests++;
+		},
+	} as unknown as TUI;
 	const host: StreamingHost = {
 		isInitialized: true,
 		footer: { invalidate: () => {} },
@@ -127,11 +133,8 @@ function createHost(expanded: boolean): { host: StreamingHost; renderRequests: (
 		settingsManager: { getShowImages: () => true, getImageWidthCells: () => 60 },
 		outputPad: 1,
 		toolOutputExpanded: expanded,
-		ui: {
-			requestRender: () => {
-				requests++;
-			},
-		} as unknown as TUI,
+		ui,
+		renderer: ui,
 		sessionManager: { getCwd: () => process.cwd() },
 		getRegisteredToolDefinition: () => createWriteToolDefinition(process.cwd()),
 		// (A write row never compacts: it keeps what it drew while its arguments streamed in.)
@@ -141,7 +144,11 @@ function createHost(expanded: boolean): { host: StreamingHost; renderRequests: (
 }
 
 /** The transcript of `message` built from nothing: its text, and its tool call with `args`. */
-function renderFromNothing(message: AssistantMessage, args: ToolCall["arguments"], expanded: boolean): string[] {
+function renderFromNothing(
+	message: AssistantMessage,
+	args: ToolCall["arguments"],
+	expanded: boolean,
+): readonly string[] {
 	const container = new Container();
 	const assistant = new AssistantMessageComponent();
 	assistant.updateContent(message, true);

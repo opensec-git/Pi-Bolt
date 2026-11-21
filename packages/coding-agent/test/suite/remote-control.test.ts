@@ -547,8 +547,9 @@ describe("remote control", () => {
 					setStatus: (text) => statuses.push(text),
 					select: options.select ?? (async () => undefined),
 					copyToClipboard: async () => {},
+					// Allow a full-size pairing QR even on hosts that advertise many LAN interfaces.
 					columns: () => 200,
-					rows: () => 60,
+					rows: () => 100,
 					bindAddress: "127.0.0.1",
 				},
 				// No real cloudflared in tests: by default it is "not installed".

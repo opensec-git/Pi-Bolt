@@ -164,6 +164,18 @@ describe("Editor render memo", () => {
 		assert.strictEqual(layouts.length, 2, "an edit lays the text out again");
 	});
 
+	it("applies the current border style to a reused rule", () => {
+		const editor = new Editor(createTui({ rows: 40, columns: 20 }), defaultEditorTheme);
+		let color = "\x1b[31m";
+		editor.borderColor = (text) => `${color + text}\x1b[39m`;
+		assert.strictEqual(editor.render(20)[0], `${color + "─".repeat(20)}\x1b[39m`);
+		color = "\x1b[32m";
+		const lines = editor.render(20);
+		assert.strictEqual(lines[0], `${color + "─".repeat(20)}\x1b[39m`);
+		assert.strictEqual(lines.at(-1), lines[0]);
+		assert.strictEqual(editor.render(12)[0], `${color + "─".repeat(12)}\x1b[39m`);
+	});
+
 	it("lays the text out again when the paste IDs change and the text does not", () => {
 		// A paste marker wraps as one unit while its paste is known; setText() forgets the pastes and keeps the marker's text.
 		const terminal: Terminal = { rows: 40, columns: 24 };

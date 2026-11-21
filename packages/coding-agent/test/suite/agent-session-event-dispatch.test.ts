@@ -124,6 +124,34 @@ describe("AgentSession event dispatch", () => {
 		expect(order).toEqual(expected);
 	});
 
+	it("picks up a message_update handler registered and removed during the stream", async () => {
+		const seen: string[] = [];
+		let listenForNextUpdate: () => void;
+		harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					listenForNextUpdate = () => {
+						const unsubscribe = pi.on("message_update", async (event) => {
+							await Promise.resolve();
+							seen.push(`extension:${event.assistantMessageEvent.type}`);
+							unsubscribe();
+						});
+					};
+				},
+			],
+		});
+		harness.session.subscribe((event) => {
+			if (event.type !== "message_update") return;
+			seen.push(`session:${event.assistantMessageEvent.type}`);
+			if (event.assistantMessageEvent.type === "text_start") listenForNextUpdate();
+		});
+		harness.setResponses([fauxAssistantMessage("hi")]);
+
+		await harness.session.prompt("go");
+
+		expect(seen).toEqual(["session:text_start", "extension:text_delta", "session:text_delta", "session:text_end"]);
+	});
+
 	it("applies a message_end handler's replacement before session listeners and persistence see the message", async () => {
 		harness = await createHarness({
 			extensionFactories: [

@@ -1,9 +1,8 @@
 // Compact directory and environment labels for the web UI; the underlying paths stay unchanged.
+import { shortPath } from "../runtime/location.ts";
 
-/** Shows conventional macOS, Linux and Termux home directories as `~`. */
-export function shortPath(path: string): string {
-	return path.replace(/^\/(?:Users\/[^/]+|home\/[^/]+|root|data\/data\/com\.termux\/files\/home)(?=\/|$)/, "~");
-}
+// The runtime's rule, so every process shortens paths alike.
+export { shortPath };
 
 /** Where a session's tools run: a compact path, prefixed by its remote environment when present. */
 export function locationLabel(env: string | null | undefined, cwd: string): string {

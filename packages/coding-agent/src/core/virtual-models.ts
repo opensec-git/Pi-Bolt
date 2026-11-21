@@ -23,7 +23,7 @@ import {
 	type Provider,
 	type ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "./session-manager.ts";
+import type { ModelChangeEntry, SessionEntry } from "./session-manager.ts";
 
 /** API id of virtual catalog entries. Requests for it fail unless routed first. */
 export const VIRTUAL_MODEL_API = "pi-virtual";
@@ -125,34 +125,35 @@ export function findLatestResponse(messages: readonly AgentMessage[]): Assistant
  *
  * Only the last `model_change` can hold, so this looks up at most one model in the catalog.
  */
-export function getBranchSelection(
-	branch: readonly SessionEntry[],
-	getModel: (provider: string, modelId: string) => Model<Api> | undefined,
-): { provider: string; modelId: string } | undefined {
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry.type === "model_change") {
-			return { provider: entry.provider, modelId: entry.modelId };
-		}
-		if (entry.type === "message" && entry.message.role === "assistant" && !isVirtualModel(entry.message)) {
-			const response = { provider: entry.message.provider, modelId: entry.message.model };
-			const change = findLastModelChange(branch, i);
-			const model = change && getModel(change.provider, change.modelId);
-			return change && model && isVirtualModel(model) ? change : response;
-		}
-	}
-	return undefined;
-}
+export class BranchSelection {
+	private end = 0;
+	private change?: ModelChangeEntry;
+	private response?: AssistantMessage;
+	private thinkingLevel?: string;
 
-function findLastModelChange(
-	branch: readonly SessionEntry[],
-	before: number,
-): { provider: string; modelId: string } | undefined {
-	for (let i = before - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry.type === "model_change") return { provider: entry.provider, modelId: entry.modelId };
+	/** The caller owns this root-to-leaf path and only extends it. A different path gets a fresh cursor. */
+	read(path: readonly SessionEntry[], getModel: (provider: string, modelId: string) => Model<Api> | undefined) {
+		for (; this.end < path.length; this.end++) {
+			const entry = path[this.end];
+			if (entry.type === "thinking_level_change") {
+				this.thinkingLevel = entry.thinkingLevel;
+			} else if (entry.type === "model_change") {
+				this.change = entry;
+				this.response = undefined;
+			} else if (entry.type === "message" && entry.message.role === "assistant" && !isVirtualModel(entry.message)) {
+				this.response = entry.message;
+			}
+		}
+		const registered = this.response && this.change && getModel(this.change.provider, this.change.modelId);
+		if (this.response && !(registered && isVirtualModel(registered))) {
+			return {
+				model: { provider: this.response.provider, modelId: this.response.model },
+				thinkingLevel: this.thinkingLevel,
+			};
+		}
+		const model = this.change && { provider: this.change.provider, modelId: this.change.modelId };
+		return { model, thinkingLevel: this.thinkingLevel };
 	}
-	return undefined;
 }
 
 /** Latest router state a session branch stores for a virtual model. */

@@ -69,9 +69,7 @@ export type ThemeJsonValidator = (label: string, json: unknown) => ThemeJson;
 let themeJsonValidator: ThemeJsonValidator | undefined;
 
 /**
- * Install full theme validation. Without it, documents are accepted as-is, which is what built-in
- * themes already do: validating user-authored JSON needs typebox, and a presentation that only uses
- * built-in themes should not pay ~17 MB of module graph for it.
+ * Install document validation for user-authored themes. Built-in themes use their packaged documents directly.
  */
 export function setThemeJsonValidator(validator: ThemeJsonValidator): void {
 	themeJsonValidator = validator;
@@ -81,20 +79,17 @@ export function setThemeJsonValidator(validator: ThemeJsonValidator): void {
 // Color Utilities
 // ============================================================================
 
-function resolveVarRefs(
-	value: ColorValue,
-	vars: Record<string, ColorValue>,
-	visited = new Set<string>(),
-): string | number {
+function resolveVarRefs(value: ColorValue, vars: Record<string, ColorValue>, visited?: Set<string>): string | number {
 	if (typeof value === "number" || value === "" || value.startsWith("#") || /^ok(lch|hsl)\(/i.test(value)) {
 		return value;
 	}
-	if (visited.has(value)) {
+	if (visited?.has(value)) {
 		throw new Error(`Circular variable reference detected: ${value}`);
 	}
 	if (!(value in vars)) {
 		throw new Error(`Variable reference not found: ${value}`);
 	}
+	visited ??= new Set();
 	visited.add(value);
 	return resolveVarRefs(vars[value], vars, visited);
 }
@@ -222,9 +217,10 @@ export class Theme {
 		this.sourceInfo = options.sourceInfo;
 		this.mode = mode;
 		this.dimTokens = new Set(options.dim);
-		const { fgColors: foregrounds, bgColors: backgrounds } = splitThemeColors(
-			withThemeTokenFallbacks({ ...fgColors, ...bgColors }),
-		);
+		const tokens = Object.entries(withThemeTokenFallbacks({ ...fgColors, ...bgColors })) as [
+			ThemeToken,
+			string | number,
+		][];
 		const concreteForegrounds: Color[] = [];
 		const concreteBackgrounds: Color[] = [];
 		// Returns the escape sequence for the token's own slot.
@@ -238,11 +234,16 @@ export class Theme {
 			(isBackground ? concreteBackgrounds : concreteForegrounds).push(color);
 			return isBackground ? backgroundAnsi(color, mode) : foregroundAnsi(color, mode);
 		};
-		for (const [token, value] of Object.entries(foregrounds) as [ThemeColor, string | number][]) {
-			this.fgAnsi.set(token, addToken(token, value, false));
+		// Theme.colors enumerates concrete foregrounds first, including any supplied by fallbacks.
+		for (const [token, value] of tokens) {
+			if (THEME_TOKENS[token].slot !== "background") {
+				this.fgAnsi.set(token as ThemeColor, addToken(token, value, false));
+			}
 		}
-		for (const [token, value] of Object.entries(backgrounds) as [ThemeBg, string | number][]) {
-			this.bgAnsi.set(token, addToken(token, value, true));
+		for (const [token, value] of tokens) {
+			if (THEME_TOKENS[token].slot === "background") {
+				this.bgAnsi.set(token as ThemeBg, addToken(token, value, true));
+			}
 		}
 		this.ownAppearance = options.appearance ?? detectAppearance(concreteForegrounds, concreteBackgrounds);
 	}
@@ -519,9 +520,9 @@ function loadThemeJson(name: string): ThemeJson {
 	return parseThemeJsonContent(name, fs.readFileSync(customThemePath, "utf-8"));
 }
 
-function splitThemeColors(colors: ResolvedThemeColorValues<string | number>): {
-	fgColors: Record<ThemeColor, string | number>;
-	bgColors: Record<ThemeBg, string | number>;
+function splitThemeColors(colors: ThemeColorValues<string | number>): {
+	fgColors: Pick<ThemeColorValues<string | number>, ThemeColor>;
+	bgColors: Pick<ThemeColorValues<string | number>, ThemeBg>;
 } {
 	const fgColors = {} as Record<ThemeColor, string | number>;
 	const bgColors = {} as Record<ThemeBg, string | number>;
@@ -537,7 +538,7 @@ function splitThemeColors(colors: ResolvedThemeColorValues<string | number>): {
 
 function createTheme(themeJson: ThemeJson, mode?: TerminalColorMode, sourcePath?: string): Theme {
 	const colorMode = mode ?? getTerminalColorMode();
-	const resolvedColors = withThemeTokenFallbacks(resolveThemeColors(themeJson.colors, themeJson.vars));
+	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
 	const { fgColors, bgColors } = splitThemeColors(resolvedColors);
 	return new Theme(fgColors, bgColors, colorMode, {
 		name: themeJson.name,
@@ -553,7 +554,7 @@ function createSystemTheme(mode?: TerminalColorMode): Theme {
 		saturation: terminalColorsPending ? 0 : 1,
 		appearanceHint: getTerminalTheme(),
 	});
-	const { fgColors, bgColors } = splitThemeColors(withThemeTokenFallbacks(generated.colors));
+	const { fgColors, bgColors } = splitThemeColors(generated.colors);
 	return new Theme(fgColors, bgColors, mode ?? getTerminalColorMode(), {
 		name: SYSTEM_THEME_NAME,
 		appearance: generated.appearance,
@@ -938,6 +939,7 @@ let cachedCliHighlightTheme: CliHighlightTheme | undefined;
 
 function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 	return {
+		default: (s: string) => t.fg("text", s),
 		keyword: (s: string) => t.fg("syntaxKeyword", s),
 		built_in: (s: string) => t.fg("syntaxType", s),
 		literal: (s: string) => t.fg("syntaxNumber", s),

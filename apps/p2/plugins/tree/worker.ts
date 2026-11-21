@@ -40,8 +40,12 @@ import {
 import { type Branch, Sessions } from "../sessions/contract.ts";
 import { PREVIEW_LENGTH, SessionTree, type Tree, type TreeNode } from "./contract.ts";
 
-/** `SessionTree` v1 consumers (a page or TUI loaded before a deploy): the tree without branch labels. */
+/**
+ * Consumers loaded before a deploy: `SessionTree` v1 (the tree without branch labels) and v2 (no `branch`, nothing to
+ * map).
+ */
 const TREE_ACCEPTS: AcceptsTable<typeof SessionTree> = {
+	2: {},
 	1: {
 		methods: {
 			tree: {
@@ -105,6 +109,13 @@ export default defineFacet((host) => {
 							await reportTree(durable, ctx);
 							return null;
 						}),
+					branch: ({ conversation, label }, ctx) =>
+						worker().liveness.call(async () => {
+							const durable = harness().durable;
+							const fork = await branch(durable, conversation as ConversationId, label, ctx);
+							await reportTree(durable, ctx);
+							return { conversation: fork };
+						}),
 					rename: ({ conversation, label }, ctx) =>
 						worker().liveness.call(async () => {
 							const durable = harness().durable;
@@ -119,11 +130,25 @@ export default defineFacet((host) => {
 	);
 });
 
-/** Tells the catalog the current main conversation and the branches, newest first (it ignores an unchanged report). */
+/**
+ * Tells the catalog the current main conversation and the branches, newest first, each with the conversation it was
+ * forked from: its Durable record's parent (records are table reads, one commit per report; reports are rare: at start
+ * and per change of `p2.main`). The catalog ignores an unchanged report.
+ */
 async function reportTree(durable: Harness, ctx: Ctx): Promise<void> {
 	const state = await durable.snapshot(MainDoc, ctx);
 	const main = state?.conversation ?? ROOT_CONVERSATION_ID;
-	const branches: Branch[] = (state?.branches ?? [{ conversation: ROOT_CONVERSATION_ID, label: null }]).toReversed();
+	const parents = new Map(
+		(await topLevelRecords(durable, ctx)).flatMap((record): [number, number][] =>
+			record.parent ? [[record.id, record.parent.conversationId]] : [],
+		),
+	);
+	const branches: Branch[] = (state?.branches ?? [{ conversation: ROOT_CONVERSATION_ID, label: null }])
+		.map(({ conversation, label }) => {
+			const parent = parents.get(conversation);
+			return parent === undefined ? { conversation, label } : { conversation, label, parent };
+		})
+		.toReversed();
 	await expectVariant(await ctx.get(Sessions, {}), "worker").treeSelf({ main, branches }, ctx);
 }
 
@@ -318,6 +343,28 @@ async function navigate(
 }
 
 const OWNERLESS = { ownership: { kind: "ownerless" } } as const;
+
+/**
+ * Forks the top-level conversation `id` at its last entry and makes the fork the main conversation, labelled `label`
+ * (one line, at most `PREVIEW_LENGTH` characters): the next message starts a new branch, and `id` keeps ending where
+ * it did. The fork, its label and the main pointer are one commit.
+ */
+async function branch(durable: Harness, id: ConversationId, label: string, context: Context): Promise<ConversationId> {
+	// Schema-checked arguments: the label's one-line rule is this method's own.
+	const text = oneLine(label);
+	if (!text) throw new Error("A branch label needs at least one character");
+	if (!(await isTopLevel(durable, id, context))) throw new Error("Unknown branch");
+	const tail = (await (await durable.conversation(id, context))?.entries({}, 1, undefined, context))?.items[0];
+	if (!tail) throw new Error("Nothing to branch from yet: the conversation has no messages");
+	return durable.commit(async (tx) => {
+		// Forked from the conversation storing the entry: the same history, a shorter chain (as `navigate`).
+		const fork = (await tx.forkConversation(tail.conversationId, tail.id, OWNERLESS)).id;
+		const state = await tx.doc(MainDoc);
+		state.conversation = fork;
+		state.branches.push({ conversation: fork, label: text });
+		return fork;
+	}, context);
+}
 
 /** Switches the main conversation to the top-level conversation `id` (its latest message); a run there goes on. */
 async function select(durable: Harness, id: ConversationId, context: Context): Promise<void> {

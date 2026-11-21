@@ -8,35 +8,16 @@
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
 import { type Args, type Mode, missingExtensionPaths, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
-import {
-	type AuthCheckResult,
-	checkProviderAuth,
-	createAuthCheckModelRuntime,
-	getProviderCredential,
-} from "./cli/auth-check.ts";
-import {
-	type AuthCommand,
-	AuthCommandError,
-	getAuthCommandName,
-	getAuthCommandUsage,
-	isAuthCommandHelp,
-	parseAuthCommand,
-	printAuthCommandHelp,
-	validateAuthCommandArgs,
-} from "./cli/auth-command.ts";
-import { runAuthLogin } from "./cli/auth-login.ts";
-import { runAuthLogout } from "./cli/auth-logout.ts";
-import { createProcessLoginTerminal } from "./cli/auth-terminal.ts";
-import { resolveCredentialForPrint } from "./cli/credential-print.ts";
+import { loadAuthCommand, loadRpcMode, loadSessionPicker, loadStartupUi } from "./cli/command-modes.lazy.ts";
 import { loadDoctor } from "./cli/doctor.lazy.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
+import { shouldRunFirstTimeSetup } from "./cli/first-time-setup.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { loadMobileUiCommand } from "./cli/mobile-ui.lazy.ts";
+import { getPiBoltPackageFlagError, isPackageManagementCommand, loadPackageCommands } from "./cli/package-commands.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { loadRemoteControlSettingCommand } from "./cli/remote-control-setting.lazy.ts";
-import { selectSession } from "./cli/session-picker.ts";
-import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { COMMAND_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
@@ -45,16 +26,16 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
-import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { type CompiledExtension, setCompiledExtensions } from "./core/extensions/compiled.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
-import { ModelRuntime } from "./core/model-runtime.ts";
+import { resolveCliModel, resolveModelScopeWithDiagnostics, type ScopedModel } from "./core/model-resolver.ts";
+import type { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
+import type { ProgressEvent } from "./core/package-manager.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
-import type { CreateAgentSessionOptions } from "./core/sdk.ts";
+import { type CreateAgentSessionOptions, enableCliStreamOptimization } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
@@ -73,17 +54,11 @@ import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { loadMcpMode } from "./extensions/mcp-server/mode.lazy.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { writeDiagnosticsToStderr } from "./modes/diagnostics-stderr.ts";
 import { loadInteractiveMode } from "./modes/interactive/interactive-mode.lazy.ts";
 import { initTheme, setThemeJsonValidator, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { validateThemeJson } from "./modes/interactive/theme/theme-schema.ts";
 import { runPrintMode } from "./modes/print-mode.ts";
-import { runRpcMode } from "./modes/rpc/rpc-mode.ts";
-import {
-	cleanupManagedInstall,
-	getPiBoltPackageFlagError,
-	handleConfigCommand,
-	handlePackageCommand,
-} from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
 import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { chalk } from "./utils/lazy-packages.ts";
@@ -116,14 +91,6 @@ async function readPipedStdin(): Promise<string | undefined> {
 	});
 }
 
-function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
-	for (const diagnostic of diagnostics) {
-		const color = diagnostic.type === "error" ? chalk.red : diagnostic.type === "warning" ? chalk.yellow : chalk.dim;
-		const prefix = diagnostic.type === "error" ? "Error: " : diagnostic.type === "warning" ? "Warning: " : "";
-		console.error(color(`${prefix}${diagnostic.message}`));
-	}
-}
-
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
@@ -149,128 +116,6 @@ function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc" | "acp" | "mcp
 
 function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
 	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
-}
-
-async function runAuthLoginCommand(args: string[]): Promise<number> {
-	const cwd = process.cwd();
-	const agentDir = getAgentDir();
-	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
-	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
-	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal: AbortSignal.timeout(15_000) });
-
-	const controller = new AbortController();
-	const interrupt = () => controller.abort();
-	process.on("SIGINT", interrupt);
-	try {
-		return await runAuthLogin(args, {
-			modelRuntime,
-			terminal: createProcessLoginTerminal(interrupt),
-			agentDir,
-			cwd,
-			getDeviceId: () => settingsManager.getOrCreateDeviceId(),
-			signal: controller.signal,
-		});
-	} finally {
-		process.off("SIGINT", interrupt);
-	}
-}
-
-async function runAuthLogoutCommand(args: string[]): Promise<number> {
-	const signal = AbortSignal.timeout(15_000);
-	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });
-	return runAuthLogout(args, {
-		modelRuntime,
-		terminal: { write: (line) => console.log(line), error: (line) => console.error(line) },
-		signal,
-	});
-}
-
-async function runAuthCommand(args: string[]): Promise<boolean> {
-	if (isAuthCommandHelp(args)) {
-		printAuthCommandHelp();
-		return true;
-	}
-	if (args[0] === "auth" && args[1] === "login") {
-		// main() already applied --offline.
-		process.exitCode = await runAuthLoginCommand(args.slice(2).filter((arg) => arg !== "--offline"));
-		return true;
-	}
-	if (args[0] === "auth" && args[1] === "logout") {
-		process.exitCode = await runAuthLogoutCommand(args.slice(2).filter((arg) => arg !== "--offline"));
-		return true;
-	}
-
-	let command: AuthCommand | undefined;
-	try {
-		command = parseAuthCommand(args);
-	} catch (error) {
-		const message = error instanceof AuthCommandError ? error.message : "Failed to parse auth command";
-		console.error(chalk.red(`Error: ${message}`));
-		process.exitCode = 1;
-		return true;
-	}
-	if (!command) return false;
-
-	const parsed = parseArgs(command.args);
-	if (parsed.unknownFlags.size > 0) {
-		const option = parsed.unknownFlags.keys().next().value;
-		console.error(chalk.red(`Unknown option --${option} for "${getAuthCommandName(command.kind)}".`));
-		console.error(chalk.dim(`Use "${COMMAND_NAME} --help" or "${getAuthCommandUsage(command.kind)}".`));
-		process.exitCode = 1;
-		return true;
-	}
-	try {
-		if (parsed.diagnostics.length > 0) {
-			throw new AuthCommandError(parsed.diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
-		}
-		if (command.kind !== "check") {
-			const signal = AbortSignal.timeout(15_000);
-			const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });
-			const credential = await resolveCredentialForPrint(
-				parsed,
-				modelRuntime,
-				command.kind,
-				command.minExpiryMs,
-				signal,
-			);
-			process.stdout.write(`${credential}\n`);
-			return true;
-		}
-
-		const requestedAuth = validateAuthCommandArgs(parsed, command.kind);
-		let result: AuthCheckResult;
-		let credential: string | undefined;
-		try {
-			const credentials = command.noRefresh ? new ReadOnlyAuthStorage() : AuthStorage.create();
-			const modelRuntime = await createAuthCheckModelRuntime(credentials);
-			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
-			if (command.credentials && result.status === "ready") {
-				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
-					refresh: !command.noRefresh,
-				});
-				if (!credential) {
-					result = { status: "not_ready", provider: result.provider, reason: "credential_not_available" };
-				}
-			}
-		} catch {
-			result = {
-				status: "invalid",
-				provider: requestedAuth.provider ?? requestedAuth.model!,
-				reason: "invalid_state",
-			};
-		}
-		const output = command.json
-			? JSON.stringify({ ...result, ...(credential ? { credentials: credential } : {}) })
-			: (credential ?? result.status);
-		process.stdout.write(`${output}\n`);
-		process.exitCode = result.status === "ready" ? 0 : result.status === "not_ready" ? 1 : 2;
-	} catch (error) {
-		const message = error instanceof AuthCommandError ? error.message : "Failed to resolve credential";
-		console.error(chalk.red(`Error: ${message}`));
-		process.exitCode = command.kind === "check" ? 2 : 1;
-	}
-	return true;
 }
 
 async function prepareInitialMessage(
@@ -320,24 +165,21 @@ async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: 
 		return { type: "path", path: resolvePath(sessionArg, cwd) };
 	}
 
-	// Exact IDs only require reading session headers. Fall back to the full
-	// metadata listing for prefix matches.
-	const exactLocalMatch = findLocalSessionByExactId(sessionArg, cwd, sessionDir);
-	if (exactLocalMatch) {
-		return exactLocalMatch;
+	// Exact local IDs take precedence. Ambiguous prefixes use the same activity ordering as the session picker.
+	const localPath = SessionManager.findById(cwd, sessionArg, sessionDir, "unique-prefix");
+	if (localPath) {
+		return { type: "local", path: localPath };
 	}
 
-	const localSessions = await SessionManager.list(cwd, sessionDir);
-	const localMatch = localSessions.find((s) => s.id.startsWith(sessionArg));
+	const [localMatch] = await SessionManager.list(cwd, sessionDir, undefined, undefined, sessionArg);
 
 	if (localMatch) {
 		return { type: "local", path: localMatch.path };
 	}
 
 	// Try global search across all projects
-	const allSessions = await SessionManager.listAll(sessionDir);
-	const globalMatch =
-		allSessions.find((s) => s.id === sessionArg) ?? allSessions.find((s) => s.id.startsWith(sessionArg));
+	const allSessions = await SessionManager.listAll(sessionDir, undefined, undefined, sessionArg);
+	const globalMatch = allSessions.find((s) => s.id === sessionArg) ?? allSessions[0];
 
 	if (globalMatch) {
 		return { type: "global", path: globalMatch.path, cwd: globalMatch.cwd };
@@ -479,6 +321,7 @@ export async function createSessionManager(
 
 	if (parsed.resume) {
 		try {
+			const { selectSession } = await loadSessionPicker();
 			const selectedPath = await selectSession(
 				(onProgress, signal) => SessionManager.list(cwd, sessionDir, onProgress, signal),
 				(onProgress, signal) => SessionManager.listAll(sessionDir, onProgress, signal),
@@ -649,14 +492,16 @@ export async function main(args: string[], options?: MainOptions) {
 		process.env.PI_SKIP_VERSION_CHECK = "1";
 	}
 
-	if (await runAuthCommand(args)) {
+	if (args[0] === "auth") {
+		const { runAuthCommand } = await loadAuthCommand();
+		await runAuthCommand(args);
 		return;
 	}
 
 	if (process.platform === "win32") {
 		cleanupWindowsSelfUpdateQuarantine(getPackageDir());
 	}
-	cleanupManagedInstall();
+	if (process.env.PI_MANAGED_INSTALL_ROOT?.trim()) (await loadPackageCommands()).cleanupManagedInstall();
 
 	let cwd: string;
 	try {
@@ -672,10 +517,11 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	const agentDir = getAgentDir();
 	const bootstrapSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
-	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
+	applyHttpProxySettings(bootstrapSettingsManager.getGlobalHttpProxy());
 	configureHttpDispatcher();
 
-	if (await handlePackageCommand(args, { extensionFactories })) {
+	if (isPackageManagementCommand(args[0]) || (PIBOLT && args[0] === "compile")) {
+		await (await loadPackageCommands()).handlePackageCommand(args, { extensionFactories });
 		const exitCode = process.exitCode ?? 0;
 		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
 			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
@@ -688,7 +534,8 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	if (await handleConfigCommand(args, { extensionFactories })) {
+	if (args[0] === "config") {
+		await (await loadPackageCommands()).handleConfigCommand(args, { extensionFactories });
 		return;
 	}
 
@@ -825,6 +672,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
+		const { showFirstTimeSetup } = await loadStartupUi();
 		await showFirstTimeSetup(startupSettingsManager);
 		time("firstTimeSetup");
 	}
@@ -848,6 +696,7 @@ export async function main(args: string[], options?: MainOptions) {
 	if (missingSessionCwdIssue) {
 		if (appMode === "interactive") {
 			const sessionFile = missingSessionCwdIssue.sessionFile!;
+			const { showStartupSelector } = await loadStartupUi();
 			const choice = await showStartupSelector(
 				startupSettingsManager,
 				formatMissingSessionCwdPrompt(missingSessionCwdIssue),
@@ -914,6 +763,16 @@ export async function main(args: string[], options?: MainOptions) {
 	// client's request, and without a session_start event; the directory may have changed by then (a pull, a branch switch),
 	// so each of their runtimes checks again.
 	let startupRuntimePending = !acp && !mcp && !service;
+	// Interactive mode installs and refreshes packages again on /reload, /new, /resume and /fork while the TUI
+	// draws on the terminal, where git and npm output would corrupt its screen (#11264). Their output is
+	// captured, and until the TUI starts each install is announced on stderr instead.
+	const packageCommandOutput = appMode === "interactive" ? "capture" : "inherit";
+	let announcePackageInstalls = packageCommandOutput === "capture";
+	const onPackageProgress = (event: ProgressEvent) => {
+		if (announcePackageInstalls && event.type === "start" && event.message) {
+			console.error(chalk.dim(event.message));
+		}
+	};
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -966,6 +825,8 @@ export async function main(args: string[], options?: MainOptions) {
 					}
 				: undefined,
 			resourceLoaderOptions: {
+				packageCommandOutput,
+				onPackageProgress,
 				additionalExtensionPaths: resolvedExtensionPaths,
 				additionalSkillPaths: resolvedSkillPaths,
 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
@@ -998,10 +859,15 @@ export async function main(args: string[], options?: MainOptions) {
 		];
 
 		const modelPatterns = parsed.models ?? settingsManager.getEnabledModels();
-		const scopedModels =
+		const { scopedModels, diagnostics: modelScopeDiagnostics } =
 			modelPatterns && modelPatterns.length > 0
-				? await resolveModelScope(modelPatterns, modelRuntime, { signal: AbortSignal.timeout(15_000) })
-				: [];
+				? await resolveModelScopeWithDiagnostics(modelPatterns, modelRuntime, {
+						signal: AbortSignal.timeout(15_000),
+					})
+				: { scopedModels: [], diagnostics: [] };
+		// Returned as diagnostics instead of printed: this factory runs again on /new, /resume and /fork,
+		// while the interactive TUI draws on the terminal (#11264).
+		diagnostics.push(...modelScopeDiagnostics);
 		const {
 			options: sessionOptions,
 			cliThinkingFromModel,
@@ -1009,7 +875,7 @@ export async function main(args: string[], options?: MainOptions) {
 		} = buildSessionOptions(
 			parsed,
 			scopedModels,
-			sessionManager.buildSessionContext().messages.length > 0,
+			sessionManager.peekSessionProjection().messages.length > 0,
 			modelRuntime,
 			settingsManager,
 		);
@@ -1038,10 +904,23 @@ export async function main(args: string[], options?: MainOptions) {
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
 		});
+		if (
+			(appMode === "print" || appMode === "interactive") &&
+			!options?.extensionFactories?.length &&
+			!options?.compiledExtensions?.length
+		) {
+			enableCliStreamOptimization(created.session, appMode);
+		}
 		ttiTrace("session.created");
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
 			created.session.setThinkingLevel(created.session.thinkingLevel);
+		}
+		// "Could not restore model x/y. Using a/b." is set again on /resume and /fork. As a diagnostic, every
+		// mode reports it at startup and after each replacement. Without any model, the message is login
+		// guidance instead: interactive mode shows it at startup, the other modes exit with it below.
+		if (created.modelFallbackMessage && created.session.model) {
+			diagnostics.push({ type: "warning", message: created.modelFallbackMessage });
 		}
 
 		return {
@@ -1079,14 +958,18 @@ export async function main(args: string[], options?: MainOptions) {
 	const { services, session, modelFallbackMessage } = runtime;
 	const { settingsManager, modelRuntime, resourceLoader } = services;
 	setCapabilityOverrides(settingsManager.getTerminalCapabilityOverrides());
-	applyHttpProxySettings(settingsManager.getGlobalSettings().httpProxy);
+	applyHttpProxySettings(settingsManager.getGlobalHttpProxy());
 	configureHttpDispatcher(settingsManager.getHttpIdleTimeoutMs());
 
-	const startupDiagnostics = deduplicateDiagnostics([...startupSettingsDiagnostics, ...runtime.diagnostics]);
+	// Taking them marks them reported, so the modes do not report them again after a session replacement.
+	const startupDiagnostics = deduplicateDiagnostics([
+		...startupSettingsDiagnostics,
+		...runtime.takeUnreportedDiagnostics(),
+	]);
 	const hasRuntimeErrors = runtime.diagnostics.some((diagnostic) => diagnostic.type === "error");
 
 	if (parsed.help) {
-		reportDiagnostics(startupDiagnostics);
+		writeDiagnosticsToStderr(startupDiagnostics);
 		const extensionFlags = resourceLoader
 			.getExtensions()
 			.extensions.flatMap((extension) => Array.from(extension.flags.values()));
@@ -1095,7 +978,7 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	if (parsed.listModels !== undefined) {
-		reportDiagnostics(startupDiagnostics);
+		writeDiagnosticsToStderr(startupDiagnostics);
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
 		process.exit(0);
@@ -1124,7 +1007,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 	time("resolveModelScope");
 	if (appMode !== "interactive" || hasRuntimeErrors) {
-		reportDiagnostics(startupDiagnostics);
+		writeDiagnosticsToStderr(startupDiagnostics);
 	}
 	if (hasRuntimeErrors) {
 		if (runtime.diagnostics.some((diagnostic) => diagnostic.message.includes("Failed to load extension"))) {
@@ -1157,13 +1040,16 @@ export async function main(args: string[], options?: MainOptions) {
 
 	if (appMode === "rpc") {
 		printTimings();
+		const { runRpcMode } = await loadRpcMode();
 		await runRpcMode(runtime);
 	} else if (appMode === "interactive") {
+		announcePackageInstalls = false;
 		const { InteractiveMode } = await loadInteractiveMode();
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
 			startupDiagnostics,
-			modelFallbackMessage,
+			// A fallback to another model is already in startupDiagnostics.
+			modelFallbackMessage: session.model ? undefined : modelFallbackMessage,
 			autoTrustOnReloadCwd,
 			initialMessage,
 			initialImages,

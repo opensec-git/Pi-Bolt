@@ -27,6 +27,7 @@ import type {
 	DocumentReader,
 	ToolExecutionApi,
 	ToolExecutionResult,
+	ToolPark,
 } from "@earendil-works/pi-durable";
 import { Connection, localDaemon, RemoteExecutionEnv } from "@earendil-works/pi-env";
 import { compile } from "@earendil-works/pi-schema";
@@ -196,7 +197,7 @@ const infos: EnvInfo[] = [
 	{ name: "slayer", type: "ssh", host: "slayer.example" },
 	{ name: "box1", type: "gondolin", host: "slayer" },
 ];
-const text = (result: ToolExecutionResult) =>
+const text = (result: ToolExecutionResult | ToolPark) =>
 	(result.output ?? []).map((part) => (part.type === "text" ? part.text : "")).join("");
 
 test("location tools keep a sandboxed conversation in its sandbox", async () => {
@@ -631,7 +632,10 @@ test(
 		// A terminal opens in the VM too.
 		const terminals = owner.hold(Terminals, { session, view: crypto.randomUUID() }, BACKGROUND_CONTEXT);
 		const { token } = await terminals.channel({}, BACKGROUND_CONTEXT);
-		const socket = new WebSocket(`ws://127.0.0.1:${fixture.server.port}/terminal?${new URLSearchParams({ token })}`);
+		// The grant admits the byte channel together with the owner's credentials (docs/p2-notes.md, terminals).
+		const socket = new WebSocket(`ws://127.0.0.1:${fixture.server.port}/terminal?${new URLSearchParams({ token })}`, {
+			headers: { Cookie: fixture.owner.cookie },
+		});
 		const events: TerminalEvent[] = [];
 		const screen: Buffer[] = [];
 		socket.on("message", (bytes, binary) => {

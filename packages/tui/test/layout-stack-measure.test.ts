@@ -99,6 +99,43 @@ function screen(dock: VStack): VStack {
 }
 
 describe("VStack measurement in the layout", () => {
+	it("checks visibility before measuring and only measures visible children with auto bases", () => {
+		const calls: string[] = [];
+		const auto = new Counted("auto", 2, false);
+		const fixed = new Counted("fixed", 5, false);
+		const hidden = new Counted("hidden", 1, false);
+		const dock = new VStack(
+			[
+				{
+					component: auto,
+					minSize: 3,
+					visible: () => {
+						calls.push("auto visible");
+						return true;
+					},
+				},
+				{ component: fixed, basis: 7, maxSize: 2 },
+				{
+					component: hidden,
+					visible: () => {
+						calls.push("hidden invisible");
+						return false;
+					},
+				},
+			],
+			{ gap: 1 },
+		);
+
+		const height = dock.measureHeight(40, (child, width) => {
+			assert.strictEqual(child, auto);
+			assert.strictEqual(width, 40);
+			calls.push("measure auto");
+			return 2;
+		});
+		assert.strictEqual(height, 6);
+		assert.deepStrictEqual(calls, ["auto visible", "hidden invisible", "measure auto"]);
+	});
+
 	it("draws what measuring the stack by rendering it draws, rendering each child once a frame", () => {
 		for (let seed = 1; seed <= 400; seed++) {
 			const leaves: Counted[] = [];

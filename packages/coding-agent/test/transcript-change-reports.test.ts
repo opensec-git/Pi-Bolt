@@ -329,7 +329,8 @@ describe("transcript frames with change reports", () => {
 				expect(frame.lines, label).toEqual(want.lines);
 				if (next() < 0.1) {
 					// (What render() hands out is the caller's own: changing it changes nothing drawn.)
-					const lines = reported.document.render(width - 1);
+					// (Container.render() returns a copy, which the caller may change.)
+					const lines = reported.document.render(width - 1) as string[];
 					lines.length = 0;
 				}
 			}

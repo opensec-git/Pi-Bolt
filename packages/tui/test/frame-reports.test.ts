@@ -120,7 +120,7 @@ function makeTree(): Tree {
 }
 
 /** The reference tree's lines, rendered from nothing: containers and boxes by plain loops, Markdown without caches. */
-function reference(component: Component, width: number): string[] {
+function reference(component: Component, width: number): readonly string[] {
 	if (component instanceof Box) {
 		const box = component as unknown as {
 			paddingX: number;
@@ -149,7 +149,7 @@ class ReferenceDocument implements Component {
 	constructor(tree: Tree) {
 		this.tree = tree;
 	}
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		setMarkdownCachingForTest(false);
 		try {
 			return reference(this.tree.document, width);
@@ -378,9 +378,9 @@ describe("frames from reported changes", () => {
 				revision = lines.revision;
 				assert.deepStrictEqual(followed, all, `${label}: the live lines`);
 				if (next() < 0.2) {
-					const copy = live.document.render(contentWidth);
+					// (Container.render() returns a copy: the caller's array is its own.)
+					const copy = live.document.render(contentWidth) as string[];
 					assert.deepStrictEqual(copy, all, `${label}: render()`);
-					// (The caller's array is its own.)
 					copy.push("changed by the caller");
 					copy[0] = "changed";
 				}
@@ -480,5 +480,47 @@ describe("frames from reported changes", () => {
 			liveTui.stop();
 			referenceTui.stop();
 		}
+	});
+});
+
+describe("append layout", () => {
+	const textLines = (container: Container) => container.render(40).map((line) => line.trimEnd());
+
+	it("keeps edits from retained mutable arrays when a later frame appends a row", () => {
+		const container = new Container();
+		const row = (value: string) => new Text(value, 0, 0);
+		container.addChild(row("old"));
+		const retained = container.children;
+		assert.deepStrictEqual(textLines(container), ["old"]);
+		retained[0] = row("replacement");
+		container.addChild(row("tail"));
+		assert.deepStrictEqual(textLines(container), ["replacement", "tail"]);
+		const assigned = [row("assigned")];
+		container.children = assigned;
+		assert.deepStrictEqual(textLines(container), ["assigned"]);
+		assigned[0] = row("edited");
+		container.addChild(row("last"));
+		assert.deepStrictEqual(textLines(container), ["edited", "last"]);
+	});
+
+	it("tracks unreported children across append, removal and a change within the existing prefix", () => {
+		const container = new Container();
+		const nested = new Container();
+		let value = "old";
+		const extension = { render: () => [value], invalidate() {} };
+		const row = (text: string) => new Text(text, 0, 0);
+		nested.addChild(row("first"));
+		container.addChild(nested);
+		container.addChild(extension);
+		assert.deepStrictEqual(textLines(container), ["first", "old"]);
+		nested.addChild(extension);
+		container.addChild(row("tail"));
+		assert.deepStrictEqual(textLines(container), ["first", "old", "old", "tail"]);
+		value = "updated";
+		assert.deepStrictEqual(textLines(container), ["first", "updated", "updated", "tail"]);
+		nested.removeChild(extension);
+		container.removeChild(extension);
+		container.addChild(row("end"));
+		assert.deepStrictEqual(textLines(container), ["first", "tail", "end"]);
 	});
 });

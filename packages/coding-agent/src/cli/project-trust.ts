@@ -2,7 +2,7 @@ import type { ProjectTrustContext } from "../core/extensions/types.ts";
 import type { AppMode } from "../core/project-trust.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import { chalk } from "../utils/lazy-packages.ts";
-import { showStartupInput, showStartupSelector } from "./startup-ui.ts";
+import { loadStartupUi } from "./command-modes.lazy.ts";
 
 export function createProjectTrustContext(options: {
 	cwd: string;
@@ -22,6 +22,7 @@ export function createProjectTrustContext(options: {
 				if (options.mode !== "interactive") {
 					return undefined;
 				}
+				const { showStartupSelector } = await loadStartupUi();
 				return showStartupSelector(
 					options.settingsManager,
 					title,
@@ -35,6 +36,7 @@ export function createProjectTrustContext(options: {
 				if (options.mode !== "interactive") {
 					return false;
 				}
+				const { showStartupSelector } = await loadStartupUi();
 				return (
 					(await showStartupSelector(options.settingsManager, `${title}\n${message}`, [
 						{ label: "Yes", value: true },
@@ -49,6 +51,7 @@ export function createProjectTrustContext(options: {
 				if (options.mode !== "interactive") {
 					return undefined;
 				}
+				const { showStartupInput } = await loadStartupUi();
 				return showStartupInput(options.settingsManager, title, placeholder);
 			},
 			notify: (message, type = "info") => {

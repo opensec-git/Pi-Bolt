@@ -91,16 +91,21 @@ export function normalizeDisplayText(text: string): string {
 	return text.replace(/\r/g, "");
 }
 
+function cleanToolText(block: { text?: string }): string {
+	return normalizeDisplayText(sanitizeBinaryOutput(stripAnsi(block.text || "")));
+}
+
 export function getTextOutput(
 	result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> } | undefined,
 	showImages: boolean,
 ): string {
 	if (!result) return "";
+	if (result.content.length === 1 && result.content[0]?.type === "text") return cleanToolText(result.content[0]);
 
 	const textBlocks = result.content.filter((c) => c.type === "text");
 	const imageBlocks = result.content.filter((c) => c.type === "image");
 
-	let output = textBlocks.map((c) => sanitizeBinaryOutput(stripAnsi(c.text || "")).replace(/\r/g, "")).join("\n");
+	let output = textBlocks.map(cleanToolText).join("\n");
 
 	const caps = getCapabilities();
 	if (imageBlocks.length > 0 && (!caps.images || !showImages)) {

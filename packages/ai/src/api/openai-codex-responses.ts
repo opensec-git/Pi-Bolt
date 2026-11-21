@@ -26,28 +26,21 @@ import {
 	formatThrownValue,
 } from "../utils/diagnostics.ts";
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
-import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+import { AssistantMessageEventStream, FifoQueue } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
 import { cachedArrayToJSON, cacheJsonSerialization } from "../utils/json-body.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { jsonBodyParts } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
-import { getSystemMessageText } from "../utils/text.ts";
-import {
-	getDeclaredTools,
-	getInitialSystemMessage,
-	normalizeContext,
-	resolveTranscript,
-	resolveTranscriptTools,
-} from "../utils/transcript.ts";
+import { getDeclaredTools, normalizeContext, resolveTranscript } from "../utils/transcript.ts";
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
+	convertResolvedResponsesInput,
 	convertResponsesMessages,
 	convertResponsesTools,
-	getResponsesToolSupport,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -69,6 +62,10 @@ const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
 const PREVIOUS_RESPONSE_NOT_FOUND_CODE = "previous_response_not_found";
+// The Responses API rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
+const MIN_OUTPUT_TOKENS = 16;
+// Fixed reasoning.effort while configuration_update items carry the thinking level.
+const CONFIGURATION_UPDATE_REQUEST_EFFORT = "medium";
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 	"completed",
@@ -97,9 +94,9 @@ interface RequestBody {
 	model: string;
 	store?: boolean;
 	stream?: boolean;
-	instructions?: string;
 	previous_response_id?: string;
 	input?: ResponseInput;
+	max_output_tokens?: number;
 	tools?: OpenAITool[];
 	tool_choice?: OpenAICodexResponsesOptions["toolChoice"];
 	parallel_tool_calls?: boolean;
@@ -269,16 +266,18 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 	context: TranscriptContext,
 	options?: OpenAICodexResponsesOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	(async () => {
+		const configurationUpdateEffort = getConfigurationUpdateEffort(model, options);
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
 			api: "openai-codex-responses" as Api,
 			provider: model.provider,
 			model: model.id,
+			...(configurationUpdateEffort === undefined ? {} : { providerThinkingLevel: configurationUpdateEffort }),
 			usage: {
 				input: 0,
 				output: 0,
@@ -300,35 +299,43 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 
 			const accountId = extractAccountId(apiKey);
 			const grammarToolInputProperties = createGrammarToolInputProperties(
-				getDeclaredTools(normalizedContext.messages),
+				model.compat?.supportsOpenAIGrammarTools ? getDeclaredTools(normalizedContext.messages) : undefined,
 				model.compat?.supportsOpenAIGrammarTools ?? false,
 			);
-			const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
-			const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
+			const codexSessionId = clampOpenAIPromptCacheKey(
+				options?.cacheRetention === "none" ? undefined : options?.sessionId,
+			);
+			const cacheSessionId =
+				options?.cacheRetention === "none" || options?.disableContinuation ? undefined : options?.sessionId;
 			// Everything buildRequestBody's conversion reads besides the messages: the model and its compat settings.
-			cache = beginRequestCache("openai-codex-responses", options, [
-				model.id,
-				model.provider,
-				model.api,
-				model.input,
-				model.reasoning,
-				model.compat,
-				grammarToolInputProperties,
-			]);
+			const payloadHook = options?.onPayload;
+			cache = payloadHook
+				? undefined
+				: beginRequestCache("openai-codex-responses", options, [
+						model.id,
+						model.provider,
+						model.api,
+						model.input,
+						model.reasoning,
+						model.compat,
+						grammarToolInputProperties,
+						configurationUpdateEffort !== undefined,
+					]);
 			let body = buildRequestBody(
 				model,
 				normalizedContext,
 				options,
 				codexSessionId,
 				grammarToolInputProperties,
+				configurationUpdateEffort,
 				cache,
 			);
 			cache?.end();
-			const nextBody = await options?.onPayload?.(body, model);
+			const nextBody = await payloadHook?.call(options, body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
 			}
-			cacheJsonSerialization(body.input);
+
 			const websocketRequestId = codexSessionId || uuidv7();
 			// Codex expects an originator on every request; it is not attribution.
 			const identityHeaders = { originator: "pi", ...getIdentityHeaders(model, options?.identity) };
@@ -352,7 +359,10 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			// WebSocket request sends its own serialization (only the new input, when it continues a response).
 			let bodyBytes: Blob | undefined;
 			const getBodyBytes = (): Blob => {
-				bodyBytes ??= encodeRequestBody(body, options?.sessionId, cache);
+				if (!bodyBytes) {
+					cacheJsonSerialization(body.input, options?.sessionId);
+					bodyBytes = encodeRequestBody(body, options?.sessionId, cache);
+				}
 				return bodyBytes;
 			};
 			const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
@@ -387,6 +397,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							},
 							httpTimeoutMs,
 							websocketConnectTimeoutMs,
+							payloadHook !== undefined,
 							cacheSessionId,
 							accountId,
 							grammarToolInputProperties,
@@ -576,8 +587,9 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 		...buildBaseOptions(model, context, options, apiKey),
 		toolChoice: options?.toolChoice,
 	} satisfies OpenAICodexResponsesOptions;
-	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : "off";
+	// Off is sent as effort none, so with configuration_update items switching to it keeps the cache.
+	const reasoningEffort = clampedReasoning !== "off" ? clampedReasoning : model.reasoning ? "none" : undefined;
 
 	return stream(model, context, {
 		...base,
@@ -589,46 +601,56 @@ export const streamSimple: StreamFunction<"openai-codex-responses", SimpleStream
 // Request Building
 // ============================================================================
 
+/** Effort to send in configuration_update items, or undefined to send it as reasoning.effort. */
+function getConfigurationUpdateEffort(
+	model: Model<"openai-codex-responses">,
+	options: OpenAICodexResponsesOptions | undefined,
+): string | undefined {
+	if (!model.compat?.supportsMidConvoEffort || options?.reasoningEffort === undefined) return undefined;
+	return resolveReasoningEffort(model, options.reasoningEffort) ?? undefined;
+}
+
+/** Provider-native effort for a requested level; null when the model takes no reasoning field for it. */
+function resolveReasoningEffort(
+	model: Model<"openai-codex-responses">,
+	reasoningEffort: NonNullable<OpenAICodexResponsesOptions["reasoningEffort"]>,
+): string | null {
+	if (reasoningEffort === "none") {
+		return model.thinkingLevelMap?.off === undefined ? "none" : model.thinkingLevelMap.off;
+	}
+	return model.thinkingLevelMap?.[reasoningEffort] ?? reasoningEffort;
+}
+
 function buildRequestBody(
 	model: Model<"openai-codex-responses">,
 	context: TranscriptContext,
 	options: OpenAICodexResponsesOptions | undefined,
 	cacheSessionId: string | undefined,
-	grammarToolInputProperties: ReadonlyMap<string, string> = createGrammarToolInputProperties(
-		getDeclaredTools(context.messages),
-		model.compat?.supportsOpenAIGrammarTools ?? false,
-	),
+	grammarToolInputProperties: ReadonlyMap<string, string>,
+	configurationUpdateEffort: string | undefined,
 	cache?: RequestCacheRun,
 ): RequestBody {
 	const supportsStrictMode = model.compat?.supportsStrictMode ?? true;
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
 	const supportsToolSearch = model.compat?.supportsToolSearch ?? false;
-	const transcriptTools = resolveTranscriptTools(
-		context.messages,
-		getResponsesToolSupport({
-			supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
-			supportsAdditionalTools,
-			supportsToolSearch,
-		}),
-	);
-	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
-		includeSystemPrompt: false,
+	// The system prompt goes into a leading developer item, not top-level `instructions`, as in Codex.
+	// From GPT-6.2 on, the backend appends `instructions` after `input`, so every new turn changed the
+	// prompt before the system prompt and it was never served from the prompt cache (#12273).
+	const { input: messages, requestTools } = convertResolvedResponsesInput(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
 		supportsAdditionalTools,
 		supportsToolSearch,
 		toolOptions: { strict: null, supportsStrictMode, supportsOpenAIGrammarTools },
+		configurationUpdateEffort,
 		cache,
 	});
 
-	const initialSystemMessage = getInitialSystemMessage(context.messages);
-	const instructions = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
 	const body: RequestBody = {
 		model: model.id,
 		store: false,
 		stream: true,
-		instructions: instructions || "You are a helpful assistant.",
 		input: messages,
 		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
@@ -636,6 +658,10 @@ function buildRequestBody(
 		tool_choice: options?.toolChoice ?? "auto",
 		parallel_tool_calls: true,
 	};
+
+	if (options?.maxTokens && (model.compat?.supportsMaxOutputTokens ?? true)) {
+		body.max_output_tokens = Math.max(options.maxTokens, MIN_OUTPUT_TOKENS);
+	}
 
 	if (options?.temperature !== undefined) {
 		body.temperature = options.temperature;
@@ -645,8 +671,8 @@ function buildRequestBody(
 		body.service_tier = options.serviceTier;
 	}
 
-	if (transcriptTools.requestTools.length > 0) {
-		body.tools = convertResponsesTools(transcriptTools.requestTools, {
+	if (requestTools.length > 0) {
+		body.tools = convertResponsesTools(requestTools, {
 			strict: null,
 			supportsStrictMode,
 			supportsOpenAIGrammarTools,
@@ -655,11 +681,9 @@ function buildRequestBody(
 
 	if (options?.reasoningEffort !== undefined) {
 		const effort =
-			options.reasoningEffort === "none"
-				? model.thinkingLevelMap?.off === undefined
-					? "none"
-					: model.thinkingLevelMap.off
-				: (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort);
+			configurationUpdateEffort === undefined
+				? resolveReasoningEffort(model, options.reasoningEffort)
+				: CONFIGURATION_UPDATE_REQUEST_EFFORT;
 		if (effort !== null) {
 			body.reasoning = {
 				effort,
@@ -938,7 +962,9 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 
 const OPENAI_BETA_RESPONSES_WEBSOCKETS = "responses_websockets=2026-02-06";
 const SESSION_WEBSOCKET_CACHE_TTL_MS = 5 * 60 * 1000;
-const SESSION_WEBSOCKET_MAX_AGE_MS = 55 * 60 * 1000;
+// The server closes a socket after 60 minutes, even mid-response, and the in-flight response is lost.
+// New requests open a fresh socket after 45 minutes, leaving 15 minutes for long responses.
+const SESSION_WEBSOCKET_MAX_AGE_MS = 45 * 60 * 1000;
 
 type WebSocketEventType = "open" | "message" | "error" | "close";
 type WebSocketListener = (event: unknown) => void;
@@ -951,16 +977,18 @@ interface WebSocketLike {
 }
 
 interface CachedWebSocketContinuationState {
-	lastRequestBody: RequestBody;
+	head: string;
+	tail: string;
+	/** Exactly the input already present on this connection, including the last assistant response. */
+	input: (ResponseInput[number] | SentJson)[];
 	lastResponseId: string;
-	lastResponseItems: ResponseInput;
 }
 
 interface CachedWebSocketConnection {
 	socket: WebSocketLike;
 	busy: boolean;
 	createdAt: number;
-	idleTimer?: ReturnType<typeof setTimeout>;
+	cancelIdle?: () => void;
 	continuation?: CachedWebSocketContinuationState;
 }
 
@@ -1036,7 +1064,8 @@ export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {
 
 export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 	const closeEntry = (entry: CachedWebSocketConnection) => {
-		if (entry.idleTimer) clearTimeout(entry.idleTimer);
+		entry.cancelIdle?.();
+		entry.continuation = undefined;
 		closeWebSocketSilently(entry.socket, 1000, "debug_close");
 	};
 	if (sessionId) {
@@ -1163,17 +1192,47 @@ function closeWebSocketSilently(socket: WebSocketLike, code = 1000, reason = "do
 	} catch {}
 }
 
-function scheduleSessionWebSocketExpiry(sessionId: string, accountId: string, entry: CachedWebSocketConnection): void {
-	if (entry.idleTimer) {
-		clearTimeout(entry.idleTimer);
-	}
-	entry.idleTimer = setTimeout(() => {
-		if (entry.busy) return;
-		closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
-		const accountEntries = websocketSessionCache.get(sessionId);
-		if (accountEntries?.get(accountId) === entry) accountEntries.delete(accountId);
-		if (accountEntries?.size === 0) websocketSessionCache.delete(sessionId);
-	}, SESSION_WEBSOCKET_CACHE_TTL_MS);
+function forgetWebSocket(sessionId: string, accountId: string, entry: CachedWebSocketConnection): void {
+	entry.cancelIdle?.();
+	entry.continuation = undefined;
+	const entries = websocketSessionCache.get(sessionId);
+	if (entries?.get(accountId) !== entry) return;
+	entries.delete(accountId);
+	if (entries.size === 0) websocketSessionCache.delete(sessionId);
+}
+
+function leaseCachedWebSocket(sessionId: string, accountId: string, entry: CachedWebSocketConnection, reused: boolean) {
+	entry.cancelIdle?.();
+	entry.busy = true;
+	return {
+		socket: entry.socket,
+		entry,
+		reused,
+		release({ keep }: { keep?: boolean } = {}) {
+			if (
+				!keep ||
+				!isWebSocketReusable(entry.socket) ||
+				websocketSessionCache.get(sessionId)?.get(accountId) !== entry
+			) {
+				forgetWebSocket(sessionId, accountId, entry);
+				closeWebSocketSilently(entry.socket);
+				return;
+			}
+			entry.busy = false;
+			const onClose = () => forgetWebSocket(sessionId, accountId, entry);
+			const timer = setTimeout(() => {
+				onClose();
+				closeWebSocketSilently(entry.socket, 1000, "idle_timeout");
+			}, SESSION_WEBSOCKET_CACHE_TTL_MS);
+			timer.unref?.();
+			entry.cancelIdle = () => {
+				entry.cancelIdle = undefined;
+				clearTimeout(timer);
+				entry.socket.removeEventListener("close", onClose);
+			};
+			entry.socket.addEventListener("close", onClose);
+		},
+	};
 }
 
 async function connectWebSocket(
@@ -1268,87 +1327,28 @@ async function acquireWebSocket(
 	reused: boolean;
 	release: (options?: { keep?: boolean }) => void;
 }> {
-	if (!sessionId) {
-		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
-		return {
-			socket,
-			reused: false,
-			release: () => closeWebSocketSilently(socket),
-		};
-	}
-
-	let accountEntries = websocketSessionCache.get(sessionId);
-	const cached = accountEntries?.get(accountId);
-	if (cached) {
-		if (cached.idleTimer) {
-			clearTimeout(cached.idleTimer);
-			cached.idleTimer = undefined;
-		}
-		if (!cached.busy && isWebSocketSessionExpired(cached)) {
-			closeWebSocketSilently(cached.socket, 1000, "connection_age_limit");
-			accountEntries?.delete(accountId);
-			if (accountEntries?.size === 0) websocketSessionCache.delete(sessionId);
-		} else if (!cached.busy && isWebSocketReusable(cached.socket)) {
-			cached.busy = true;
-			return {
-				socket: cached.socket,
-				entry: cached,
-				reused: true,
-				release: ({ keep } = {}) => {
-					if (!keep || !isWebSocketReusable(cached.socket)) {
-						closeWebSocketSilently(cached.socket);
-						const currentEntries = websocketSessionCache.get(sessionId);
-						if (currentEntries?.get(accountId) === cached) currentEntries.delete(accountId);
-						if (currentEntries?.size === 0) websocketSessionCache.delete(sessionId);
-						return;
-					}
-					cached.busy = false;
-					scheduleSessionWebSocketExpiry(sessionId, accountId, cached);
-				},
-			};
-		}
-		if (cached.busy) {
-			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
-			return {
-				socket,
-				reused: false,
-				release: () => {
-					closeWebSocketSilently(socket);
-				},
-			};
-		}
-		if (!isWebSocketReusable(cached.socket)) {
-			closeWebSocketSilently(cached.socket);
-			accountEntries?.delete(accountId);
-			if (accountEntries?.size === 0) websocketSessionCache.delete(sessionId);
-		}
+	const cached = sessionId ? websocketSessionCache.get(sessionId)?.get(accountId) : undefined;
+	if (sessionId && cached && !cached.busy) {
+		const expired = isWebSocketSessionExpired(cached);
+		if (!expired && isWebSocketReusable(cached.socket))
+			return leaseCachedWebSocket(sessionId, accountId, cached, true);
+		forgetWebSocket(sessionId, accountId, cached);
+		closeWebSocketSilently(cached.socket, 1000, expired ? "connection_age_limit" : "done");
 	}
 
 	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
-	const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
-	accountEntries = websocketSessionCache.get(sessionId);
-	if (!accountEntries) {
-		accountEntries = new Map();
-		websocketSessionCache.set(sessionId, accountEntries);
+	// A concurrent connect may have filled the slot while this socket was opening.
+	let entries = sessionId ? websocketSessionCache.get(sessionId) : undefined;
+	if (!sessionId || cached?.busy || entries?.has(accountId)) {
+		return { socket, reused: false, release: () => closeWebSocketSilently(socket) };
 	}
-	accountEntries.set(accountId, entry);
-	return {
-		socket,
-		entry,
-		reused: false,
-		release: ({ keep } = {}) => {
-			if (!keep || !isWebSocketReusable(entry.socket)) {
-				closeWebSocketSilently(entry.socket);
-				if (entry.idleTimer) clearTimeout(entry.idleTimer);
-				const currentEntries = websocketSessionCache.get(sessionId);
-				if (currentEntries?.get(accountId) === entry) currentEntries.delete(accountId);
-				if (currentEntries?.size === 0) websocketSessionCache.delete(sessionId);
-				return;
-			}
-			entry.busy = false;
-			scheduleSessionWebSocketExpiry(sessionId, accountId, entry);
-		},
-	};
+	if (!entries) {
+		entries = new Map();
+		websocketSessionCache.set(sessionId, entries);
+	}
+	const entry: CachedWebSocketConnection = { socket, busy: true, createdAt: Date.now() };
+	entries.set(accountId, entry);
+	return leaseCachedWebSocket(sessionId, accountId, entry, false);
 }
 
 function extractWebSocketError(event: unknown): Error {
@@ -1391,7 +1391,7 @@ function extractWebSocketCloseError(event: unknown): Error {
 	return new Error("WebSocket closed");
 }
 
-async function decodeWebSocketData(data: unknown): Promise<string | null> {
+function decodeWebSocketData(data: unknown): string | null | Promise<string> {
 	if (typeof data === "string") return data;
 	if (data instanceof ArrayBuffer) {
 		return new TextDecoder().decode(new Uint8Array(data));
@@ -1402,8 +1402,7 @@ async function decodeWebSocketData(data: unknown): Promise<string | null> {
 	}
 	if (data && typeof data === "object" && "arrayBuffer" in data) {
 		const blobLike = data as { arrayBuffer: () => Promise<ArrayBuffer> };
-		const arrayBuffer = await blobLike.arrayBuffer();
-		return new TextDecoder().decode(new Uint8Array(arrayBuffer));
+		return blobLike.arrayBuffer().then((bytes) => new TextDecoder().decode(new Uint8Array(bytes)));
 	}
 	return null;
 }
@@ -1413,7 +1412,9 @@ async function* parseWebSocket(
 	signal?: AbortSignal,
 	idleTimeoutMs?: number,
 ): AsyncGenerator<Record<string, unknown>> {
-	const queue: Record<string, unknown>[] = [];
+	const queue = new FifoQueue<Record<string, unknown>>();
+	let waitingFrames: FifoQueue<unknown> | undefined;
+	let pendingError: Error | undefined;
 	let pending: (() => void) | null = null;
 	let done = false;
 	let failed: Error | null = null;
@@ -1426,50 +1427,83 @@ async function* parseWebSocket(
 		resolve();
 	};
 
-	const onMessage: WebSocketListener = (event) => {
-		void (async () => {
-			let text: string | null = null;
-			try {
-				if (!event || typeof event !== "object" || !("data" in event)) return;
-				text = await decodeWebSocketData((event as { data?: unknown }).data);
-				if (!text) return;
-				const parsed = JSON.parse(text) as Record<string, unknown>;
-				const type = typeof parsed.type === "string" ? parsed.type : "";
-				if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
-					sawCompletion = true;
-					done = true;
-				}
-				queue.push(parsed);
-				wake();
-			} catch (cause) {
-				failed = new CodexProtocolError(`Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`, {
-					cause,
-					payload: text,
-				});
+	const invalid = (cause: unknown, payload: string | null) => {
+		failed = new CodexProtocolError(`Invalid Codex WebSocket JSON: ${formatThrownValue(cause)}`, { cause, payload });
+		done = true;
+		wake();
+	};
+
+	const accept = (text: string | null) => {
+		if (!text || done) return;
+		try {
+			const parsed = JSON.parse(text) as Record<string, unknown>;
+			const type = parsed.type;
+			if (type === "response.completed" || type === "response.done" || type === "response.incomplete") {
+				sawCompletion = true;
+				done = true;
+			}
+			queue.enqueue(parsed);
+			wake();
+		} catch (cause) {
+			invalid(cause, text);
+		}
+	};
+
+	const decode = (data: unknown): void | Promise<void> => {
+		const text = decodeWebSocketData(data);
+		if (text !== null && typeof text !== "string") return text.then(accept);
+		accept(text);
+	};
+
+	// A Blob can finish decoding after subsequent text frames or the socket close. Keep that arrival order.
+	const drain = async (first: Promise<void>) => {
+		try {
+			await first;
+			while (!done && waitingFrames?.length) {
+				const decoded = decode(waitingFrames.dequeue());
+				if (decoded) await decoded;
+			}
+		} catch (cause) {
+			if (!done) invalid(cause, null);
+		} finally {
+			waitingFrames = undefined;
+			if (pendingError && !done) {
+				failed = pendingError;
 				done = true;
 				wake();
 			}
-		})();
+		}
 	};
 
-	const onError: WebSocketListener = (event) => {
-		failed = extractWebSocketError(event);
-		done = true;
-		wake();
+	const onMessage: WebSocketListener = (event) => {
+		if (done || pendingError || !event || typeof event !== "object" || !("data" in event)) return;
+		try {
+			if (waitingFrames) {
+				waitingFrames.enqueue(event.data);
+				return;
+			}
+			const decoded = decode(event.data);
+			if (decoded) {
+				waitingFrames = new FifoQueue();
+				void drain(decoded);
+			}
+		} catch (cause) {
+			invalid(cause, null);
+		}
 	};
 
-	const onClose: WebSocketListener = (event) => {
-		if (sawCompletion) {
-			done = true;
-			wake();
+	const endSocket = (error: Error) => {
+		if (done) return;
+		if (waitingFrames) {
+			pendingError ??= error;
 			return;
 		}
-		if (!failed) {
-			failed = extractWebSocketCloseError(event);
-		}
+		failed = error;
 		done = true;
 		wake();
 	};
+	const onError: WebSocketListener = (event) => endSocket(extractWebSocketError(event));
+	const onClose: WebSocketListener = (event) => endSocket(extractWebSocketCloseError(event));
 
 	const onAbort = () => {
 		failed = new Error("Request was aborted");
@@ -1488,7 +1522,7 @@ async function* parseWebSocket(
 				throw new Error("Request was aborted");
 			}
 			if (queue.length > 0) {
-				yield queue.shift()!;
+				yield queue.dequeue()!;
 				continue;
 			}
 			if (done) break;
@@ -1519,16 +1553,13 @@ async function* parseWebSocket(
 			throw new Error("WebSocket stream closed before response.completed");
 		}
 	} finally {
+		done = true;
+		waitingFrames = undefined;
 		socket.removeEventListener("message", onMessage);
 		socket.removeEventListener("error", onError);
 		socket.removeEventListener("close", onClose);
 		signal?.removeEventListener("abort", onAbort);
 	}
-}
-
-function requestBodyWithoutInput(body: RequestBody): RequestBody {
-	const { input: _input, previous_response_id: _previousResponseId, ...rest } = body;
-	return rest;
 }
 
 const { isRawJSON } = JSON as unknown as { isRawJSON?: (value: unknown) => boolean };
@@ -1578,74 +1609,117 @@ function isPlainJsonRecord(value: object): boolean {
 	return proto === Object.prototype || (proto === null && !isRawJSON?.(value));
 }
 
-/**
- * Whether JSON.stringify(a ?? []) === JSON.stringify(b ?? []), without serializing the items that are the same plain
- * data (with the request cache, the previous request's items themselves). The JSON of an array is its items' JSON
- * joined with commas, and two arrays' JSON can only be equal item by item, so the other items are compared alone.
- */
-function responseInputsEqual(a: ResponseInput | undefined, b: ResponseInput | undefined): boolean {
-	const left: readonly unknown[] = a ?? [];
-	const right: readonly unknown[] = b ?? [];
-	const wholeArrays = () => JSON.stringify(left) === JSON.stringify(right);
-	if (hasToJSON(left) || hasToJSON(right)) return wholeArrays();
-	if (left.length !== right.length) return false;
-	for (let i = 0; i < left.length; i++) {
-		const x = left[i];
-		const y = right[i];
-		if (sameJsonData(x, y, 0)) continue;
-		// In the array an item's own toJSON is given its index as the key; serialized alone it would get "".
-		if (hasToJSON(x) || hasToJSON(y)) return wholeArrays();
-		// An item that serializes to nothing (undefined, a function) is null in an array.
-		if ((JSON.stringify(x) ?? "null") !== (JSON.stringify(y) ?? "null")) return false;
+function hasToolSchema(item: unknown): boolean {
+	return typeof item === "object" && item !== null && "tools" in item;
+}
+
+/** The spelling matters for raw JSON numbers. Parsing them can lose precision. */
+class SentJson {
+	readonly text: string;
+	constructor(text: string) {
+		this.text = text;
 	}
-	return true;
 }
 
-function requestBodiesMatchExceptInput(a: RequestBody, b: RequestBody): boolean {
-	const left = requestBodyWithoutInput(a);
-	const right = requestBodyWithoutInput(b);
-	return sameJsonData(left, right, 0) || JSON.stringify(left) === JSON.stringify(right);
+/** Serialize an input element at its actual array index. A custom toJSON may use that index. */
+function encodeInputItem(value: unknown, index: number): string {
+	if (value !== null && (typeof value === "object" || typeof value === "function" || typeof value === "bigint")) {
+		const boxed = (typeof value === "bigint" ? Object(value) : value) as { toJSON?: (key: string) => unknown };
+		if ("toJSON" in boxed) {
+			const serializer = boxed.toJSON;
+			return (
+				JSON.stringify({
+					toJSON: () =>
+						typeof serializer === "function" ? Reflect.apply(serializer, value, [String(index)]) : value,
+				}) ?? "null"
+			);
+		}
+	}
+	return JSON.stringify(value) ?? "null";
 }
 
-function getCachedWebSocketInputDelta(
+interface WebSocketFrame {
+	wire: string;
+	inputCount: number;
+	previousId?: string;
+	next?: Omit<CachedWebSocketContinuationState, "lastResponseId">;
+}
+
+function prepareWebSocketFrame(
 	body: RequestBody,
-	continuation: CachedWebSocketContinuationState,
-): ResponseInput | undefined {
-	if (!requestBodiesMatchExceptInput(body, continuation.lastRequestBody)) {
-		return undefined;
+	entry: CachedWebSocketConnection | undefined,
+	hooked: boolean,
+): WebSocketFrame {
+	const frame = { type: "response.create", ...body };
+	const current = frame.input;
+	if (
+		!entry ||
+		!Array.isArray(current) ||
+		Object.hasOwn(frame, "previous_response_id") ||
+		frame.type !== "response.create" ||
+		hasToJSON(frame) ||
+		hasToJSON(current) ||
+		Object.getPrototypeOf(current) !== Array.prototype
+	) {
+		return { wire: JSON.stringify(frame), inputCount: current?.length ?? 0, previousId: frame.previous_response_id };
 	}
 
-	const currentInput = body.input ?? [];
-	const baseline = [...(continuation.lastRequestBody.input ?? []), ...continuation.lastResponseItems];
-	if (currentInput.length < baseline.length) {
-		return undefined;
+	// Keep input in its original position. Settings after it can have serializers that the input affects.
+	const before: Record<string, unknown> = Object.create(null);
+	const after: Record<string, unknown> = Object.create(null);
+	let settings = before;
+	for (const [key, value] of Object.entries(frame)) {
+		if (key === "input") settings = after;
+		else settings[key] = value;
 	}
-
-	const prefix = currentInput.slice(0, baseline.length);
-	if (!responseInputsEqual(prefix, baseline)) {
-		return undefined;
+	const start = JSON.stringify(before).slice(0, -1);
+	const head = start + (start === "{" ? "" : ",") + '"input":';
+	const prior = entry.continuation;
+	const count = current.length;
+	let matched = prior && prior.head === head && prior.input.length <= count ? prior : undefined;
+	const priorCount = matched?.input.length ?? 0;
+	const captured = matched?.input ?? [];
+	for (let i = 0; i < count; i++) {
+		const item = current[i]!;
+		const previous = matched?.input[i];
+		if (!hooked && matched && i < priorCount && previous === item) continue;
+		if (hooked || hasToolSchema(item)) {
+			const text = encodeInputItem(item, i);
+			if (
+				matched &&
+				i < priorCount &&
+				(previous instanceof SentJson ? previous.text : encodeInputItem(previous, i)) !== text
+			)
+				matched = undefined;
+			captured[i] = previous instanceof SentJson && previous.text === text ? previous : new SentJson(text);
+		} else {
+			if (matched && i < priorCount && item !== previous) {
+				if (
+					previous instanceof SentJson
+						? encodeInputItem(item, i) !== previous.text
+						: !sameJsonData(item, previous, 0) && encodeInputItem(item, i) !== encodeInputItem(previous, i)
+				)
+					matched = undefined;
+			}
+			captured[i] = item;
+		}
 	}
-
-	return currentInput.slice(baseline.length);
-}
-
-function buildCachedWebSocketRequestBody(entry: CachedWebSocketConnection, body: RequestBody): RequestBody {
-	const continuation = entry.continuation;
-	if (!continuation) {
-		return body;
-	}
-
-	const delta = getCachedWebSocketInputDelta(body, continuation);
-	if (!delta || !continuation.lastResponseId) {
-		entry.continuation = undefined;
-		return body;
-	}
-
-	return {
-		...body,
-		previous_response_id: continuation.lastResponseId,
-		input: delta,
-	};
+	const end = JSON.stringify(after).slice(1);
+	const tail = end === "}" ? end : "," + end;
+	if (matched?.tail !== tail) matched = undefined;
+	const from = matched ? priorCount : 0;
+	const suffix = from ? captured.slice(from) : captured;
+	const encoded = suffix.some((item) => item instanceof SentJson)
+		? "[" +
+			suffix.map((item, i) => (item instanceof SentJson ? item.text : encodeInputItem(item, from + i))).join(",") +
+			"]"
+		: JSON.stringify(suffix);
+	const previousId = matched?.lastResponseId;
+	const wire =
+		head +
+		encoded +
+		(previousId ? tail.slice(0, -1) + `,"previous_response_id":${JSON.stringify(previousId)}}` : tail);
+	return { wire, inputCount: count - from, previousId, next: { head, tail, input: captured } };
 }
 
 async function* startWebSocketOutputOnFirstEvent(
@@ -1672,6 +1746,7 @@ async function processWebSocketStream(
 	onStart: () => void,
 	idleTimeoutMs: number | undefined,
 	websocketConnectTimeoutMs: number | undefined,
+	hooked: boolean,
 	cacheSessionId: string | undefined,
 	accountId: string,
 	grammarToolInputProperties: ReadonlyMap<string, string>,
@@ -1690,28 +1765,29 @@ async function processWebSocketStream(
 	const useCachedContext = options?.transport === "websocket-cached" || options?.transport === "auto";
 	// ChatGPT Codex Responses rejects `store: true` ("Store must be set to false").
 	// WebSocket continuation still works via connection-scoped previous_response_id state.
-	const fullBody = body;
-	const requestBody = useCachedContext && entry ? buildCachedWebSocketRequestBody(entry, fullBody) : fullBody;
-	const stats = cacheSessionId ? getOrCreateWebSocketDebugStats(cacheSessionId) : undefined;
-	if (stats) {
-		stats.requests++;
-		if (reused) stats.connectionsReused++;
-		else stats.connectionsCreated++;
-		if (useCachedContext) stats.cachedContextRequests++;
-		if (requestBody.store === true) stats.storeTrueRequests++;
-		stats.lastInputItems = requestBody.input?.length ?? 0;
-		if (requestBody.previous_response_id) {
-			stats.deltaRequests++;
-			stats.lastDeltaInputItems = requestBody.input?.length ?? 0;
-			stats.lastPreviousResponseId = requestBody.previous_response_id;
-		} else {
-			stats.fullContextRequests++;
-			stats.lastDeltaInputItems = undefined;
-			stats.lastPreviousResponseId = undefined;
-		}
-	}
 	try {
-		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+		const prepared = prepareWebSocketFrame(body, useCachedContext ? entry : undefined, hooked);
+
+		const stats = cacheSessionId ? getOrCreateWebSocketDebugStats(cacheSessionId) : undefined;
+		if (stats) {
+			stats.requests++;
+			if (reused) stats.connectionsReused++;
+			else stats.connectionsCreated++;
+			if (useCachedContext) stats.cachedContextRequests++;
+			if (body.store === true) stats.storeTrueRequests++;
+			stats.lastInputItems = prepared.inputCount;
+			if (prepared.previousId) {
+				stats.deltaRequests++;
+				stats.lastDeltaInputItems = prepared.inputCount;
+				stats.lastPreviousResponseId = prepared.previousId;
+			} else {
+				stats.fullContextRequests++;
+				stats.lastDeltaInputItems = undefined;
+				stats.lastPreviousResponseId = undefined;
+			}
+		}
+		socket.send(prepared.wire);
+		const accepted = prepared.next;
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
 				mapCodexEvents(
@@ -1734,21 +1810,17 @@ async function processWebSocketStream(
 		);
 		if (options?.signal?.aborted) {
 			keepConnection = false;
-		} else if (useCachedContext && entry && output.responseId) {
+		} else if (accepted && entry && output.responseId) {
 			const responseItems = convertResponsesMessages(
 				model,
 				normalizeContext({ messages: [output] }),
 				CODEX_TOOL_CALL_PROVIDERS,
-				{
-					includeSystemPrompt: false,
-					grammarToolInputProperties,
-				},
+				{ grammarToolInputProperties },
 			).filter((item) => item.type !== "function_call_output" && item.type !== "custom_tool_call_output");
-			entry.continuation = {
-				lastRequestBody: fullBody,
-				lastResponseId: output.responseId,
-				lastResponseItems: responseItems,
-			};
+			for (const item of responseItems) accepted.input.push(item);
+			entry.continuation = { ...accepted, lastResponseId: output.responseId };
+		} else if (entry) {
+			entry.continuation = undefined;
 		}
 	} catch (error) {
 		if (entry) {

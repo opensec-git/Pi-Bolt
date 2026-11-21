@@ -88,7 +88,7 @@ function mouse(y: number, width = 20, height = 100): TuiMouseEvent {
 }
 
 /** What a container of these children renders to, from nothing. */
-function fresh(children: Component[], width = 20): string[] {
+function fresh(children: Component[], width = 20): readonly string[] {
 	const container = new Container();
 	for (const child of children) container.addChild(child);
 	return container.render(width);

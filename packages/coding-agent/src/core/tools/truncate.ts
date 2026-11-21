@@ -105,6 +105,13 @@ export function formatSize(bytes: number): string {
  * returns empty content with firstLineExceedsLimit=true.
  */
 export function truncateHead(content: string, options: TruncationOptions = {}): TruncationResult {
+	const result = truncateHeadView(content, options);
+	if (result.truncated && result.content.length > 0) result.content = copyString(result.content);
+	return result;
+}
+
+/** Same head and metadata as truncateHead. The caller must detach the returned slice before retaining it. */
+export function truncateHeadView(content: string, options: TruncationOptions = {}): TruncationResult {
 	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
@@ -188,7 +195,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	}
 
 	return {
-		content: copyString(content.slice(0, outputEnd)),
+		content: content.slice(0, outputEnd),
 		truncated: true,
 		truncatedBy,
 		totalLines,

@@ -125,6 +125,37 @@ describe("Markdown component", () => {
 		});
 	});
 
+	describe("Images", () => {
+		it("keeps hard breaks after an inline image as separate rows", () => {
+			setCapabilities({ images: "kitty", trueColor: false, hyperlinks: false });
+			const image = "\x1b_Ga=T,f=100,q=2,c=20,r=3,C=1;AAAA\x1b\\";
+			// (Pi-Bolt removes escape sequences from the text given to setText(): an image comes in through a transform, as an
+			// extension's Markdown transformer adds it.)
+			const source = `\`${image}\`  \n\` \`  \n\` \`\n\n- one`;
+			const markdown = new Markdown("image", 0, 0, defaultMarkdownTheme, undefined, { transform: () => source });
+			const lines = markdown.render(80);
+			assert.ok(lines.every((line) => !line.includes("\n")));
+			assert.ok(lines[0].includes(image));
+			assert.deepStrictEqual(
+				lines.slice(1).map((line) => stripAnsi(line).trim()),
+				["", "", "", "- one"],
+			);
+		});
+
+		it("keeps hard breaks after an inline image as separate rows when the paragraph is the last block", () => {
+			setCapabilities({ images: "kitty", trueColor: false, hyperlinks: false });
+			const image = "\x1b_Ga=T,f=100,q=2,c=20,r=3,C=1;AAAA\x1b\\";
+			// A last paragraph of 1 KB or more, still streaming, takes the resumable-paragraph path: it must split image lines too.
+			const source = `\`${image}\`  \n${"word ".repeat(220).trim()}`;
+			const markdown = new Markdown("image", 0, 0, defaultMarkdownTheme, undefined, { transform: () => source });
+			const lines = markdown.render(80);
+			assert.ok(lines.every((line) => !line.includes("\n")));
+			assert.ok(lines[0].includes(image));
+			assert.ok(!lines[0].includes("word"));
+			assert.ok(lines.slice(1).every((line) => stripAnsi(line).trim().startsWith("word")));
+		});
+	});
+
 	describe("Lists", () => {
 		it("should render simple nested list", () => {
 			const markdown = new Markdown(

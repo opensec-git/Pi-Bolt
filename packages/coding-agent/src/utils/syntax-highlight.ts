@@ -248,14 +248,62 @@ function spanClass(node: { kind?: string; sublanguage?: boolean }, classPrefix: 
 	return node.sublanguage ? node.kind : `${classPrefix}${node.kind}`;
 }
 
+/** Visit in emission order. Reuse a frame at each depth so nesting uses heap space bounded by tree depth. */
+function visitTokenTree(
+	root: TokenNode,
+	classPrefix: string,
+	text: (value: string) => void,
+	open: (className: string) => boolean,
+	close: () => void,
+): boolean {
+	const frames = [{ children: [root], next: 0, wrapped: false }];
+	let depth = 0;
+	while (depth >= 0) {
+		const frame = frames[depth]!;
+		if (frame.next === frame.children.length) {
+			if (frame.wrapped) close();
+			depth--;
+			continue;
+		}
+		const node = frame.children[frame.next++]!;
+		if (typeof node === "string") {
+			text(node);
+			continue;
+		}
+		if (!node.children) continue;
+		const className = spanClass(node, classPrefix);
+		if (className !== undefined && !open(className)) return false;
+		depth++;
+		const next = frames[depth];
+		if (next) {
+			next.children = node.children;
+			next.next = 0;
+			next.wrapped = className !== undefined;
+		} else {
+			frames.push({ children: node.children, next: 0, wrapped: className !== undefined });
+		}
+	}
+	return true;
+}
+
 /** What HTMLRenderer makes of a token tree: each text escaped, each node with a kind in a span with its class. */
 function tokenTreeHtml(node: TokenNode, classPrefix: string): string {
-	if (typeof node === "string") return escapeHtml(node);
-	if (!node.children) return "";
-	const className = spanClass(node, classPrefix);
-	let html = className === undefined ? "" : `<span class="${className}">`;
-	for (const child of node.children) html += tokenTreeHtml(child, classPrefix);
-	return className === undefined ? html : `${html}${SPAN_CLOSE}`;
+	let html = "";
+	visitTokenTree(
+		node,
+		classPrefix,
+		(text) => {
+			html += escapeHtml(text);
+		},
+		(className) => {
+			html += `<span class="${className}">`;
+			return true;
+		},
+		() => {
+			html += SPAN_CLOSE;
+		},
+	);
+	return html;
 }
 
 /** The HTML each emitter's toHTML() returned, and the class prefix it was made with (FastHtmlEmitter). */
@@ -307,14 +355,13 @@ function renderHighlightedTree(root: TokenNode, classPrefix: string, theme: High
 				.join("\n");
 		textBuffer = "";
 	};
-	const walk = (node: TokenNode): boolean => {
-		if (typeof node === "string") {
-			textBuffer += node;
-			return true;
-		}
-		if (!node.children) return true;
-		const className = spanClass(node, classPrefix);
-		if (className !== undefined) {
+	const rendered = visitTokenTree(
+		root,
+		classPrefix,
+		(text) => {
+			textBuffer += text;
+		},
+		(className) => {
 			if (className.includes(">")) return false;
 			let scope = scopesOfClasses.get(className);
 			if (scope === undefined && !scopesOfClasses.has(className)) {
@@ -323,17 +370,14 @@ function renderHighlightedTree(root: TokenNode, classPrefix: string, theme: High
 			}
 			flushText();
 			scopes.push(scope);
-		}
-		for (const child of node.children) {
-			if (!walk(child)) return false;
-		}
-		if (className !== undefined) {
+			return true;
+		},
+		() => {
 			flushText();
 			scopes.pop();
-		}
-		return true;
-	};
-	if (!walk(root)) return undefined;
+		},
+	);
+	if (!rendered) return undefined;
 	flushText();
 	return output;
 }
@@ -453,6 +497,10 @@ export const INCREMENTAL_HIGHLIGHT_LANGUAGES: readonly string[] = [
 	"diff",
 	"sql",
 	"yaml",
+	"swift",
+	"kotlin",
+	"dart",
+	"lua",
 ];
 
 /** Whether a compiled grammar is one of INCREMENTAL_HIGHLIGHT_LANGUAGES. */

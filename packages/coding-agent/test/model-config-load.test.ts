@@ -45,6 +45,21 @@ describe("ModelConfig.load", () => {
 		expect(fixed.getProviderIds()).toEqual(["one"]);
 	});
 
+	it("freezes the same nested settings from JSON and from a commented file with trailing commas", async () => {
+		const document = {
+			providers: { one: { ...provider("One // literal"), models: [{ id: "a", input: ["text"] }] } },
+		};
+		const json = JSON.stringify(document);
+		for (const text of [json, `\uFEFF// models\n${json.slice(0, -1)},}`]) {
+			writeFileSync(path, text);
+			const config = await ModelConfig.load(path);
+			expect(config.getError()).toBeUndefined();
+			const entry = config.getProvider("one");
+			expect(entry).toEqual(document.providers.one);
+			expect(Object.isFrozen(entry?.models?.[0].input)).toBe(true);
+		}
+	});
+
 	it("accepts and rejects files as TypeBox decides, and explains a rejected one with TypeBox's errors", async () => {
 		const model = { id: "m", contextWindow: 1000, maxTokens: 100, input: ["text"] };
 		const cases: [unknown, string | undefined][] = [

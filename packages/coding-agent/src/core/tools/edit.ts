@@ -3,6 +3,7 @@ import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } 
 import type { Static } from "typebox";
 import { splitBom } from "../../utils/text.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
+import { processHeapBytes, runtimeFullCollection } from "../idle-gc.ts";
 import {
 	applyEditsToNormalizedContent,
 	applyReplacementsToOriginal,
@@ -114,11 +115,16 @@ function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] 
 	return { path: input.path, edits: input.edits };
 }
 
+// Large edits can finish back to back before Bun reclaims their temporary strings and buffers.
+const LARGE_EDIT_BYTES = 1024 * 1024;
+const LARGE_EDIT_HEAP_GROWTH = 128 * 1024 * 1024;
+
 export function createEditToolDefinition(
 	cwd: string,
 	options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails | undefined, EditRenderState> {
 	const ops = options?.operations ?? defaultEditOperations;
+	let largeEditHeapFloor: number | undefined;
 	return {
 		name: "edit",
 		label: "edit",
@@ -158,6 +164,19 @@ export function createEditToolDefinition(
 
 				// Read the file.
 				const buffer = await ops.readFile(absolutePath);
+				throwIfAborted();
+				if (buffer.byteLength >= LARGE_EDIT_BYTES) {
+					const collect = runtimeFullCollection();
+					if (collect) {
+						const heap = processHeapBytes();
+						largeEditHeapFloor = Math.min(largeEditHeapFloor ?? heap, heap);
+						if (heap - largeEditHeapFloor >= LARGE_EDIT_HEAP_GROWTH) {
+							// Previous edits have finished using their intermediate text. Collect before decoding the next file.
+							collect();
+							largeEditHeapFloor = processHeapBytes();
+						}
+					}
+				}
 				const rawContent = buffer.toString("utf-8");
 				throwIfAborted();
 

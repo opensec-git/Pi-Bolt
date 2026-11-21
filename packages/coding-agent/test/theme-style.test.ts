@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { colorToHex, Markdown, okhslColor, styleText } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
+import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import {
 	getMarkdownTheme,
 	initTheme,
@@ -126,6 +127,26 @@ describe("mdCodeBlockBg", () => {
 			json.colors.mdCodeBlockBg = "#304050";
 		});
 		expect(theme.getBgAnsi("mdCodeBlockBg")).not.toBe(theme.getBgAnsi("toolPendingBg"));
+	});
+
+	it("shares transcript styles until indentation changes and keeps old rows responsive to shading", () => {
+		let indent = "  ";
+		const mode: {
+			runtimeHost: { session: { settingsManager: { getCodeBlockIndent(): string } } };
+			getMarkdownThemeWithSettings(): ReturnType<typeof getMarkdownTheme>;
+		} = Object.create(InteractiveMode.prototype);
+		mode.runtimeHost = { session: { settingsManager: { getCodeBlockIndent: () => indent } } };
+		const original = mode.getMarkdownThemeWithSettings();
+		expect(mode.getMarkdownThemeWithSettings()).toBe(original);
+		indent = "";
+		const updated = mode.getMarkdownThemeWithSettings();
+		expect(updated.codeBlockIndent).toBe("");
+		expect(original.codeBlockIndent).toBe("  ");
+		setShadedCodeBlocks(true);
+		expect(original.codeBlockBg).toBeTypeOf("function");
+		expect(updated.codeBlockBg).toBe(original.codeBlockBg);
+		setShadedCodeBlocks(false);
+		expect(original.codeBlockBg).toBeUndefined();
 	});
 
 	it("only shades code blocks in the markdown theme when enabled", () => {

@@ -81,6 +81,19 @@ describe("loadEntriesFromFile", () => {
 		expect(entries[1].type).toBe("message");
 	});
 
+	it("preserves UTF-8 across reads in large entries and repairs an unterminated final entry", () => {
+		const file = join(tempDir, "large.jsonl");
+		const header = '{"type":"session","id":"test"}\n';
+		const prefix = '{"type":"custom","data":"';
+		// The four-byte character straddles the first 1 MiB read boundary.
+		const text = `${"a".repeat(1024 * 1024 - header.length - prefix.length - 1)}🚀${"b".repeat(2 * 1024 * 1024)}`;
+		const entry = { type: "custom", data: text };
+		const content = `${header}${JSON.stringify(entry)}\nmalformed\n${JSON.stringify(entry)}`;
+		writeFileSync(file, content);
+		expect(loadEntriesFromFile(file)).toEqual([JSON.parse(header), entry, entry]);
+		expect(readFileSync(file, "utf8")).toBe(`${content}\n`);
+	});
+
 	it("skips malformed lines but keeps valid ones", () => {
 		const file = join(tempDir, "mixed.jsonl");
 		writeFileSync(
@@ -509,5 +522,36 @@ describe("SessionManager session file creation", () => {
 
 		session.appendMessage(userMsg("second question"));
 		expect(readSessionFileRoles(session.getSessionFile()!)).toEqual(["session", "model_change", "user"]);
+	});
+});
+
+describe("SessionManager listing abort", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "session-list-abort-"));
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	// #11956
+	it("does not crash when aborted after a file that is not a session was skipped", async () => {
+		// Larger than one 64 KB stream chunk, so the file is still being read when the listing skips it.
+		writeFileSync(join(tempDir, "other.jsonl"), `{"type":"other"}\n${"x".repeat(1024 * 1024)}\n`);
+		const controller = new AbortController();
+		const uncaught: unknown[] = [];
+		const onUncaught = (error: unknown) => uncaught.push(error);
+		process.on("uncaughtException", onUncaught);
+		try {
+			expect(await SessionManager.listAll(tempDir, undefined, controller.signal)).toEqual([]);
+			// The session picker aborts its loads when it closes, after files were skipped.
+			controller.abort();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			process.off("uncaughtException", onUncaught);
+		}
+		expect(uncaught).toEqual([]);
 	});
 });

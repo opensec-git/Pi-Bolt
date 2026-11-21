@@ -7,7 +7,7 @@ import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
-import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
+import { createAllToolRenderers, withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -95,6 +95,31 @@ describe("ToolExecutionComponent parity", () => {
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call");
 		expect(rendered).toContain("custom result");
+	});
+
+	test.each(["default", "self"] as const)("drops replaced image children in the %s shell", (renderShell) => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const definition = { ...createBaseToolDefinition(), renderShell, renderCall: () => new Text("call", 0, 0) };
+		const row = new ToolExecutionComponent("tool", "id", {}, {}, definition, createFakeTui(), process.cwd());
+		const png = {
+			type: "image",
+			mimeType: "image/png",
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==",
+		};
+		const text = { type: "text", text: "finished" };
+		row.updateResult({ content: [png, text, png], isError: false }, true);
+		const original = row.render(100).join("\n");
+		expect(original.split(png.data)).toHaveLength(3);
+		row.invalidate();
+		expect(row.render(100).join("\n")).toBe(original);
+		row.setShowImages(false);
+		expect(row.render(100).join("\n")).not.toContain(png.data);
+		row.setShowImages(true);
+		expect(row.render(100).join("\n").split(png.data)).toHaveLength(3);
+		row.updateResult({ content: [text], isError: false });
+		const finished = row.render(100).join("\n");
+		expect(finished).toContain("finished");
+		expect(finished).not.toContain(png.data);
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {
@@ -784,6 +809,58 @@ describe("ToolExecutionComponent parity", () => {
 			expect(expanded).toContain(scenario.hidden);
 		});
 	}
+
+	test("only reads inside the current package get compact documentation labels", () => {
+		const cwd = process.cwd();
+		const root = join(cwd, "fixture-pi");
+		const render = (path: string) => {
+			const row = new ToolExecutionComponent(
+				"read",
+				"doc-read",
+				{ path },
+				{},
+				createReadToolDefinition(cwd),
+				createFakeTui(),
+				cwd,
+			);
+			return stripAnsi(row.render(120).join("\n"));
+		};
+		vi.stubEnv("PI_PACKAGE_DIR", root);
+		try {
+			for (const [path, label] of [
+				[join(root, "docs", "AGENTS.md"), "read docs docs/AGENTS.md"],
+				[join(root, "examples", "sub", "hello.ts"), "read docs examples/sub/hello.ts"],
+				[join(root, "docs", "skill", "SKILL.md"), "[skill] skill"],
+			] as const) {
+				expect(render(path)).toContain(label);
+			}
+			for (const parts of [
+				["src", "README.md"],
+				["mydocs", "guide.md"],
+				["..", "other", "docs", "guide.md"],
+			]) {
+				expect(render(join(root, ...parts))).not.toContain("read docs ");
+			}
+			vi.stubEnv("PI_PACKAGE_DIR", join(cwd, "other"));
+			expect(render(join(root, "docs", "guide.md"))).not.toContain("read docs ");
+			expect(render(join(cwd, "other", "docs", "guide.md"))).toContain("read docs docs/guide.md");
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	test("renderer maps keep their own shell renderers and preserve explicit tool overrides", () => {
+		const first = createAllToolRenderers();
+		const second = createAllToolRenderers();
+		expect(first).not.toBe(second);
+		for (const name of ["bash", "powershell"] as const) {
+			expect(first[name].renderCall).not.toBe(second[name].renderCall);
+			expect(first[name].renderResult).not.toBe(second[name].renderResult);
+		}
+		const override = { renderCall: vi.fn() };
+		expect(withBuiltInRenderers("read", override)).toEqual({ ...override, renderResult: first.read.renderResult });
+		expect(withBuiltInRenderers("extension-tool", override)).toBe(override);
+	});
 
 	for (const scenario of [
 		{ title: "SKILL.md", path: join(process.cwd(), "attio", "SKILL.md"), compact: "[skill] attio:120-329" },

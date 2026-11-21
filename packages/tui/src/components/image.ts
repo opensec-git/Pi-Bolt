@@ -91,7 +91,7 @@ export class Image implements Component {
 		reportRenderChange(this);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		if (this.cachedLines && this.cachedWidth === width) {
 			return this.cachedLines;
 		}

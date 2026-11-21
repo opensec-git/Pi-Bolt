@@ -1,0 +1,8 @@
+Follow-up on Linux (drivers/answer.py --modes rpc,tui --rounds 36; drivers/idle.py --rounds 10 --seconds 15):
+date: 2026-11-21T22:02:17Z
+host: Linux 7.0.0-15-generic x86_64
+cpu: AMD EPYC 9355P 32-Core Processor, 64 threads
+load: 55.10 37.80 36.91
+build 1.2.1: the bolt-v1.2.1 release archive pi-bolt-linux-x64.tar.xz, pi-bolt-linux-x64/pi
+build 1.3.0: built from release/1.3.0 at 03338d997 with the bolt-v1.3.0 draft runtime, pi-start
+build 1.3.0-pi: built from release/1.3.0 at 03338d997 with the bolt-v1.3.0 draft runtime, pi (the same build started without pi-start)

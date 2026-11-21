@@ -57,6 +57,24 @@ describe("writeRawStdout", () => {
 		expect(writes).toEqual(["a\n", "b\nc\n"]);
 	});
 
+	it("submits large records separately and keeps later replies behind a retried batch", async () => {
+		const large = "界".repeat(70 * 1024);
+		completeSynchronously = false;
+		for (const record of ["prefix", large, "a", "b", large, "suffix"]) writeRawStdout(record);
+		const drain = waitForRawStdoutBackpressure();
+		await nextTask();
+		expect(writes).toEqual(["prefix"]);
+		pendingCallbacks.shift()?.();
+		expect(writes).toEqual(["prefix", large]);
+		pendingCallbacks.shift()?.(Object.assign(new Error("retry"), { code: "EAGAIN" }));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(writes).toEqual(["prefix", large, large]);
+		completeSynchronously = true;
+		pendingCallbacks.shift()?.();
+		await drain;
+		expect(writes).toEqual(["prefix", large, large, "ab", large, "suffix"]);
+	});
+
 	it("retries a write that failed with EAGAIN, before later lines", async () => {
 		failNext = Object.assign(new Error("try again"), { code: "EAGAIN" });
 		writeRawStdout("a\n");
@@ -67,12 +85,23 @@ describe("writeRawStdout", () => {
 		expect(writes).toEqual(["a\n", "a\n", "b\n"]);
 	});
 
+	it("drains a long sequence of synchronous writes without growing the call stack", async () => {
+		const line = "x".repeat(64 * 1024);
+		for (let i = 0; i < 12000; i++) writeRawStdout(line);
+		await flushRawStdout();
+		expect(writes).toHaveLength(12001);
+		expect(writes[11999]).toBe(line);
+		expect(writes[12000]).toBe("");
+	});
+
 	it("writes what is queued when the process exits before the scheduled write", () => {
+		const large = "界".repeat(70 * 1024);
+		writeRawStdout(large);
 		writeRawStdout("last\n");
 		const exitHook = process.listeners("exit").find((listener) => listener.name === "writeQueuedRawStdoutAtExit");
 		expect(exitHook).toBeDefined();
 		exitHook?.(0);
-		expect(writes).toEqual(["last\n"]);
+		expect(writes).toEqual([`${large}last\n`]);
 	});
 });
 

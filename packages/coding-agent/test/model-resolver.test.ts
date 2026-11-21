@@ -14,7 +14,6 @@ import {
 	type ModelReferenceRequest,
 	resolveCliModel,
 	resolveModelReference,
-	resolveModelScope,
 	resolveModelScopeWithDiagnostics,
 } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -385,23 +384,6 @@ describe("resolveModelScopeWithDiagnostics", () => {
 		}
 	});
 
-	test("resolveModelScope preserves CLI warning output", async () => {
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		try {
-			const registry = {
-				getAvailable: () => allModels,
-			} as unknown as Parameters<typeof resolveModelScope>[1];
-
-			const scopedModels = await resolveModelScope(["missing"], registry);
-
-			expect(scopedModels).toEqual([]);
-			expect(warn).toHaveBeenCalledOnce();
-			expect(warn.mock.calls[0][0]).toContain('Warning: No models match pattern "missing"');
-		} finally {
-			warn.mockRestore();
-		}
-	});
-
 	test("adds every provider for a pattern matching the same id on several providers, with a warning", async () => {
 		const registry = {
 			getAvailable: () => [
@@ -486,6 +468,18 @@ describe("resolveModelScopeWithDiagnostics", () => {
 });
 
 describe("resolveCliModel", () => {
+	test("materializes only the provider default for a custom model id", () => {
+		const first = mockModels[0];
+		const preferred = { ...first, id: defaultModelPerProvider.anthropic ?? first.id, contextWindow: 9000 };
+		const materialize = vi.fn((model: Model<Api>) => ({ ...model, maxTokens: 2048 }));
+		const registry = {
+			getModelChoices: () => ({ models: [first, preferred], model: materialize }),
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+		const result = resolveCliModel({ cliModel: "anthropic/local-test", modelRuntime: registry });
+		expect(materialize.mock.calls).toEqual([[preferred]]);
+		expect(result.model).toEqual({ ...preferred, maxTokens: 2048, id: "local-test", name: "local-test" });
+	});
+
 	test("does not strip invalid :suffix as thinking level in --model (treat as raw id)", () => {
 		const registry = {
 			getModels: () => allModels,
@@ -712,8 +706,9 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
-	test("openai defaults track current models", () => {
+	test("openai defaults stay GPT-6.1 Sol in Pi-Bolt", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-6.1-sol");
+		expect(defaultModelPerProvider.azure).toBe("gpt-6.1-sol");
 		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.1-sol");
 	});
 

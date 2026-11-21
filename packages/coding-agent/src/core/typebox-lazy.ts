@@ -7,8 +7,8 @@ let typeBoxModule: typeof TypeBox | undefined;
 let typeBoxValueModule: typeof TypeBoxValue | undefined;
 
 /**
- * TypeBox, loaded on first use: evaluating it costs millions of instructions, which a start pays only for a user file that
- * needs it (a theme of the user's, an invalid models.json or keybindings.json). Bundlers inline the literal require();
+ * TypeBox, loaded when a caller needs the schema builder, for example to explain an invalid theme.
+ * Bundlers inline the literal require();
  * elsewhere it resolves from node_modules.
  */
 export function loadTypeBox(): typeof TypeBox {

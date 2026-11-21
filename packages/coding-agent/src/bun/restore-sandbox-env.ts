@@ -20,7 +20,7 @@ export function restoreSandboxEnv(): void {
 	if (!process.versions?.bun) return;
 
 	// If process.env already has entries, nothing to fix.
-	if (Object.keys(process.env).length > 0) return;
+	if (Object.prototype.propertyIsEnumerable.call(process.env, "PATH") || Object.keys(process.env).length > 0) return;
 
 	try {
 		const data = readFileSync("/proc/self/environ", "utf-8");

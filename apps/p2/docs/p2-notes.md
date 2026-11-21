@@ -27,31 +27,46 @@ P2_FAKE=1 npm start          # http://127.0.0.1:8788, data in ~/.pi/p2
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `P2_DATA_DIR` | `~/.pi/p2` | data directory: `catalog.sqlite`, `server/` and `sessions/<id>/` (see **Host stores and files**), `settings.json`, `models.json`, `envs.json`, `projects.json`, `mcp.json`, `mcp-auth.json`, `auth.json`, `radius.json`, `forwards.json` |
+| `P2_DATA_DIR` | `~/.pi/p2` | data directory: `server/` and `sessions/<id>/` (see **Host stores and files**), `settings.json`, `models.json`, `envs.json`, `projects.json` (imported once, see Projects), `mcp.json`, `mcp-auth.json`, `auth.json`, `radius.json`, `forwards.json` |
 | `PORT` | `8788` | listen port (loopback only), so p2 never collides with pi-mobile on 8787 |
-| `P2_FAKE` | unset | `1`: the faux provider (`faux/faux-1`, echoes the prompt; `slow …` streams long; `rename-session <title>` calls the tool; `subagent`, `subagent-bad`, `subagent-answer`, `subagent-configure`, `subagent-send`, `subagent-archive`, `subagent-status` exercise subagents, `subagent <json>` calls the tool with those arguments, as do `team <json>`, `history_search|read|handoff <json>`, `location_envs|dirs|move <json>`, `tool_search <json>`, `terminal <json>` and `mcp__<server>__<tool> <json>`; `codemode` runs a script calling bash and read, `codemode-restart` one whose slow middle call a restart interrupts, `codemode <script>` runs that script; `artifact <json>` calls the artifact tool with those arguments; `steps` makes a turn of thinking, calls and words, `inline-steps` one with an inline artifact between two calls; `json <text>` answers exactly `<text>`; a one-shot agent whose task is not `json …`/`slow…` answers a small value matching its schema) |
+| `P2_FAKE` | unset | `1`: the faux provider (`faux/faux-1`, echoes the prompt; `slow …` streams long; `rename-session <title>` calls the tool; `subagent`, `subagent-bad`, `subagent-answer`, `subagent-configure`, `subagent-send`, `subagent-archive`, `subagent-status` exercise subagents, `subagent <json>` calls the tool with those arguments, as do `team <json>`, `history_search|read|handoff <json>`, `location_envs|dirs|move <json>`, `tool_search <json>`, `terminal <json>` and `mcp__<server>__<tool> <json>`; `codemode` runs a script calling bash and read, `codemode-restart` one whose slow middle call a restart interrupts, `codemode <script>` runs that script; `artifact` runs a script writing the html artifact `demo` and showing it; `view_<name> <json>` and `artifact_<name> <json>` call those tools directly (refused: they are code mode only); `steps` makes a turn of thinking, calls and words, `inline-steps` one with an inline artifact between two calls; `json <text>` answers exactly `<text>`; a one-shot agent whose task is not `json …`/`slow…` answers a small value matching its schema) |
 | `P2_IDLE_MS` | `300000` | idle time before a session worker stops |
 | `P2_PROVIDER`, `P2_MODEL` | unset | default model for new sessions after settings.json's `defaultModel` (both or neither; Pi Mobile's `PI_MOBILE_PROVIDER`/`PI_MOBILE_MODEL` work too) |
 | `P2_RADIUS` | unset | `0`: disable the outbound Radius brain connection even when signed in |
 | `PI_RADIUS_GATEWAY` | production Radius | gateway selected by `npm run radius:login` |
 | `P2_TERMINAL_DAEMON` | unset | optional local pi-env daemon binary; otherwise use packages/env release/development builds |
 
-- **Web UI:** `buildWebBundle` (`src/hosts/bundles.ts`) bundles `src/hosts/web/main.tsx` with the selected plugins'
-  web facets. Content-named JS, CSS, assets and source maps are served from memory under `/__p2_web/`; `GET
-  /__p2_web` returns the no-store `{ version, script, style }` manifest, and `src/hosts/web.ts` renders the page.
-  Builds are deterministic across checkout locations and capped at 8 MiB excluding source maps. Startup builds in
-  the background; failures produce an owner notice and page loads return 500 until a build succeeds. Plugin reload
-  builds the web and TUI candidates before committing the backend, so a failed build preserves the old code and
-  bundles. A custom esbuild loader records the exact app-source bytes it supplies for dev
-  change tracking. Visible pages poll every 5 seconds and reload on any manifest-version change; foregrounding checks
-  immediately. At most two previous generations remain available for up to 60 seconds. This polling is temporary
-  until loader model D provides scoped, per-facet `ClientBundle` pushes (`docs/plugin-loading.md` 5.3 and 12.2 step
-  4). The TUI launcher separately polls `/__p2_tui`. There is no Vite, source-module server or `index.html`.
-- **Bundles for Radius Cloud Brain:** after CI passes on main, `.github/workflows/p2-cloud-bundle.yml` builds this
-  web bundle with `scripts/cloud-bundle.ts` and uploads it to the R2 bucket `pi-ui` under the commit's full SHA, which
-  Radius serves under `/pi/ui/`. The script patches the built script's Chord socket URL, version poll and `/__p2_web/`
-  asset prefix, and fails when one is missing: changing those in `src/hosts/web/main.tsx` or `WEB_BUNDLE_PATH` means
-  updating it.
+- **Web UI** (Chord's web surface, slice 11; `src/hosts/server.ts`, `src/hosts/web.ts`): `webSurface` with
+  `routes: false` builds the pages' base bundle from `src/hosts/web/entry.ts` (`main.tsx`: Chord's `startPage` with
+  p2's API modules, core facet, React root, connection state and error reports; `themes: false`, p2 styles itself)
+  right after the listen, resolving workspace packages through p2's tsconfig `paths` as the server's source resolver
+  does (`src/hosts/web/base.ts`, Chord's `tsconfig`): their sources, never a `dist/` (pi-ai's `./utils/*` exports
+  only `dist/`, which the phone never builds; `web-sources.test.ts` fails on any `dist/` input); the
+  plugins' web facets are Chord plugin builds of kind `web` (host packages `src/hosts/web/packages.ts`: the API's
+  kind-neutral and web modules, React, react-dom, pi-schema), served as scripts that register themselves, the current
+  set as one combined file. `web.ts` serves them with p2's access rules: the page (p2's template with `pageScripts`,
+  `data-web-version` the base hash), `/_chord/web/…` files (named by content, `immutable`; guests too: it is the
+  app's code), and `/_chord/web/base` (public, `no-store`). A failed base build is an owner notice and pages answer
+  503. A plugin reload rolls web facets out with the server's and workers' (the surface's step last): an open page
+  fetches the changed scripts and applies them in place (`host.reload` in the page; each plugin's stylesheet swapped
+  with its code), so the transcript's scroll and the other panes stay; only base code (the entry, `src/web`,
+  `src/runtime`, the API, Chord, React) needs a restart, and pages reload onto the new base: when its link drops a
+  page asks `/_chord/web/base` alongside the reconnect (never before it: one check at a time, a drop while one runs
+  asks nothing more), and another base stops the reconnecting and reloads the page. No polling. A page's link names its base
+  (`/chord?web=<base>`); every other client names itself (`?client=tui`, `cloud`, `script` for scripts and tests;
+  `src/runtime/stale-page.ts`). The server refuses a link naming another base, or neither a base nor a known client (a
+  page from before 2026-11-12, which would re-hold types removed since), at once (close code 4001; the page reloads)
+  and the server logs (source `stale-pages`, a log line, not a notice: nothing to act on) who it was: the owner's
+  access or device, or the guest, the browser and its address. A TUI launcher from before the marker is refused too (it retries until updated). The last four plugin sets' files stay served. Web facets must not share module state with
+  another plugin's files (each plugin's script holds its own copy of a file it imports from another plugin):
+  `plugin-practices.md`. The TUI launcher still polls `/__p2_tui` (p2's own TUI bundle). There is no Vite,
+  source-module server or `index.html`.
+- **Radius Cloud Brain** (`scripts/cloud-bundle.ts`, `.github/workflows/p2-cloud-bundle.yml` after CI passes on main;
+  the R2 bucket `pi-ui` under the commit's full SHA, served by Radius under `/pi/ui/`): a static page built with
+  Chord's builders as a p2 page is (`buildBase`, the plugins' web scripts registered with `registeredSource`,
+  `pageBootstrap`), written as one script (the bootstrap, the plugins, the base bundle) and one stylesheet, assets
+  under `/pi/ui/<sha>/assets/`. `main.tsx` sees Radius's `data-pi-bootstrap` on `#root`: it connects to its Chord URL
+  (adding `client=cloud`; the brain forwards the relayed path with its query) and starts static (`startPage({ follow: false })`: no updates, never outdated). Test: `ui-cloud-bundle.test.ts`.
 - `npm run dev` also watches plugins and supervises runtime restarts; see **Dev mode** below. Under `npm start`,
   code changes (web included) take effect only after a restart.
 - **Data report** (`scripts/data-report.ts`, read-only, beside a live server): per session its title, location,
@@ -92,7 +107,7 @@ P2_FAKE=1 npm start          # http://127.0.0.1:8788, data in ~/.pi/p2
 ## Dev mode
 
 ```sh
-cd /home/badlogic/pi-private/apps/p2
+cd /home/badlogic/pi/apps/p2
 export PATH=/home/badlogic/node-v24.4.1-linux-x64/bin:$PATH
 # The proxy sets X-P2-Proxy-Secret: 1 on every request (never an owner grant).
 P2_ALLOWED_HOSTS=p2.mariozechner.at P2_PUBLIC_URL=https://p2.mariozechner.at \
@@ -115,8 +130,8 @@ Use a temporary `P2_DATA_DIR` and a different `PORT` for experiments.
   `GET /__p2_dev`. All triggers publish a shared owner notice, such as **Reloaded chat, sessions** or
   **Reload refused: …**. **Show logs** opens the Logs plugin when loaded; otherwise the message stands alone.
 - **Plugin reloads:** an explicit reload builds exactly the named (or dirty) plugins (Chord's `plugins.build`), then
-  rolls them out to the server and every running worker (`plugins.rollout([server step, workers step])`) and rebuilds
-  the TUI and web bundles. A plugin whose build fails keeps its old code (an added one stays out) and the reload is
+  rolls them out to the server, every running worker and the pages (`plugins.rollout([server step, workers step, web
+  surface step])`) and rebuilds the TUI bundle. A plugin whose build fails keeps its old code (an added one stays out) and the reload is
   refused; a plugin that is not loaded cannot be reloaded. Compatible changes keep objects, streams and references
   (Chord swaps them in place); added plugins' objects activate; a removed plugin's objects end (their holders see
   them end). Dirty marks come from Chord's plugin watcher
@@ -147,10 +162,15 @@ across server restarts. It is a Unix-only channel, not an HTTP route on the prox
 is printed or needed in a URL. It prints the committed plugin selection or refusal reason and exits non-zero
 on failure. This is a local filesystem capability for the account, not guest filesystem isolation.
 
-The `dev-tools` worker plugin provides **reload_plugins** (`{}` for dirty plugins, or
-`{"plugins":["chat","sessions"]}`). It declares `origin: "owner"` and `scope: "main"` (see **Tool requirements**)
-and refuses sessions not working on a local p2 checkout (or its containing repository): guests, what they start,
-subagents and remote-environment sessions are denied, and no subagent can be given it. Tool upgrades are not automatically replayed after
+The `dev-tools` plugin provides **reload_plugins** (`{}` for dirty plugins and every plugin of the user root, or
+`{"plugins":["chat","sessions"]}`), in every server mode, through the server object `PluginReload` (worker principals
+only; the server's `ServerParts.plugins.reload`). It is an ordinary tool: no requirements, so subagents (an agent
+writing plugins in `local:<data>/plugins`) can be given it, and the session's tool selection and lock govern it as
+they govern bash. It reports per plugin: applied, removed, failed (the build's esbuild errors as
+`file:line:column: message`, or a host's load error), refused (unknown, or discovery: an invalid package, a name a
+built-in has); and the server's and workers' errors logged meanwhile. A failed build rolls out nothing. In dev mode it
+updates the dev status like the Reload button. Its prompt section on p2 development shows only to sessions working on
+the p2 checkout (docs/agent-plugins.md). Tool upgrades are not automatically replayed after
 a crash. For runtime edits, use the explicit CLI `--restart` command instead. Do not invoke the owner server's
 controls from tests: use disposable data dirs and independent supervisors.
 
@@ -244,7 +264,7 @@ pi's defaults (rebindable in pi's `keybindings.json` or p2 prefs; `/hotkeys` lis
 | --- | --- |
 | Ctrl+R (chat), `/sessions`, `/resume`, `/new` | Session picker / create a session with a working directory |
 | Ctrl+L, `/model` | Model picker, then thinking level (with no session, sets the default; owner) |
-| Enter / Alt+Enter | Send (steer if busy) / queue a follow-up |
+| Enter / Alt+Enter | Send (steer if busy) / queue a follow-up; idle: send in a new branch (`docs/tree.md`) |
 | Escape / Alt+Up | Stop / restore the last queued input to the editor |
 | Ctrl+C / Ctrl+D | Clear the editor (twice: exit) / exit when the editor is empty (`/quit`) |
 | Ctrl+T / Ctrl+O | Show thinking / expand tool output |
@@ -254,7 +274,7 @@ pi's defaults (rebindable in pi's `keybindings.json` or p2 prefs; `/hotkeys` lis
 
 **Side panel.** `ctx.panel.open(id, content, title)` shows one component to the right of the screen's body (about 40%
 of the width, behind a bar; the dock stays full width), in a `ScrollView` the runtime owns. Plugins open it (Enter in
-`/artifacts` shows an artifact there when the terminal fits it; it follows new versions through `ArtifactList`). The editor keeps
+`/artifacts` shows an artifact there when the terminal fits it; it follows new versions through `Artifacts`). The editor keeps
 the focus; F2 (`p2.panel.focus`) moves it into the panel, where the runtime sets pi-tui's `capturesViewportInput` and
 scrolls the panel with the viewport and select keys, keeps other keys from the editor and returns the focus on Escape.
 Search stays on the transcript (the primary scroll view). Hidden below 100 columns; closed on navigation to another
@@ -359,17 +379,29 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   `filesFacet` from `@earendil-works/chord/app/files`); a session's Durable runs on its store through `StoreStorage`
   under the owner name `p2.durable` (`src/runtime/session-store.ts`), beside `Files`' tables. Plugins reach `Files`
   with `self.get(Files, {})` / `ctx.get(Files, {})` (`@p2/app/v1/node`), never a path; a session's spaces are
-  `artifacts`, `uploads` and `downloads` (`src/runtime/session-files.ts`). Clone copies the whole session directory
+  `uploads` and `downloads` (`src/runtime/session-files.ts`; artifacts written before 2026-11-12 stay in a space
+  `artifacts`, unused: the artifacts plugin keeps them on the server now, docs/artifacts.md).
+  The session catalog (`Catalog`) is the server store's table `p2.catalog:sessions`, one row per session keyed by its
+  address (`host(Session)`, decision "Documents and table rows can belong to a host"): everything about a session needed
+  while its worker is off (place, title, model and level, pin, archive, `/tree` branches), so a session's export,
+  import and delete carry it. Share links and grants, each session's subagents and its artifacts are likewise rows
+  or documents keyed by the session (guests are
+  per person, keyed by their own ID). A data directory with a `catalog.sqlite`, `shares.sqlite` or `subagents.sqlite`
+  from before is refused at start: `npm run
+  migrate-data` moves it (below). Clone copies the whole session directory
   while its worker is stopped (blobs hard-linked); fork copies only the source's files, through its worker
   (`SessionTransfer.copyFiles`, the kit's `copyFiles`), and seeds its history into a fresh store; a failed copy's
-  directory is removed. Each change of a space is pushed by the worker, inside the method that made it, to the server's
-  mirror `FileSummaries` (by session and space; the owner's `of`), for lists that must not start a worker: none uses it
-  yet (the artifact picker and transcript cards are on an open session's worker); a session row's file counts or a
-  drive of an idle session could. A data directory in the older layout (`server.sqlite`, `sessions/<id>.sqlite`,
+  directory is removed; plugins copy what they keep on the server through `SessionCopied` (projects, artifacts). The
+  server's mirror of the spaces' summaries (`FileSummaries`) is gone: nothing used it. A data directory in the older
+  layout (`server.sqlite`, `sessions/<id>.sqlite`,
   `artifacts/`, `downloads/`) is refused at start: `npm run migrate-data` moves it (below).
 - **Migration** (`npm run migrate-data -- [--dry-run] [--data <dir>]`, `scripts/migrate-data.ts`): offline (refused
   while a server holds the data directory's lock, which it takes). The server's store is copied to `server/store.sqlite`
-  and verified (equal exports); each session is built in `sessions/.<id>.migrating/` from a copy of its old store:
+  and verified (equal exports); `catalog.sqlite` (schema 1 to 4) is written into that store's catalog table in one
+  transaction, read back from the store reopened and compared, then moved to `pre-catalog-backup/`; `shares.sqlite`
+  (schema 1 and 2) and `subagents.sqlite` go the same way into `Shares`' and `ChildStore`'s tables, then to
+  `pre-server-data-backup/` (`scripts/migrate-server-data.ts`; an own-cwd child is placed on its session's environment)
+  (`scripts/migrate-catalog.ts`; a table that holds rows already is not written again); each session is built in `sessions/.<id>.migrating/` from a copy of its old store:
   Durable's records replayed into `StoreStorage` in seq order (`scripts/migrate-durable.ts`: seqs renumbered in order,
   ids kept, the allocator past the old next id) and its artifacts (same version numbers), uploads and downloads (same
   ids, as keys; each file's time from the old file's modification time, through `Files`' `created` for imports) written
@@ -426,12 +458,13 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   ones (`serveServerRegistries`, `serveWorkerRegistries`, `tuiCoreFacet`, `webCoreFacet`), a plugin serves its own
   (`serveKeyed`). One contribution per registry per object or facet.
 - **Plugins:** see **Plugin layout** and **Plugin reloads**; the server loads its facets with `createPlugins`, workers
-  get theirs from the workers component, the TUI and web bundles load theirs with `host.load`.
+  get theirs from the workers component, pages from the web surface (`startPage`), the TUI bundle loads its own with
+  `host.load`.
 - **Protocol versions:** a page or TUI reloads when the server speaks a newer link protocol (`newerPeerProtocol`).
 - **Contract versions:** pages and TUIs keep the contracts they were built with until they reload, so a deploy that
   bumps a contract a client holds must keep serving the old version: write the history with `evolve` (the released
   version as the base, verbatim, so old bundles' fingerprints match) and give the provider an `accepts` table mapping
-  current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1, `Envs` v1/v2;
+  current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1/v2, `Envs` v1/v2;
   `test/p2/contract-versions.test.ts` binds the released declarations). Without it, old clients wait unbound
   (`contract_mismatch`) until they reload.
 
@@ -450,6 +483,11 @@ npm start
   a per-resource secret checked by the plugin's `RequestResolvers` contribution; the host stamps an owner
   principal with `access: "relay"`, a remote origin, and normal same-origin checks. They may sign in to model providers,
   but cannot mint local tokens or receive a local owner cookie. Credentials never reach web state.
+- **Server name** (core: `ServerName` in `src/runtime/server.ts`, `ServerNameSettings` for Settings, General): the
+  owner's name in `identity.json` while one is set, else the device's name read at start. The server owns it; Radius
+  keeps a copy for its shell: `?name=` on every host connect and `PUT /v1/servers/<id>/name` on a rename while
+  connected, so a rename never reconnects (which would drop every channel). A failed or offline rename goes with the
+  next connect; Radius never changes the name. Project places still name the machine by `os.hostname()`.
 - **Ports** (`plugins/ports`): server-owned `forwards.json` registry; owner **Envs → Ports** lists/adds/removes
   forwards and confirms public opt-in. Every forward is private by default and has an isolated
   `https://fwd--<brain label>--<random id>.rdtun.com/` address. Public forwards additionally have
@@ -458,6 +496,10 @@ npm start
   Host/Origin, public `X-Forwarded-*` and rewritten localhost redirects, without the relay secret. Pi's own
   port cannot be forwarded. Links appear after the owner opens Pi through Radius and survive restart;
   on-device Open uses localhost. Radius sees forwarded traffic; this is not a sandbox.
+- **Shell page and share links**: the brain keeps its page in the Radius shell, `<shell>/pi/<organization ID>/<brain>`,
+  from the relayed requests' shell origin (`radius.json` `shellPage`; one saved in the older `/pi/brains/…` form is
+  read in the current one). People a session is shared with by email get `<shell page>/s/<session>`. The shell names
+  the organization by its slug once it opens; a kept link names it by ID, which a slug change leaves valid.
 - The worker's root-only `ports` tool has `list/open/close`, fixes owner/peer attribution at its calling assistant
   entry, and denies guest/unattributed turns. It lists every forward and explicitly names all public endpoints,
   asks the model to obtain confirmation before publishing. As in Pi Mobile (67cdb4ca4) it may change or close any
@@ -494,10 +536,64 @@ taking turns with the chord link so a download cannot hold up live output. Then 
 
 `src/web/navigation.ts` is an independent, minimized copy of Pi Mobile's stack. `src/runtime/web.tsx` exposes
 `useNavigation()` and `useRoute()` to plugins. Routes contain a session/conversation, named sheet/viewer layers
-(with small string locators), the workspace location, and an optional bottom terminal. Only the top modal shows.
-The stack and per-area scroll positions persist in this tab's sessionStorage; URLs identify conversations
-(`/s/<id>` and `/s/<id>/c/<conversation>`), not modal payloads. Restored locators may be unavailable.
+(with small string locators), the workspace location, and an optional bottom terminal; or, instead of a session, a
+sidebar rollup's or group's list (`page`). Only the top modal shows. The stack and per-area scroll positions persist in this
+tab's sessionStorage; URLs identify conversations (`/s/<id>` and `/s/<id>/c/<conversation>`) and section lists
+(`/list/<key>`), not modal payloads. Restored locators may be unavailable.
 
+- **Links that open in another tab.** In-app destinations are real `<a href>` links whose click handler is
+  `inPage(act)`: a plain primary click acts in the page; Cmd/Ctrl/Shift/Alt clicks, the middle button and "Open in
+  new tab" stay the browser's. Links take their address from `useLinkHref()` (`linkHref`): `routeHref`, which adds
+  the top layer when it is a viewer (`/s/<id>?viewer=<name>&at=<locator>`); sidebar rows and list pages have none, so
+  theirs is `routePath`.
+  A page loading such an address starts with that viewer over the conversation (`pathRoute(path, search)`); the
+  address bar then shows the conversation's path again. Only viewers are linkable: they only show content, and every
+  content fetch is authorized by its route, so a link (also another site's) cannot open a sheet that acts. Not yet
+  links: the "Back to main conversation" and parent-session buttons, peer-message attributions, Discord's bound
+  sessions.
+- **Framed by the Radius shell** (`src/web/shell-bridge.ts`). Through Radius the app runs in a frame of the shell
+  (`radius.earendil.com/pi/<organization>/<brain>`) on the brain's origin. The page names the shell's origin
+  (`<meta name="p2-shell-origin">`, relayed requests only), and the bridge speaks the frame's side of the shell's
+  `pi-shell` channel: `ready` on load, the route's `routeHref` as `location` after every navigation, and the shell's
+  `hello` base becomes the base of `linkHref`, so a link opened in another tab, or copied, is the shell's URL
+  (`…/pi/acme/<brain>/s/<id>`), not the frame's. The shell only replaces its URL with each report; the app's history
+  entries stay the tab's, so Back moves the frame. Messages go to the shell's origin only; nothing is posted when the
+  page is not framed or not relayed. The shell's side and the contract: Radius,
+  `client/src/views/pi-shell/frame-bridge.ts`. `test/p2/shell-bridge.test.ts` (origins, reports, base, theme
+  messages) and `test/p2/ui-shell-frame.test.ts` (the real bundle framed by a stand-in shell on another site:
+  mirrored URL, links, one history entry per step, Back and Forward, the shell's theme).
+- **Theme** (`src/web/theme.ts`). The light/dark preference lives in the outermost host, and the page picks a backend at
+  startup: `native` when p2-mac's `window.webkit.messageHandlers.piHost` exists (the app's `appearance`; `theme` and
+  `set-theme` messages with replies, `pi-host-theme` events; "system" resolves with `matchMedia`, which follows the
+  app's appearance), `shell` when the Radius shell frames the page (the meta, a plain origin, and a parent) and its
+  `hello` carries `theme` (the shell's `pi-theme`; the page applies the shell's resolved `scheme`, sends `set-theme`,
+  takes the `theme` echo), else `local` (the origin's localStorage `pi-theme`, as before). Hosted pages never read or
+  write their own stored value; the first-paint scripts skip it by the same rule (the app page's in `src/hosts/web.ts`;
+  the server pages' in `src/runtime/page.ts` skip it in any frame, since the CSP lets only the shell frame them). Picks
+  apply at once and the host's answer wins; two quick picks never flicker back: the shell answers each `set-theme`
+  with one `theme`, and the page drops `theme` messages until its last pick's answer (the count resets on `hello`);
+  with p2-mac it ignores `pi-host-theme` while a `set-theme` is unanswered and takes the latest request's answer.
+  Before `hello` a framed page follows the system, ignores its storage and `storage` events and keeps a pick in
+  memory: a `hello` with `theme` sends that pick as `set-theme` (else takes the shell's preference), a `hello` without
+  `theme` (an older shell) stores the pick or, without one, reads the stored value; without any `hello` the pick stays
+  in memory. Before `hello` a framed page shows the scheme the shell hinted in the URL it framed
+  (`#pi-shell-scheme=light|dark`): WebKit (26.6) resolves a cross-site frame's `prefers-color-scheme` with the
+  system's, not the embedder's `color-scheme` as Chrome does, so a shell forcing the opposite of the system would
+  otherwise paint the frame wrong until `hello`. The app page's first-paint script reads the hint only in a shell
+  frame (exactly that fragment; any other stays), paints it, keeps it for `theme.ts` as `<html data-pi-shell-scheme>`
+  and removes the fragment with `history.replaceState(history.state, "", pathname + search)` before the app reads the
+  URL (navigation.ts reads `location` when the bundle starts; nothing reads the fragment). Without a hint: the
+  system's scheme. A change of the shown scheme after load cross-fades: `theme.ts` makes the DOM change in
+  `document.startViewTransition({ update, types: ["pi-theme"] })` (the function form where types are missing), the
+  browser's default cross-fade of the page, about 250 ms; no CSS of its own (scope any to
+  `:active-view-transition-type(pi-theme)`). Each document fades its own pixels: the Radius shell keeps its frame out
+  of its snapshot, p2-mac fades only its native views. No fade for what the page shows while starting (first paint,
+  hint, before the first frame, `hello`, p2-mac's first answer), an unchanged scheme, a hidden page, reduced motion or
+  without the API; a change during a fade starts a new one, and a fade's late DOM change shows the latest scheme.
+  Nothing theme-related keys off `prefers-color-scheme` once `data-color-scheme` is set (Elanor's tokens use it only
+  without the attribute), so the old snapshot is the old theme. `test/p2/theme.test.ts` (backends, races, picks and
+  the hint before `hello`, fades), `test/p2/first-paint.test.ts` (both first-paint scripts, the hint),
+  `test/p2/ui-shell-frame.test.ts` and `test/p2/ui-theme-fade.test.ts` (a pick fades in Chrome, the first paint not).
 - `push`: one step at the tap; `replace`: lateral changes and server/startup corrections. A correction can pass
   its captured route as `replace(next, expected)` so it cannot overwrite a later queued destination.
 - `close`: whole-modal ×/scrim/Escape, or a sheet/file parent; `reset`: workspace tabs, dropping visited files/commits.
@@ -508,8 +604,30 @@ The stack and per-area scroll positions persist in this tab's sessionStorage; UR
   custom changing scroll areas should do so too, with a key for the content they display.
 - Android Chromium uses one CloseWatcher while there is a step to undo, without adding history entries or browser
   page-back animation. Other browsers use history entries. With no internal step, system Back leaves the app.
-- Conversation destinations retain the workspace tab and terminal placement, but reset file/commit/search locations
-  and never carry the request to start a terminal. Server events never push.
+- Conversation destinations in the same session retain the workspace tab and terminal placement, but reset
+  file/commit/search locations and never carry the request to start a terminal; another session opens with its own
+  panels (below). Server events never push.
+- **Panels per session** (`src/web/session-panels.ts`): the right-hand panels (the workspace and its tab, the terminal
+  below the chat or on the workspace's Terminal tab, the side panel's plugin panel or activity) belong to the session
+  they were opened in. Problem: they used to stay open across a session switch, so a terminal opened in one session
+  also opened in the next. Now every route change remembers its session's panels in `localStorage` `p2-session-panels`
+  (per device, the last 200 sessions that had one open; closing them all forgets the session), and `conversationRoute`
+  opens another session with its own: as it last had them, none if it never had any. Within a session (its subagents'
+  and `/tree` conversations) the open panels stay, as before: the panels are the session's, its terminals are too, and
+  the workspace follows the shown conversation's location; only an activity, which is a block of one transcript, is
+  dropped in another conversation. A page load without history state of its own (a link, a new tab, a typed address,
+  the installed app's launch) restores the session's panels too; a reload or Back keeps its entry's route, as before.
+  Restored are the workspace's tab (not its folder or file) and the terminal's ID (a closed one falls back to the
+  newest running terminal); a terminal never starts on its own. Restoring never covers the chat: the workspace comes
+  back from 900 px (below, it takes the screen), the side panel from 700 px (below, it is a sheet), the terminal below
+  the chat always; a phone opens a session at its chat (the views plugin's rule). Sizes stay global per browser
+  (`useDragSize`: the side panel's and the workspace's widths, the terminal's height), as does the terminal's
+  preferred placement for a new terminal: a size suits the screen, not the session, and per-session widths would make
+  the chat column jump at every switch. The views plugin's layout was per session already
+  (`p2.views.layout:<session>`). Leaving a session detaches its terminal view; the programs keep running in the
+  terminal host and coming back reattaches from a VT snapshot (Terminals). A link that opens a viewer (`?viewer=`,
+  branch `artifact-newtab`) shows it above the session's restored panels; on phones the side panel waits beneath it
+  (`useSidePanelShown`). Test: `ui-session-panels.test.ts`.
 - **Drawer swipe** (`src/web/drawer-swipe.ts`, phone layout only): with no modal open, a drag toward the inline end
   (rightward; leftward in RTL) anywhere on the chat column (`main`) drags the drawer open; a drag toward the inline
   start on the open drawer or scrim drags it closed. Not on the workspace panel, which is full screen above the
@@ -536,6 +654,15 @@ old instance, clears the failure and notice, starts a worker (holding `WorkerBou
 the session) and answers with the outcome: once the worker runs, or rejecting `worker_failed` with why it could not
 start, so the button shows pending and then the result; drafts and attachments stay intact. Creating a session
 navigates to its view before awaiting the worker, so a failed first start also has a visible recovery screen.
+
+**The page never goes blank** (`src/web/app-boundary.tsx`): the React root renders inside `AppBoundary`, which shows
+a failure with **Reload** and **Reset this device's saved state for this session** (localStorage keys naming the
+session, its panels, its cached conversations, the tab's navigation and draft, the service worker's kept page).
+Render failures, uncaught errors and rejections, and failures a view pane's boundary catches are reported to
+`POST /client-error` (logs plugin; same-origin, owner or guest, a bounded body; at most 20 per page load and 60 a
+minute on the server): an owner's page becomes a notice of source `web`, a guest's only a log line. Persisted client
+state is device data an older page may have written: the layout (`parseLayout`) and the session panels (each field
+checked) drop what does not fit. Test: `ui-recovery.test.ts`.
 
 Host `onError`, refused reloads and worker failures publish bounded, redacted owner notices (`LogNotices`), with
 Show logs and Dismiss. Notices keep the latest error per source (at most 50 sources); normal shutdown/abort
@@ -576,6 +703,38 @@ syntax/startup errors are retained too. Focused tests: `logs.test.ts`, `ui-logs.
 `test-host.test.ts`; the browser regression exercises the original `Unknown p2 plugin: settings` failure, sticky
 startup fencing, the list marker, owner notice, worker-filtered Show logs and recovery through Retry.
 
+**Telemetry** (Chord §29; off unless settings.json's `telemetry` is `true`, read once at the server's start; no
+sampling: Chord offers none; recording everything cost the phone 1.8M spans, 1 GB and a third of a core in 15 h, so it
+is opt-in since 2026-11-13). Off, the server opens no store and its ingest objects refuse everyone (a page loaded while it
+was on fails `forbidden` at once and stops sending, never waits unbound), `WorkerInit.telemetry` is
+false (the worker's host has no recorder and sends nothing), no page is marked, every host uses Chord's NOOP adapter,
+and `Traces` answers `unavailable` "telemetry is off (settings.json telemetry)" (the pane and the tools show it;
+`telemetry-off.test.ts`). On: the server records to `<data>/telemetry.sqlite`
+(`openTelemetry`, `src/runtime/host-dirs.ts`; Chord's SQLite store, 7 days, a queue of 10,000 spans, a flush every
+second; its own private file, never in a backup), its only writer. Each session worker records in memory (its host's
+spans and metrics, and Durable's `pi.durable.*` and pi-ai's `pi.ai.*`: the Harness gets the same adapter) and sends
+to the server's `WorkerTelemetry` every second and when it closes (`src/hosts/worker.ts`), stamped `chord.host:
+session|<id>`. Owners' pages record too (`#root` `data-p2-telemetry`, set by `web.ts` for owners; `startPage({
+telemetry: true })`) and send to `PageTelemetry` every 3 s and when hidden; the server admits owners only
+(`telemetryIngestFacet({ admit })`: a guest could open page after page, each with its own budget). Carriers join a
+page's call, the server's relay and the worker's method into one trace; React's holds are roots of the page's own
+traces. What a span records about its principal is `principalAttributes` (`src/runtime/principals.ts`):
+`p2.principal` (`owner:<access>`, `guest`, `worker`, `server`, `host`) and a guest's id or a worker's session,
+never a name or an email. Read with `node --import ./src/source.ts scripts/traces.ts [--name] [--attr k=v]
+[--errors] [--since <minutes>] [--limit]` (read-only, safe while the server runs), or in the page and by the agent
+(`plugins/telemetry`): `Traces` (server) reads the store (`ServerParts.telemetry`) with bounds (50 traces a page,
+2000 spans a trace, 1000 metric rows, 8 attribute filters); variant `owner` for owners, `agent` for a session's worker,
+refused at every call while that session is shared (any link, guest or person: viewers read what the agent finds) or
+locked; anyone else `forbidden`. The Traces view kind (a pane: search by the first span's name, attributes, errors and
+a window; traces newest first, more by cursor; one trace as a span tree on its timeline with attributes, events and
+links that open their trace; list or trace on narrow panes, side by side from 620px), also a Settings section (a trace
+a layer of the sheet) and the command "Show traces" (owners). The agent's code-mode tools, namespace `telemetry`
+(`telemetry_find_traces`, `telemetry_get_trace`: `renderTrace` text and the spans, `telemetry_find_metrics`;
+`locked: "never"`; deferred: the code-mode section names the namespace only, `describeNamespace("telemetry")` gives
+the declarations, so they take no place from the tools the agent uses all the time). Test: `telemetry-traces.test.ts`. Cost: Chord's (§30): a span per
+call, hold, method, relay and activation; nothing is measured or walked for it. The TUI records nothing. Test:
+`telemetry.test.ts`.
+
 ## Decisions
 
 - **Where p2 differs from Pi Mobile on purpose** (from the parity audit before Pi Mobile was retired):
@@ -607,7 +766,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   - **Chat version 3** (P3): `compact`, `abortCompaction`, `reset` (owner) and `dequeueOwn`, and the guest-safe `model`
     state, used by the TUI; the web UI is unchanged.
 
-- **Durable names are p2's.** Documents `p2.subagents`, `p2.agent-run`, `p2.artifacts`; tasks
+- **Durable names are p2's.** Documents `p2.subagents`, `p2.agent-run`, `p2.views`; tasks
   `p2.subagent-anchor`, `p2.subagent-reporter`; entries `p2.input`, `p2.peer-message`; extensions `p2-artifacts`, `p2-downloads` (and the
   unprefixed `subagent-tools`, which subagent conversations store in their agent state). No `mobile.*` name is read.
   p2 sessions created before the rename (with `mobile.*` documents) are not migrated: their subagent registry,
@@ -631,8 +790,8 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   envs plugin's directory picker `plugins/envs/contract.web.tsx`); a contract imports only the API, shared packages
   and its own plugin's files. What two plugins share otherwise lives in the base and reaches them through the API
   (`src/runtime/schemas.ts`, `entries.ts`, `notices.ts`, `origin.ts`, `environments.ts`, `downloads.ts`,
-  `tui-chat.ts`). Base code imports no plugin code; only the page's shared components (`src/web/Drawer.tsx`,
-  `ModelPicker.tsx`) read plugin contract types (`import type`). A plugin's own files stay in the plugin, assets
+  `tui-chat.ts`). Base code imports no plugin code; only the page's shared components (`model-choice.ts`) read
+  plugin contract types (`import type`). A plugin's own files stay in the plugin, assets
   included (`plugins/terminals/vendor/ghostty`). Facets use no `import.meta`: the p2 app directory is start data
   (`Server.info.app`, `WorkerInit.app`). The terminal host (`plugins/terminals/main.ts`) is its own program, not a
   facet, and imports base code directly. `plugin-layout.test.ts` builds every server, worker, TUI and web facet with
@@ -659,8 +818,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
 - **Location tools** (`plugins/locations`): `location_envs` (this device and the configured SSH environments: name,
   host, last test; never keys), `location_dirs` (`[env:]path` or `env`+`cwd`, at most 200 folders) and `location_move`.
   Every main agent has them, and so do the subagents and one-shot agents it gives them to (by default it gives all
-  its tools). All declare `origin: "owner"` (see **Tool requirements**), and the server side (`AgentLocations`) admits
-  only current worker generations. The main agent's move is deferred: it records `p2.location-move` on the main
+  its tools). The server side (`AgentLocations`) admits only current worker generations. The main agent's move is deferred: it records `p2.location-move` on the main
   conversation; the worker applies it through `SessionMoves` (the owner's Relocate) once Durable has no task or
   submission (the turn ended, no subagent work), retries a busy refusal after the next commit, records a destination
   that became invalid as `failed` (shown by `location_envs`), and applies a record left by a stopped worker after its
@@ -731,8 +889,8 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
     closed). A subagent's own location keeps its environment, on its machine.
   - **Plugins** read `location.value` at each use instead of `init.values.session` (which stays the spawn
     location). Between the switch and the commit, `location.value` still names the old place while
-    `Harness.environments` resolves on the new machine: whether p2's private data directory is denied is decided from
-    the environment (`isLocalEnvironment`), never from the location (workspace, file index, attachments). What is
+    `Harness.environments` resolves on the new machine: what depends on the machine is decided from the environment
+    (`isLocalEnvironment`), never from the location (attachments). What is
     kept for a location is keyed by `location.version` (bumped at each commit): prompt resources load anew from the
     new cwd/machine (superseded loads publish nothing), workspace backends reopen their watch (subscribed before
     their first open; a failed reopen is retried at the next use, superseded watches closed) and bump `changes`, the
@@ -750,26 +908,41 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
     its failing start, a failing update/cancel/prepare, an exit while fencing, a client arriving meanwhile, a
     cross-machine move accepted under the fence with an own location, a crash before the move, a move past its
     bound, caller aborts, fences, a busy refusal leaving no fence), `relocate-worker.test.ts` (one worker host with
-    the real Harness: dev-tools and PowerShell after real moves, the private directory decided by the environment, a
+    the real Harness: PowerShell after real moves, a
     move during workspace activation, a transient reopen failure, the session moving to another machine while a
     subagent's own location stays with its tools, workspace and file index, concurrent commands on two machines with
     one connection each and closing only unused machines), `harness-cwd.test.ts` (version 1 registry placement),
     `envs.test.ts` (local to SSH and back in place, an own local location staying while the session moves to SSH,
     real sshd).
-- **Projects** (`plugins/projects`, owner, TUI only so far): `projects.json` names a codebase's places, one per
-  environment (README, Configuration). The server observes it as envs.json is observed (`ProjectService`: one observer,
-  the last valid projects and the reason the last read failed); `Projects` serves them to owners with `local`, the
-  server's hostname, which the TUI writes for this device.
-  - **Membership** is explicit, never derived from a path: `ProjectService` keeps session ID → project name in a
-    persisted document of the server's Chord store (`p2.project-sessions`), not in the session catalog, so the
-    catalog's schema and the `Sessions`/`Catalog` contracts stay as they are and dropping the plugin leaves only an
-    unused document. Written by `Projects.assign` (the TUI's project rows, before `Sessions.create`, refused for a name
-    projects.json lacks) and by copies: the sessions plugin's `SessionCopied` registry (called once a clone's or fork's
-    row exists) gives the copy its source's project. Nothing clears it; archived sessions keep theirs; a project removed
-    from projects.json leaves its name on its sessions.
+- **Projects** (`plugins/projects`, owner; the TUI's selector, the web sidebar's Projects rollup, the new-session
+  screen): groups of sessions the owner defines (owner decision, 2026-11-18: freely definable groupings, no folder
+  rules). Two tables of the server's store (`store.ts`; owner, 2026-11-18: an instance may have hundreds of projects and
+  thousands of sessions, so no write rewrites a collection): `projects`, one row per project keyed by name (places, the
+  default location first, at most one per machine for `/move`; an integer `position` with gaps of 1024, so a move
+  writes one row at the midpoint and the order is numbered anew only when a gap runs out; while archived, `archivedAt`
+  and the sessions archived with it), and `project_members`, session ID → project name (index by project: a rename or
+  delete touches that project's rows). Names are unique (archived ones included) and checked as projects.json's were
+  (`parsePlaces`). `ProjectService` serves bounded live queries over them (`self.query`, `mapShared` keeping unchanged
+  projects identical): live projects, archived ones newest first, memberships; `Projects` 3 to owners with `local`,
+  the server's hostname, which the TUI writes for this device. Versions 1 and 2 are still served (`failure` maps to
+  null; `assign`'s name fits its new `string | null`).
+  - **Import:** the first catalog value runs it once (`p2.projects-imported`): `projects.json` (if readable) is appended, and
+    every session without a membership gets the project it had joined (`p2.project-sessions`, the earlier memberships,
+    only read) or, as the sidebar showed it, the project whose place holds its folder (`projectAt` in `place.ts`,
+    `project-place.test.ts`). projects.json is never read again or written.
+  - **Methods:** `create` (one place), `rename`, `locate` (a place becomes the first, replacing that machine's),
+    `move` (before another project; null: the end), `archive` (archives every live session of it through
+    `SessionOperations.archive`, then marks it with those sessions), `restore` (restores those still archived, then
+    puts the project after the live ones), `remove` (the project and its memberships; no session goes), `assign`
+    (`null` leaves the project; refused for one not live).
+  - **Membership** is explicit, never derived from a path (after the import): written by `Projects.assign` (the
+    new-session screen's project and a project's "+", once the session exists; the TUI's project rows, before
+    `Sessions.create`; the web sidebar's Move to project… and drag and drop) and by copies: the sessions plugin's
+    `SessionCopied` registry (called once a clone's or fork's row exists) gives the copy its source's project.
+    Archived sessions keep theirs; a session restored on its own while its project is archived shows in no project.
   - **Selector:** with an empty search (owner, active sessions, at least one project) the list is grouped: each project
-    row, its sessions below it, then "Other" ("+ New session" and the sessions of no project or of a removed one, the
-    latter dimmed with the old name). Within a group the order is the sort's (pinned first, then newest; relevance
+    row, its sessions below it, then "Other" ("+ New session" and the sessions of no project or of an archived one, the
+    latter dimmed with its name). Within a group the order is the sort's (pinned first, then newest; relevance
     equals recent without a query) and the threaded sort nests subagent conversations; rows show their env:cwd. The
     grouped list has no scope (every session, Tab does nothing, no scope in the header or hints, owner decision); flat
     lists (a search, archived sessions, guests, no projects) keep Tab's current-folder/all scope as before, except that
@@ -783,17 +956,185 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
     it. Only `✓` places are used: Enter waits for the places in preference order and creates the session at the first
     reachable one's absolute path.
   - **`/move`** without an argument opens a picker (the `/envs` list overlay, `ListOverlay`) of all the project's
-    places in projects.json's order: the session's own one marked `•` current (not probed), the others probed when it
+    places in their order: the session's own one marked `•` current (not probed), the others probed when it
     opens with the rows' marks and reasons. The cursor starts on the first other place not known to be unusable and
     moves on as probes answer, until one is reachable or the reader moves it (`ListOverlay.select`). Enter on a `✓`
     place runs `/move <it>`, on the current one says "Already here" and closes, other places are refused with a note;
     Escape cancels. No project or no other place: the same errors, no picker.
-  - **`/move <env>`** takes the session's stored project (an error without one, or when projects.json no longer has
-    it) and its place on `<env>`, resolved there. The subfolder is kept when the cwd is below the project's place on
+  - **`/move <env>`** takes the session's stored project (an error without one, or when it is archived or deleted) and its place on `<env>`, resolved there. The subfolder is kept when the cwd is below the project's place on
     the session's current machine (`below`, textual, so that machine may be unreachable: `~/rel` matches `/rel` at
     segment boundaries after a non-empty home, `~` matches everything with no subpath) and the target has it, else the
     move goes to the target's root (with a notice when the subfolder is missing there). Then `/cd`'s flow (its
     confirmation, `Sessions.relocate`). Tests: `projects.test.ts`, `tui-projects.test.ts`.
+- **Web sidebar** (`plugins/sessions/sidebar/`; README, Projects): the sessions plugin owns it, because the Session
+  sheet's optimistic edits must show in the rows (docs/optimistic-ui.md). Three layers:
+  - **Facts** (unchanged): the catalog's rows, `SessionStatus`, `SessionReads`, `Subagents`, `Sessions.operations`,
+    `Projects` (projects, archived ones and memberships; moves shown at once, `useOptimisticCall`), `Envs` (sandboxes) and `SidebarSettings` (below), read once by the
+    sidebar (`useSidebarData` in `web.tsx`). The sidebar is always mounted; it publishes what a list page needs
+    (`publishPage`), so the list page shows the same rows and edits, offline too, without holding its own copy.
+  - **Rules** (`model.ts`, pure, `sidebar-model.test.ts`): a `Rollup` collects sessions into one section, in one of
+    three layouts: a flat list (`sessions`: the sessions without a project), groups of sessions (`groups`: every
+    project, each with where its "+" starts a session; a sandbox group `sandboxed`), or a link only (`link`: the
+    Archive). A session belongs to the live project it was put in (`projectOf`: membership only). `ROLLUPS` are the built-in ones: the sessions without a project (`headless`: no heading, no ⋯, always
+    first), Projects, the Archive; `arranged` keeps the headless rollup first and puts the others in the owner's order
+    (a saved order from before, naming `recent` or `folders`, cannot move it), `movable` are the ones a heading's ⋯
+    moves. `FOLDER_ROLLUP` (one group per folder) is no section: it serves the command menu's "Open folder…".
+    `sectionsOf` shows every rollup and applies relevance (pinned, open, working, unread, a failure, an operation, or
+    `updatedAt` within the rollup's window: `1d`, `3d` (default; the headless one keeps it), `1w`, `forever`): a session
+    shows in every rollup and group that has it, a group only with relevant sessions or `keep` (every project's: a new
+    one's "+" must be reachable), a collapsed rollup or group only its row; the headless section counts the sessions its
+    window hides (`older`, its "N older" row). `failureOf` says what failed in a session: its worker, an operation, or
+    its main conversation's last run (`runState` of `worker.failure`: a stop, a reset or nothing to answer is no
+    failure); relevance, `activityOf` and `wantingOf` count it. `listPageOf` makes a rollup's or a group's list page:
+    every session, the aged ones (outside the window) after the others, by group for a rollup of groups; the archived
+    ones newest archived first. Keys: `other`, `projects`, `archive`, `folders`, `project:<name>`, `folder:<base64url
+    of JSON [env, cwd]>` (no slash, for `/list/<key>`). Folders take as many trailing path segments as tell same-named
+    ones apart. Rollup order never follows activity. The sidebar waits for `Projects` before it shows the owner's
+    sections (a session would otherwise show without a project, then jump into its group).
+  - **View** (`Sidebar.tsx`, `Row.tsx`, `ListPage.tsx`, `RollupSheet.tsx`), on Elanor's `Sidebar` and
+    `SideNavigation` and icons (re-exported by `src/web/navigation-components.ts`; a plugin's web build reaches icons
+    only through the host packages). Every row is a `NavRow`: a marker column as wide as an icon (an item's status, a
+    project's folder icon or a sandbox's lock; kept when empty; a rollup has none), the label (a link; an action:
+    restoring an archived session; or, with `expanded`, the control that shows or hides what is below the row, Elanor's
+    chevron right after the label), details and controls (⋯, "+", an item's action), all one control whose hover and
+    selected backgrounds (Elanor's ghost fills) span the row; the label's hit area covers it. Labels are one line, cut
+    with "…" at the end (`.nav-label`). No leading disclosure column, so nothing is indented by it. The owner's list
+    starts with the rows plugins put there (the `sidebar-start:<name>` slots, each a list item: the Familiar's "Ask Pi")
+    and a "New session" row, 16px above the first rollup (rollups are 24px apart); the header holds the Pi logo and the
+    collapse trigger. A session and each of its subagents are the same item (`AgentItem`): status, name, detail. The
+    detail is how long ago its last message was (`ago`); under a fine pointer, on hover or keyboard focus, the item's
+    one action (`ItemAction`, an icon button, its name saying whose: "Stop <name>", "Archive <name>") shows over it:
+    Cancel (`CancelIcon`) while it runs, Archive while idle. The button is laid out but invisible and not hit at rest,
+    so Tab reaches it, and the age's column keeps its width, so nothing moves when it shows and the name is cut before
+    either. On coarse pointers it is not shown: a long press on the item opens its command menu (`useCommandMenuRow`;
+    the item is also the menu's target on hover and focus), which has "Stop run" and "Archive subagent"
+    (`commands.tsx`; a one-shot agent's item is no target, as its chat is none). A session's Cancel stops its busy
+    conversations but one-shot agents (`stoppable`: their script owns them, and stopping the script's conversation
+    ends them); a subagent's or a one-shot agent's stops its own run. Both go through `RunControl` (the chat plugin's
+    contract, participants): unlike the chat's Stop, which hands the caller's own withdrawn inputs back to its
+    composer, a stop from outside the chat puts every withdrawn input into its author's drafts (`DraftStore`), so a
+    queued follow-up is not lost. A session's Archive is the owner's (`Sessions.archive`); a subagent's is the owner's
+    and read/write guests' (`SubagentControl.archive`), shown at once (`useOptimisticCall` over the children). Who may
+    act is `writable`: the owner, or a guest whose grant for the session is `full`. The actions live in
+    `useSidebarData` and reach the list pages through `publishPage` too. A session's item is a link to its main
+    conversation, selected while that shows (the label's hit area covers the row: the label is not positioned, so its
+    `::after` is laid out on the row). Its subagents and one-shot agents (the most recently active first) are below it,
+    shown or hidden only by its chevron (`Toggle`, a button after the label; showing a subagent shows them), archived
+    subagents behind an "N archived" row. Its `/tree` branches are not listed (the tree panel has them, docs/tree.md).
+    A rollup's name is a link to its list, its chevron a `Toggle` after it; a collapsed rollup lists nothing ("No
+    activity" is for an open one). Rows start and end on the bars' icon line (`--nav-edge`, style.css). An open session
+    is selected in one place: where this tab opened it from (per session, in sessionStorage), else the first place it
+    shows. The list page in the main area (`Route.page`, at `/list/<key>`; the `page` slot instead of `main`;
+    `openPage` closes the phone drawer as opening a conversation does; top-level links to it authenticate as `/s/`
+    links do) lists sessions only (no conversations below them, `listsConversations`), in the transcript's column
+    (`--chat-size`, `--chat-width`) inside one scroller across the main area, as the transcript; it has a search within
+    its sessions (`Search` 3's `sessions`), kept with its scroll position across Back, its "+" for groups, and the
+    error toast (`ErrorToast`, shared with the chat).
+  - **State marks** (`marks.tsx`, `run-state.ts`, the top of `style.css`): an item's status is in its marker column.
+    Working is pi's dots (`PiDots`): the terminal UI's braille loader frames, one at a time, a strip of the ten stepped
+    by a CSS animation at 160ms a frame (pi's is 80ms), in the icons' colour, so a list of running agents stays calm.
+    Every strip's delay puts it on the page's clock, so running items step together; with reduced motion it stays on
+    its first frame, in the phone's closed drawer it pauses. That is the sidebar's only motion (the Familiar's row still
+    frames its logo, `IconMarker`). Wanting the owner is steady: a blue dot for an unread answer (`UnreadMark`; the name
+    is bold, `.session-title.unread`, whatever the status shows first), a red dot for a failure (`FailedDot`, what
+    failed in its tooltip and accessible name). The two dots differ by colour only (owner decision); forced-colour mode
+    keeps their colours. A subagent's status is `runState` of its `Child.failure`: busy, failed, or nothing (stopped,
+    reset, nothing to answer). A session's is what wants the owner first: `failureOf`, then unread, then working (any
+    of its conversations, its subagents' too, as the Familiar's row; owner decision: a running subagent must not hide
+    that the session waits for the owner). While the status shows a failure or an unread answer and some conversation
+    runs, pi's dots (and the count of running conversations, when more than one) show before the age (`BackgroundWork`,
+    `.background-work`). The
+    open session's main conversation says the same above its composer (the chat's `RunningAgents`, `.running-agents`):
+    pi's dots and the running subagents' and one-shot agents' names, each opening its conversation; on a phone the
+    drawer is closed, and an idle main conversation shows no wheel. Its main
+    conversation's last run failure comes from the session worker (`SessionStatus` 3's `failure`, below). A collapsed
+    group or rollup sums up what it hides (`hidden`, `activityOf` in `model.ts`): pi's dots with the working count, a
+    warning sign with the failed count (`FailedMark`), a blue unread count. The top bars' menu button (`menu-badge`
+    slot, `MenuBadge` in `web.tsx`, rendered by the chat's and the list page's bar) counts the other live sessions that
+    want the owner (`wantingOf`: a failure or an unread answer, the open one left out), red when one failed. The
+    sidebar publishes it, as it publishes the list page's data. A "needs input" state waits for questions and approvals
+    (`docs/waiting.md`).
+  - **Run failure in status** (`plugins/status`): the session worker reports, with its tasks and busy conversations,
+    why the main conversation's last run ended without an answer (`LiveDoc.runFailure`: reason and detail), only while
+    that conversation is not busy; the reader sees it in `SessionStatus` 3's `failure` (a guest sees the reason only).
+    Workers and pages built for versions 1 and 2 still bind (`accepts`; their reports carry no failure). Test:
+    `run-control.test.ts` (a stop from outside: the drafts, then `aborted` in the status), `contract-versions.test.ts`.
+  - **Settings** (`sidebar-settings.ts`, `SidebarSettingsStore`/`SidebarSettings`, owner): the rollups' order, windows
+    and collapsed rollups and groups, one persisted document in the server's store (`p2.sidebar-settings-state`): a person's
+    view, not the catalog. A project's "+" sets the new-session screen's location (the project's default place) and a
+    join (`NewSessionJoin`, `projectJoin` in `project-commands.tsx`: `Projects.assign`), which the chat plugin runs once
+    `Sessions.create` answered (a refused creation leaves no membership; a failed join shows in the toast) and clears
+    after. Tests: `sidebar-model.test.ts`,
+    `run-state.test.ts`, `sidebar-settings.test.ts`, `ui-sidebar.test.ts`, the scoped search in `search.test.ts`,
+    list links in `foreign-requests.test.ts`.
+  - **Project commands and drag and drop** (`project-commands.tsx`, `sidebar/drag.ts`, owner): a project's group row
+    is the command menu's target `project` (hovered or focused; a long press; its ⋯, shown on hover with a fine
+    pointer, hidden on touch screens, opens the menu on it, `openCommandMenu`): Rename project… (the query is the new
+    name), Change default location… (the directory picker as layer `project-location`; the project rides in a module
+    variable, as a picker's steps keep only the folder), Move project up/down, Archive project (an open session of it
+    gives way to the new-session screen), Delete project… (a confirming row with the count of its sessions). A session
+    target has Move to project… ("No project" and the live projects); the Archive's list shows archived projects
+    (target `archived-project`: Restore project, Delete project…). The new-session screen shows the project above the
+    location (`.project-pick`, "No project" for a plain New session); its page `new-session-project` sets the join and
+    the project's default place. Drag and drop (delegated pointer listeners on `.sidebar-nav[data-drag]`, a floating
+    name, the browser's own link drag prevented, the click a drag ends with swallowed): with a mouse a press that moves
+    5px drags; on touch screens a long press (500 ms within 8px, a vibration) picks the row up, a move then drags (a
+    non-passive `touchmove` keeps the list from scrolling; near its edges the list scrolls by itself) and a release
+    without a move opens the row's command menu (owner decision: long press drags; the session's own row and project
+    rows therefore take only the hover target, `TargetNavRow`, not `useCommandMenuRow`'s long press). A session's own row
+    onto a project's group (`li.sidebar-group[data-project]`) or onto the sessions without a project assigns it; a
+    project's row onto another's upper or lower half moves it before or after it. Moves show at once
+    (`applyProjectGuess`).
+- **Rollups made from code** (`plugins/rollups`; README, The web sidebar): a saved script over every session that returns
+  one sidebar section, in the built-in rollups' layouts. The script decides what a rollup collects; the sidebar decides
+  what it shows, so the window, sticky sessions and the owner's settings work the same as for the built-in ones.
+  - **Schema** (`contract.ts`): `RollupOutput` is `{ layout: "sessions" | "link", members }` or `{ layout: "groups",
+    groups: [{ key, name, title?, keep?, target?, members }] }`. A member is a session ID or `{ id, at?, keep? }`:
+    `at` is the time the window compares and the list sorts by (default `updatedAt`), `keep` shows it whatever its time;
+    a group's `keep` shows it without a relevant session; `target` (a folder, or a project by name) is where its "+"
+    starts a session. `RollupDefinition`: `key` (sidebar key `rollup:<key>`, groups `rollup:<key>:<keyPart(group
+    key)>`), `name`, `window` (a sidebar window the owner can change, or `none`: every member shows), `refresh`, `code`.
+    The script's output is checked against the schema on the server (the trust boundary); a failed run keeps the last
+    good output and records why.
+  - **Input** (`runner.ts`, `inputOf`): `sessions` (every session but the Familiar's, archived ones included, oldest
+    first, with `project`, `state` stopped/idle/working, `error`, `unread` and `model` as `provider/modelId`),
+    `projects`, `now()`, and `await mentions(query, { since })`: the sessions with a user or assistant message matching
+    the query (subagents included; `ftsQuery`'s keywords, all required), each with the time of its latest one, from
+    one query over the search index (`SearchIndex.mentions`, version 2; a few milliseconds on 4k messages), never the
+    transcripts. Scripts run in a code mode sandbox without tools (`CodemodeSandbox`, 5 s, 64 MiB), the input passed in
+    its store; `mentions` is the sandbox global `__p2Mentions`, called with the run's token so it runs in the run's
+    context.
+  - **Refresh** (`server.ts`): `auto` runs again when what the script read changed (a routine over the catalog,
+    status, read marks, projects and the Familiar's session, never over the rollups' own results: a script reading
+    `now()` would otherwise run in a loop on its own write; one queue per rollup), and on the 30 s tick when it reads
+    `now()`; `every` checks on its interval (the same tick) and runs when what it read changed; `manual` only by hand.
+    Every rollup can be refreshed by hand (`refresh`), and saving one runs it. **What it read:** the wrapper hands the
+    script proxies that record each session field read (`sessions.cwd`; `sessions.*` after a spread or
+    `Object.keys`), any read of `projects`, `now()`, and each `mentions` call (`mentions:{"query":"p2"}`); the
+    fingerprint (`fingerprintOf`) is a hash of the sessions' IDs in order plus those values, with what each `mentions`
+    call answered (asked again for a check: one index query each). Equal fingerprints skip the run: a script is a
+    function of what it read. A rename does not re-run a rollup that never read `title`; a new message re-runs a
+    `mentions` rollup only when it changes what the call answers (indexing a message touches the catalog, which wakes
+    the check). A failed run counts as having read every session field and the projects: it runs again once anything
+    changed.
+  - **Who:** `SidebarRollups` serves the owner (state and methods) and the Familiar's current worker (variant
+    `familiar`: `list` and the methods; other workers, stale generations and guests are refused). The Familiar's worker
+    gets the `sidebar_rollups` tool (`worker.ts`: list, preview, save, refresh, remove; its description renders the
+    input and output schemas as TypeScript), offered in its tool lists; preview runs a script against the sessions now
+    without saving. Definitions and last results are one persisted document in the server's store (`p2.rollups`), not
+    the Familiar's session: the sidebar needs them while its worker is stopped.
+  - **Sidebar** (`plugins/sessions/sidebar/custom.ts`): `customRollup` turns a saved rollup into a `Rollup` (its IDs
+    resolved to the sidebar's live rows, archived and unknown ones dropped; a session in several groups takes its first
+    member's `at` and `keep`); `Rollup.window`, `timeOf` and `keeps` and `Group.keep` carry them through `sectionsOf`
+    and `listPageOf`. New rollups go before the Archive until the owner moves them. Their options (`RollupSheet`) say
+    how they refresh, when they were last checked and why the last run failed, with **Refresh now** for `every` and
+    `manual`. Tests: `rollups.test.ts`, `sidebar-custom.test.ts`, `ui-rollups.test.ts`.
+  - **Not yet:** scripts with tools (`bash`, `models.classify`) for `every` and `manual` rollups, which would run in
+    the Familiar's worker; a declared cheap check (for example `git rev-parse HEAD`) that decides whether such a
+    script runs; editing a rollup's code from its options; the TUI shows no rollups. `auto` rollups run on the
+    server, so after an edit (a new or moved session) their section follows one round trip and a run later; the
+    built-ins are computed in the browser at once. Running `auto` scripts in the browser would need QuickJS in the web
+    bundle (about 640 KB of wasm, `InlineCodemodeSandbox`), which p2 does not ship today.
 - **Principals** (`src/runtime/principals.ts`, typed: `P2Principal`, with Chord's API typed by it in
   `src/runtime/chord.ts`): `owner` (a local owner session on loopback `access: "local"`, authenticated Radius `access: "relay"`, or a
   signed owner cookie `access: "device"` with a device ID), `guest`, `worker` (stamped by the server's `session:` route
@@ -811,13 +1152,17 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `src/runtime/input.ts`); a peer session's message is a `p2.peer-message` entry, a subagent's report or `team`
   message a `p2.agent-message` entry (`src/runtime/entries.ts`). Their model message starts with a
   `<sender kind="owner|guest|session|subagent" …/>` block (`src/runtime/sender.ts`, values escaped; a subagent's
-  text follows as `[<intent>] <text>`), which the preamble explains and nothing reads back: readers and `originOf`
-  use the entry data.
+  text follows as `[<intent>] <text>`), which the preamble explains and nothing reads back: readers use the entry data.
   Stop/dequeue restore text only to its author; removing a queued input (×,
-  no restore) discards it, as in Pi Mobile.
+  no restore) discards it, as in Pi Mobile. Stop is Durable's `Conversation.abort()`, which withdraws the queue in the
+  commit that marks the run; people's text it withdrew goes back to its authors (the caller's to the composer,
+  others' to their drafts; `conversations stop`, which has no author, gives all to drafts). Peer and subagent messages
+  are submitted with `onAbort: "keep"`, since their senders cannot take them back: they stay queued, as after a failed
+  run, and go with the next input. A main agent's queued task for a subagent is withdrawn (its reporter says so).
 - **Windowed conversation view** (`plugins/chat/worker.ts`, `src/web/history.ts`, `src/runtime/conversation-stats.ts`):
-  `Chat.view` is Durable's view as is: a window over the transcript (the fork-aware history in entry ID order, head
-  markers in place), the newest 50 entries, then appends, back to 50 past 100, `before` the entry just before it. The
+  `Chat.view` is Durable's view with image references: a window over the transcript (the fork-aware history in entry
+  ID order, head markers in place), the newest 50 entries, then appends, back to 50 past 100, `before` the entry just
+  before it. The
   worker holds one Durable watch per conversation (default window), shared by every viewer. Clients (web and TUI)
   keep a `TranscriptStore` per host and conversation over Durable's `ConversationTranscript`: every value of the view
   is merged in, so entries that leave the window stay; scrolling up loads earlier pages (`Chat.entries`, 100 entries
@@ -835,6 +1180,14 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   sheet reads `ChatCosts`, from `context()` when it opens. Measured with 3,000 seeded entries (fake provider, slayer):
   opening sends 50 entries (125 KiB, 14 ms) instead of 101 (251 KiB, 33 ms); paging to the start 30 pages, 244 ms
   (before: 29, 186 ms); building the whole transcript 1.3 ms (before: 10.9 ms).
+- **Image references** (`src/runtime/entry-images.ts`, `plugins/chat/server.ts`): the view's and `Chat.entries`'s
+  image parts are `{ type: "image", mimeType, src, width, height }` instead of base64 data; pages load them from
+  `GET /entry-image?session&conversation&entry&message&part` (viewers of the session only, same-site, cached as
+  immutable), which reads the entry through `ChatImages` on the worker. Why: a window of 50 entries with screenshots
+  came to 38 MB, past a page link's part limit, so the session could not be opened; through Radius the brain's loopback
+  socket closed on it and the page reconnected in a loop. Clients read image parts through `shownImage` (inline parts
+  of kept copies become data URLs). Pages take parts up to 32 MiB from the server (`SERVER_PART_LIMITS`, Chord's
+  default is 16 MiB); Radius's relay limits one data message to 32 MiB by default (Radius ee560a41; 16 MiB before).
 - **Run failures** (`pi.live.runFailure`): why the newest run ended without an answer shows as a failure notice at the
   end of the transcript (web and TUI, the error notice style) until the next run starts: `model_error` and `no_model`
   "The model could not answer this input. <detail>", `faulted` "The run failed: <detail>", `orphaned` "The run could
@@ -864,8 +1217,28 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
 - **Reopening the last conversation** (`resumeRoute` in `src/web/navigation.ts`): the installed app (standalone display
   mode, iOS `navigator.standalone`) launching at `/` reopens the conversation open when it was last used (recorded on
   navigation and when the page is hidden, `localStorage` `p2-last-conversation`) if that was less than 2 hours ago.
-  Going home forgets it; a browser tab opening `/` and a launch with another address are unaffected; signing out
-  forgets it.
+  The new-session screen forgets it; a browser tab opening `/` and a launch with another address are unaffected;
+  signing out forgets it.
+- **Home and the new-session screen** (`Route` in `src/web/navigation.ts`): home is `/`, a route without `session`,
+  `page` and `newSession`; the chat shows the `home` slot there (the Familiar's, which replaces the route with its
+  session), else the new-session screen. The new-session screen is `/new` (`NEW_SESSION`, `openNewSession`): the
+  sidebar's "New session" row and a group's "+" open it, and a session archived or removed while viewed is replaced by
+  it.
+- **The location picker** (`plugins/envs/DirectoryPicker.tsx`, shared as `contract.web.tsx`; README, Locations): one
+  sheet "Location" for a new session's location (the hero's `.cwd-pick`, Change working directory… on the new-session
+  screen, New session…'s Select folder…), moving a session (the top bar's location, the Session sheet, Change working
+  directory…: "Move session to …" for another machine, leaving a sandbox confirmed) and a project's folder (layers
+  `project-folder`, `project-location`). The machines are a row of toggles (This device, the SSH environments, then
+  the sandboxes with a lock); below, the chosen machine's 5 most recently used folders, derived from the `sessions`
+  the caller passes (the owner's catalog rows, archived included, newest `updatedAt` first, distinct per machine; no
+  storage of its own: a file copied into another plugin's bundle may import only its own plugin, so it cannot read
+  the catalog itself). A recent row uses its folder at once (the current location just closes), its chevron browses
+  it. The browser: the path as steps (`~` for the home folders `shortPath` knows, else `/` or a drive; parents
+  tappable), the pencil turning it into a text field (Enter browses, Escape back), the subfolders, and the choice
+  pinned at the bottom. Every folder and machine change is a history entry (the layer's locator `{ env, path }`);
+  listings are cached by machine and path (`QueryCache`) and requested with the tap; loading and errors show inline.
+  Type and rhythm are the sidebar's (Elanor's UI text, 28px rows a list gap apart). The command menu's New session…
+  page lists folders by name with the machine and parent folder as suffix (`This device · ~/pi/apps`).
 - **Conversations kept on the device** (`src/web/conversation-cache.ts`, IndexedDB, the owner's browser only): the
   transcript's newest entries without a gap among them (up to 4 MB) as a window (`before` the entry just before them),
   with the documents but without the live run and queue, and the measured row heights, of the 20 most recently used
@@ -884,7 +1257,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `src/web/elanor.css` loads the fonts (Mallos Serif, Commit Mono), the pi brand's tokens and the components' styles,
   before `style.css`. Cascade layers: `p2-reset` (p2's element resets in `style.css`), then `elanor` (all of
   Elanor's styles), then p2's unlayered rules. The tokens follow `<html data-color-scheme>`, set with `data-theme`
-  (`theme.ts`, and the page's inline script). Fonts are files of the web bundle (`.woff2`, `font/woff2`).
+  (`theme.ts`, and the page's inline script). Fonts are files of the base bundle's assets (`.woff2`, `font/woff2`).
 - **Markdown in Elanor's components** (`src/web/ElanorMarkdown.tsx`): `Markdown.tsx` renders through a component map
   (`MarkdownComponents`, `MarkdownComponentsContext`; `{}` renders plain elements), Elanor's by default: `Prose` with
   its flow spacing, `Text`, `Heading`, `List`, `Link`, `Table`, `CodeSnippet` with Copy, a read-only `Checkbox` for
@@ -893,7 +1266,8 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   code font; the streaming dot and a marker's spacing are there too.
 - **Service worker** (`public/sw.js`, served at `/sw.js` with `no-cache`): the app starts without the network once it
   was opened. App pages come from the network first and fall back to the last app page kept (on failure, or after 3
-  seconds); the web bundle's content-named files come from the cache first (the newest two bundle versions are kept);
+  seconds); the web surface's content-named files (`/_chord/web/…`, not `/_chord/web/base`) come from the cache first (the newest
+  two base versions are kept);
   everything else goes to the network untouched. Pi Mobile had none because it would have kept stale code across Vite
   HMR and restarts; p2 serves no source modules (dev mode included), so every kept file is content-named and the page
   never wins over the network. Signing out deletes its caches.
@@ -968,8 +1342,9 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   (status). A document nobody wrote yet is absent and cannot be followed, so chat mode and artifacts create it empty on
   first follow. A method that writes such a document returns after Durable's commit, by when the follow has the new
   value (`chat-mode.test.ts`). The same holds for p2's own natives: `PromptResources` follows the prompt loads.
-- **Sharing** (`plugins/sharing`): `Shares` (server local, `shares.sqlite`: links, guest identities with a
-  revision; the database tells listeners of each committed change and `Shares` follows it), `Presence` (connected
+- **Sharing** (`plugins/sharing`): `Shares` (server local; its tables in the server's store, `plugins/sharing/store.ts`:
+  links and grants keyed by their session's address (`host(Session)`), guests with a revision; its lists are live
+  queries over them), `Presence` (connected
   guests: derived from `host.references(GuestPresence)`, design §19), `GuestPresence` (held by a guest page's web
   facet; a link drop is a leaving), owner-only `Sharing` (links, connected guests, link/reset/remove). Guest
   principals carry their grant revision; removal, link reset, archive and restore bump it and call
@@ -985,8 +1360,21 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   through the worker's `Attachments` local (only uploads of that session): each is materialized before admission into
   the data directory's `uploads/<session>/` on this machine (for the default data directory that is
   `~/.pi/p2/uploads/<session>/`) and, when the receiving conversation works on another environment, into
-  `~/.pi/p2/uploads/<session>/` there; the message lists those paths, with images inline (from this machine's copy)
-  when the model accepts them. `DownloadStore` (server local) snapshots a server file into the session's files;
+  `~/.pi/p2/uploads/<session>/` there. The message's text places its files: a reference
+  `![name](attachment:<upload id>)` (images) or `[name](attachment:<upload id>)` (other files) counts when its ID is one
+  of the message's attachments (`src/runtime/references.ts`). The model reads each file where it is referenced, marked
+  as Codex marks local images: `<image name=[Image #N] path="<copy>">`, the image (from this machine's copy, when the
+  model accepts images, fitted to its limits before submission with the worker's image processor,
+  `WorkerParts.images`, Durable's `fitImage`), what fitting changed or why it is left out, `</image>`; other files as
+  `<file name=[File #N] path="<copy>" />`; a second reference as `[Image #N]` alone; unreferenced uploads (the TUI,
+  Discord) after the text. The web composer (`plugins/chat/draft-editor.tsx`) shows references as pills: files are
+  placed at the caret or a drop's point, moved by dragging or the pill's menu (Earlier, Later, Remove), and every
+  change, typing and pills alike, goes through the composer's own undo history (`draft-history.ts`); the browser's
+  undo (keys, Edit menu, iOS shake) never runs. Picked files are referenced by their local keys until the send
+  renames them to upload IDs; references to this session's uploads (a message brought back by Edit or from the queue)
+  go as they are. Transcript, previews, titles and the TUI show references by the files' names. `read`
+  (coding-tools) and the `fit-images` plugin (Durable's `afterTool` extension, for every tool result) fit the images of
+  tool results with the same processor before they are committed: the transcript never changes later. `DownloadStore` (server local) snapshots a server file into the session's files;
   producers on the worker (send_file) write there directly (space `downloads`, key the snapshot's UUID). `GET|HEAD
   /download?session=&id=` serves them through `SessionFiles` to the owner and the session's guests (no
   `Sec-Fetch-Site: cross-site`; ranges for audio/video). An archived or unknown session's downloads and artifacts
@@ -998,7 +1386,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
 - **File index** (`plugins/file-index`): `FileIndex({ session, conversation })` (participants, as `Workspace`) answers
   `@` completion (`complete`, ranked like pi's `@`) and Tab completion (`list`, one directory) for the TUI and the web
   composer. A worker-local cache per conversation (`FileIndexCache`) builds from `WorkspaceBackend`'s `files` query
-  (git ls-files or the bounded walk, private paths excluded, `truncated` surfaced), derives directories from paths,
+  (git ls-files or the bounded walk, `truncated` surfaced), derives directories from paths,
   and rebuilds lazily when `changes` advanced (at most once a second). Cwd-relative only (`~`, absolute and `..`
   complete nothing). Text handling shared by both UIs: `src/runtime/completion.ts`. p2-tui-port.md sections 8, 10.2.
 - **Workspace** (`plugins/workspace`): owner/read-write-guest `Workspace({ session, conversation })` queries a
@@ -1014,7 +1402,9 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   exact same-origin Origin), then checks the destination is free before renaming. Worker upload writes serialize
   across conversations to prevent competing uploads from overwriting each other; external filesystem races remain
   the ExecutionEnv's confinement/rename limitation, not a sandbox. Every HTTP request rechecks current access;
-  read-only guests and cross-session guests are denied. Private data and `.git` paths cannot be opened.
+  read-only guests and cross-session guests are denied. `.git` paths and paths out of the working directory cannot
+  be opened. p2's data directory is a workspace like any other (sessions work in `<data>/plugins`, docs/agent-plugins.md):
+  the panel, the file index and the watch neither refuse nor hide it.
   Web: route-owned sheet with Files (tree, fuzzy filter, uploads), Changes (working tree, paged branch commits),
   Search (literal text and include/exclude globs), File/Changes/Preview views, and Comments. Review drafts and open
   editors persist in localStorage per conversation; Send/Send all use ordinary attributed Chat input. Integration
@@ -1066,9 +1456,10 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   SSH configuration comes from the envs plugin and the conversation's location environment; the separate `terminal-sessions.json`
   mapping is no longer read. Host keys use `ssh/known_hosts` and `pi-env-<name>` aliases. `envs.test.ts` exercises a
   remote terminal against a disposable localhost SSH fixture; no real remote host is used. Windows PTYs remain unsupported. The workspace has an owner-only
-  Terminal tab through the terminals plugin's `workspace-terminal` slot. Side and bottom panels carry across a
-  session switch, showing that session's terminals without starting one. Only explicit terminal-button/tab taps
-  request auto-start; attachment updates replace the route, never push or reopen a later destination.
+  Terminal tab through the terminals plugin's `workspace-terminal` slot. Side and bottom panels are remembered per
+  session (Browser navigation, Panels per session): another session opens with its own, never starting a terminal.
+  Only explicit terminal-button/tab taps request auto-start; attachment updates replace the route, never push or
+  reopen a later destination.
   Outdated hosts show Restart (ends all terminals), but idle outdated hosts are not automatically replaced yet; the
   agent's calls to an outdated host fail with that advice (`OUTDATED_HOST`); archiving closes its terminals with the
   viewer protocol every host speaks (list, then attach and force-close each).
@@ -1115,17 +1506,19 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `ghostty.test.ts` and `terminal-input.test.ts` cover the copied browser primitives. PTY tests skip when no daemon
   build exists (`npm run build:daemon` in `packages/env` builds a debug one).
 - **Search** (`plugins/search`): `SearchIndex` (server local, `search.sqlite`: root/subagent user/assistant text in FTS5 and
-  one cursor per conversation; derived, dropped on a schema change). Each worker's `Indexer` (lifetime "host") runs a task that reads
+  one cursor per conversation; derived, dropped on a schema change; version 2 adds `mentions`, each session's latest
+  message matching a query since a time, for rollups made from code). Each worker's `Indexer` (lifetime "host") runs a task that reads
   the server's cursor (`SearchFeed`, worker principals only, session from the principal), scans each root/subagent
   conversation's immutable history after it in pages of 200, and sends them; each call returns once the server
   committed it, and the cursor sent stays put until the last page of a range, so an interrupted scan repeats the
   range (idempotent by entry ID). It runs at start and after every commit adding entries (Durable
   `observeCommits`), and retries after an error (server unreachable, reload) from a fresh cursor. The speaker and
-  peer-sender blocks are not indexed. Owner-only `Search.rebuildIndex({ session })` (Pi Mobile's) starts a persisted job on `SearchIndex` (stop the worker, reset its entries, scan from a fresh worker; an archived session's starts without resuming its work and stops again) and answers once it started; `Search.rebuilds` shows it running and why it failed (`rebuild-index.test.ts`). Owner-only `Search.search({ query, archived })`: sessions whose title or cwd
-  contains the query (sidebar order) and up to 41 message hits (literal terms, all required) in the archive scope.
+  peer-sender blocks are not indexed. Owner-only `Search.rebuildIndex({ session })` (Pi Mobile's) starts a persisted job on `SearchIndex` (stop the worker, reset its entries, scan from a fresh worker; an archived session's starts without resuming its work and stops again) and answers once it started; `Search.rebuilds` shows it running and why it failed (`rebuild-index.test.ts`). Owner-only `Search.search({ query, archived, sessions })`: sessions whose title or
+  cwd contains the query (sidebar order) and up to 41 message hits (literal terms, all required) in the archive scope,
+  within `sessions` when given (3; a sidebar list's own sessions, applied before ranking and the limit).
   Search hits include conversation IDs, and a hit opens that conversation (a subagent's too); default titles derive from the first root user message, explicit titles
-  survive reindexing, and `updatedAt` advances monotonically with indexed activity. The sidebar search box (owner) filters sessions and
-  lists message hits.
+  survive reindexing, and `updatedAt` advances monotonically with indexed activity. A sidebar list page's search (owner) filters its
+  sessions and lists message hits within them.
 - **Configuration** (`plugins/models`): `ModelConfig` (server local) owns p2's `Resources` observer
   (settings.json, models.json, auth.json; hot reload) and contributes it to `ModelResources` (a native), plus `summary` (model
   picker) and `snapshot` (settings, providers, credential metadata, errors; never secrets). Workers run their own
@@ -1141,7 +1534,13 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   `SettingsSections` (`src/runtime/web-core.ts`) once, keyed by its sheet layer's name, with `label`, `title`,
   `order` (the list sorts by it, then by key), `Sheet` (renders its sheet while the route opens it; the app's layout
   keeps every one mounted, `SettingsSectionSheets` in `src/web/SettingsNav.tsx`) and optionally `Shown` (Voice: only
-  with a speech service). The section is that sheet's layer right above `settings`. While the window is open, every `Sheet` renders as a page in
+  with a speech service). The section is that sheet's layer right above `settings`. The owner's page holds the small
+  owner-only objects of the sections from its start, in components mounted all along, and hands the sections that
+  reference (a new `useObject` would be a new hold, a round trip): `Settings` and `ServerNameSettings` (the gear,
+  `HeldSettings`), `ProviderLogin` (the Providers slot), `Devices` (the Devices slot), `Discord` (`DiscordSheets`,
+  `held.ts`). Not held ahead: `Envs` and `Ports` (derived from the session catalog: re-sent as sessions change),
+  `Mcp` (the servers' tool lists), Logs (lines), Traces (calls only). Measured with a 150 ms round trip: General
+  470 ms → 20 ms, Discord 160 → 8 ms, Devices 326 → 160 ms (its token is a call). While the window is open, every `Sheet` renders as a page in
   its pane (`SettingsPane`, `src/web/settings-embed.ts`): its title and Back, no scrim or × of its own (the window's
   close everything), `sheet-body` kept for the plugin's styles. The same sheets opened elsewhere (Sign in to a
   provider, a session's logs or Discord link) stay sheets of their own.
@@ -1204,77 +1603,51 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   execution environment and saving immutable snapshots into the session's files (space `downloads`, `source: "agent"`).
   Directory sources and files over 25 MiB fail. The existing authorized `/download` route serves snapshots even
   after source deletion or plugin reload. `test/p2/send-file.test.ts` and the files integration tests cover it.
-  The artifacts plugin supplies the shared viewer.
+  The artifacts plugin supplies the file viewer.
 - **Views** (`plugins/views`, `docs/views.md`): panes beside the transcript that the person and the agent share
-  (a workspace Markdown file, the working tree's changes, custom HTML views with JSON state and a `window.p2view`
-  bridge), laid out per device (tabs, splits, drag and drop; one pane at a time on phones), with an annotation layer
-  (comments, removals, drawings on any pane, the transcript included). Selections and annotations go with the person's
-  next message (send router `views`, entry kind `p2.view-input`); the agent's `view` tool reads and changes views;
-  the owner's library keeps saved views in `<data>/views/`. Core: `AppLayout` wraps `main` in the `workbench` slot,
-  the chat's top bar has `view-actions`.
-- **Artifacts and viewer** (`plugins/artifacts`): owns its native artifact tool; versions live in the session's
-  files (space `artifacts`, path = the name, Files versions = artifact versions, never reused; title and type in
-  `meta`; 2 MiB UTF-8). The `/artifact` route reads through the worker's `ArtifactSource` (server only). `ArtifactList` follows the conversation's latest-only `ArtifactDoc`, independently of
-  transcript paging, compaction and reset, and validates the conversation during activation. `/artifact?session=&name=&version=` rechecks authorization for owner/guest, rejects cross-site reads,
-  and serves the preview with a CSP sandbox (no same-origin privilege, forms, child frames or objects). Only
-  previews receive the diagnostics bridge; `download=1` returns the original source. HEAD describes the same
-  representation as GET. The chat-content slot supplies the shared transcript card contexts and explicit-click
-  file/artifact viewers; a top-bar counter toggles a list of every version, newest first, in the side panel
-  (`SidePanel`, `Route.panel` "artifacts": docked on the right from 700px like a run's activity, which it replaces and
-  which replaces it; a sheet on phones). Dragging a docked side panel's left edge resizes it; every side panel shares
-  that width, kept per browser (`p2-side-panel-width`; `useDragSize` in `src/web/drag-size.ts`, which the sidebar,
-  workspace and terminal use too). The viewer is a named `Route.layers` entry (Back and sessionStorage restoration);
-  picking an artifact pushes a viewer above the list.
-  HTML/SVG use a sandboxed iframe, Markdown/text render safely,
-  sent files use the conservative file preview. Nothing opens from a server update. `test/p2/artifacts.test.ts`
-  covers fake-provider publication, versions, independent index, reload/restart, CSP, HEAD, guest isolation and
-  byte limits; `ui-viewers-search.test.ts` the picker and viewers.
-- **Inline artifacts** (`artifact` tool, `inline: true`): the call's version also renders in the chat, below its
-  card in the turn's results, so agents can show diagrams (e.g. SVG sequence diagrams) and small visual results in the chat
-  instead of ASCII. `inline` travels only in the result's details (`ArtifactDetails`, `{ ...info, inline: true }`);
-  the index, the stored version and every Chord contract are unchanged, so no contract version moved. The web
-  (`InlineArtifact` in `plugins/artifacts/preview.tsx`, provided to `Chat.tsx` through `InlineArtifactView`) renders
-  that version, never "latest": Markdown with the viewer's `Markdown` component, text as wrapped `pre` (both at most
-  70vh, scrolling), HTML/SVG in the viewer's sandboxed frame (opaque origin, same route and CSP). The preview's
-  diagnostics bridge also posts the document's content height (level `size`, again on every resize), and the frame
-  takes that height up to 70vh. Drawings fill the frame's width: an SVG document with a `viewBox` (or an absolute
-  width and height, which become its `viewBox`) is set to 100% wide and high, so it scales with its aspect and
-  reports the `viewBox` height at its width, leaving no blank space; an HTML document whose body is only a `viewBox`
-  SVG or an image gets it 100% wide at height auto (zero specificity, so any author rule wins), and is measured
-  without its scrollbar (a too-short frame's scrollbar would otherwise stay). This applies in the viewer too. Past 70vh, HTML scrolls inside the frame and an SVG scales down to fit (giving the SVG root an explicit
-  CSS height instead, to make it scroll, broke its rendering in Chromium's out-of-process frame);
-  reported heights are kept per URL so a remounted row keeps its size. A version the route cannot serve shows
-  "Artifact unavailable" (HEAD first for HTML/SVG). Tapping the card still opens the full viewer. **Who sees it:**
-  every viewer of the session, guests included, HTML and SVG too, without a tap (owner decision, option (a): the
-  sandbox and CSP are the protection, as for an opened preview). The TUI renders inline Markdown (rendered) and text
-  in full; HTML/SVG keep the card line. SVG previews carry the bridge in CDATA (the script's `&&` broke the XML
-  before); an empty `<svg/>` root is served without it. Fake provider: `artifact <json>` calls the tool with those
-  arguments. Tests: `artifacts.test.ts` (details, bridge), `ui-inline-artifacts.test.ts` (browser: Markdown, SVG,
-  fills the width, fitted height, 70vh cap, card opens the viewer, unavailable version, guest), `tui-p11.test.ts`
-  (inline Markdown).
-- **Conversations** (`plugins/conversations`): the `conversations` tool (`origin: "owner"`, `scope: "main"`) lists
+  (a workspace Markdown file, the working tree's changes, artifacts, plugin kinds; `View.item` says what a view shows),
+  laid out per device (tabs, splits, drag and drop; one pane at a time on phones), with an annotation layer (comments,
+  removals, drawings on any pane, the transcript included). Selections and annotations go with the person's next
+  message (send router `views`, entry kind `p2.view-input`; other plugins add blocks through `MessageContexts`); the
+  agent's code-mode tools `view_list`, `view_open`, `view_close`, `view_arrange`, `view_resolve` (namespace `view`)
+  open and arrange them. Core: `AppLayout` wraps `main` in the `workbench` slot, the chat's top bar has
+  `view-actions`; `ViewKinds` (`{ Pane }`) and `ArtifactKinds` are the web registries. Custom views, view state, the
+  library, rooms and view principals were removed on 2026-11-12 (docs/glyph-editor-port.md).
+- **Artifacts** (`plugins/artifacts`, `docs/artifacts.md`): html pages and Markdown documents the agent writes with
+  code-mode tools (namespace `artifact`), kept on the server per session (documents and a version table keyed by the
+  session's host address, so export, import and delete carry them; clone and fork copy them through `SessionCopied`).
+  `artifact_show` renders the artifact's pane in place in the transcript (mounted only while on screen); views of kind
+  `html` and `md` show one beside the chat; the top bar's counter toggles the side panel listing every `ArtifactKinds`
+  item (`SidePanel`, `Route.panel` "artifacts": docked on the right from 700px like a run's activity, which it replaces
+  and which replaces it; a sheet on phones), where a row opens the item as a view, or for a read-only guest shows it in
+  the panel. Dragging a docked side panel's left edge resizes it; every side panel shares that width, kept per browser
+  (`p2-side-panel-width`; `useDragSize` in `src/web/drag-size.ts`, which the sidebar, workspace and terminal use too;
+  frames take no pointer events during the drag). Html pages run in a sandboxed frame from `/artifact-frame` with the
+  `window.p2view` bridge (state per artifact, selection, regions, console lines, the agent's code); new page errors go
+  with the next message. The chat-content slot still supplies the transcript's card contexts and the sent-file viewer
+  (`FilePanel`, a named `Route.layers` entry). Artifacts written before 2026-11-12 (the session's files, space
+  `artifacts`) are not migrated.
+- **Conversations** (`plugins/conversations`): the `conversations` tool (`scope: "main"`, `locked: "conversations"`) lists
   active roots without starting workers (with each one's location and project, and the projects), sends
   server-attributed peer input, reads the latest completed text answer (bounded scan, no thinking, including old
   history), creates a session at a project's place or a cwd with the message as its first peer input (its ID derived
   from the call, so a retried call finds it; the sender's model and thinking level unless it names a signed-in model;
   `SessionOperations.create`, shared with the owner's `Sessions.create`),
   stops a session's run (as Stop in the chat), and archives or restores a session (`SessionOperations`; never
-  itself). A send carries the sending turn's origin to the recipient's
-  `p2.peer-message` entry (`Conversations.query` and `PeerConversation.send` `origin`), so the recipient's turn may
-  act for the owner when the owner started the sender's. `Conversations`
+  itself). `Conversations`
   accepts only current worker generations; `PeerConversation` accepts only the parent's `{ kind: "server" }`
   principal. The server brokers the sender's ID/title from the catalog, checks archive around startup/admission
   and receipts, and scopes deduplication to sender + Durable tool task/call. Calls are short and cancellable;
   cancellation after admission does not undo remote work. Final answers never auto-forward. Owner peer labels
   navigate to roots (restoring archives); guests get plain labels. `test/p2/conversations.test.ts` covers list/send/
-  answer, peer replies from the owner's turns, restart deduplication, concurrent cross-sends, busy answers, follow-ups,
-  invalid destinations, reload, guest/forged attribution, child tool exclusion and inaccessible public ingress.
+  answer, peer replies, restart deduplication, concurrent cross-sends, busy answers, follow-ups,
+  invalid destinations, reload, guest turns, child tool exclusion and inaccessible public ingress.
 - **Familiar** (`plugins/familiar`): one long-running session above the others that keeps track of them and starts,
   steers, stops, archives and restores them. The server's `FamiliarStore` holds which session it is (persisted; the
   ID is chosen before the row is made, so a crash makes the same one); the owner's `Familiar.open` makes it on first
-  use (home directory, default model, title "Familiar") or restores it when archived, one open at a time. Workers learn
+  use (home directory, default model, title "Ask Pi", its name for the owner) or restores it when archived, one open at a time. Workers learn
   whether they are it from their start data (`WorkerInitValues` key `familiar`). In its worker, the main conversation's
-  `pi.agent` gets `modelTools` (conversations, codemode, history_search/read/handoff) and `tools` (those plus `agent`,
+  `pi.agent` gets `modelTools` (conversations, codemode, history_search/read/handoff, sidebar_rollups) and `tools` (those plus `agent`,
   `bash` and `read`, so scripts and one-shot agents can look at the file system) at each start; its extension adds the
   `familiar` prompt section (role, notes in the code mode store key `familiar.notes`, finding folders).
   **Compaction by cost** (`cold.ts`): while its prompt cache is warm a turn reads the context at about a tenth of the
@@ -1285,22 +1658,49 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   answer after the context's head reported at least 150k tokens, or the regular cutoff (window − `reserveTokens`) when
   lower, compaction is enabled, and the conversation is idle: from a timer set after each answer (only while the
   worker runs; an idle worker stops after 5 minutes without viewers or warming) and at each start, else in an
-  `InputGate` before the next input is admitted, which waits for the summary. Web: a `drawer-head:familiar` slot above
-  the drawer's folders; the sessions plugin's `DrawerRowsContext` (`plugins/sessions/contract.web.tsx`) gives it the
-  rows and `listApart`, which leaves its session out of its folder. The TUI lists it as an ordinary session. Tests:
+  `InputGate` before the next input is admitted, which waits for the summary. Web: home (the `home` slot: `/` replaces
+  itself with its session, made on first use; while the owner has it archived, with the new-session screen) and the
+  `sidebar-start:familiar` slot, the "Ask Pi" row above the owner's "New session" (the Pi logo as its icon, framed
+  while its session works; bold with a dot for an unread answer; it opens the session, restoring it when archived); the
+  sessions plugin's web contract (`plugins/sessions/contract.web.tsx`) gives it the rows and `listApart`
+  (`DrawerRowsContext`), which leaves its session out of the rollups, and the row's shape and marks (`NavRow`,
+  `IconMarker`, `UnreadMark`). The TUI lists it as an ordinary session. Tests:
   `familiar.test.ts`, `ui-familiar.test.ts`, the conversations actions in `conversations.test.ts`.
+- **Scope prompt** (`plugins/scope-prompt`, experiment; owner only, web only): an overlay (`overlay:` slots, the
+  `SlotList` at the end of `AppLayout`) that leaves the page as it is until pointing mode is on (`mode.ts`): a double tap
+  of the bare primary modifier (Cmd on macOS, Ctrl elsewhere: each press released within 300 ms, the second within
+  450 ms of the first, no other key, click or focus loss between, so Cmd+V sent by a dictation tool never counts), the
+  binding `p2.scope-prompt.toggle` (Cmd+.), the command menu's "Prompt anywhere", or its button (`Toggle.tsx`: in the
+  sidebar's header before the collapse button, the `sidebar-header:` slots; in the top bars of the chat and the list
+  pages while the sidebar is not shown docked, the `topbar-start:` slots), which also switches it off. Holding the modifier does nothing,
+  so Cmd+click still opens links in new tabs. While on, a pill says so, frames take no pointer events (they count as
+  their pane), the thing under the mouse is outlined with its chain of labels, and a click (touch too) is taken before
+  the page sees it and opens a small composer there, whose steps widen the scope (a touch: its tap outlines what it is
+  on, a second tap on that opens the composer; a drag scrolls as always); Escape, Stop, leaving the window or
+  the pick end the mode. `scopes.ts` reads the chain from attributes the page already renders: `.drawer`,
+  `.sidebar-section` and `.sidebar-group` `[data-key]`, `[data-session]` (session rows), `[data-view-pane]` with
+  `data-view-kind/-item/-title` (Workbench), `[data-path]` (a file of the changes view), `.diff-line`, `[data-entry]`
+  (transcript entries). Where it goes (`message.ts`; the composer's "To" switches): a target in the open session's
+  page (its chat, a view) goes to the open conversation as the person's message, as the composer sends it: the page
+  stages the `<scope>` block on the session (`ScopeStage`, worker facet, by `requestId`, dropped after a minute) and
+  the views' send router carries it with that message (`MessageContexts`, which now get the routed input), so the
+  transcript shows the text with the note "with scope Chat › Message". Anything else (the sidebar) goes to the
+  Familiar: opened as its sidebar row does, the text queued on its main conversation followed by the block with the page's
+  session, conversation and title or list, which its prompt section explains. Not yet: frames' insides (an html
+  artifact is its pane). Test: `ui-scope-prompt.test.ts`.
 - **Subagents** (`plugins/subagents`): owns its protocol-independent Durable extension (persistent
   anchor conversations and exactly-once background reporter tasks, model/thinking/tool validation). The worker
   facet (an object of lifetime "host") contributes it to `Extensions` and catches up child metadata after relevant commits, retrying
-  acknowledged reports on errors/reload. Server `ChildStore` persists the list in `subagents.sqlite`; worker
+  acknowledged reports on errors/reload. Server `ChildStore` persists the list as one row per session in the server's store, keyed by its address
+  (`plugins/subagents/children.ts`); worker
   generation fences late reports. Owner `Subagents` readers see every session; guests see only their own. Reading
-  the list does not start/hold a worker. The sidebar expands children (latest entry first), with working dots;
+  the list does not start/hold a worker. The sidebar expands children (latest entry first), with working marks;
   `/s/<id>/c/<conversation>` opens an independent chat, draft and model control. A parent link returns to the root.
   Browser configuration synchronizes the subagent registry via `ConversationConfigured`. Main Stop leaves child
   work running; direct child prompts do not report to the parent. **Tools** (`resolveChoice`/`resolveTools` in
   `contract.worker.ts`, validated before any commit, shared with one-shot agents): an agent gives from its own tools
   (`api.agent()`: offered, deferred and script-callable), never more. It may give every tool its model calls except
-  `scope: "main"` ones (`subagent`, `rename_session`, `conversations`, `ports`, `reload_plugins`) and
+  `scope: "main"` ones (`subagent`, `rename_session`, `conversations`, `ports`, `sidebar_rollups`) and
   `scope: "subagent"` ones (`team`, which every subagent gets, offered from the start); `tools` names them in order,
   the default is all of them (code mode only while the main agent has it; naming a tool it lacks is refused with the
   list it may give). Deferred tools stay deferred unless named (then offered from the start). Durable enables exactly
@@ -1319,18 +1719,14 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   installed after the spawn; `tool-access.test.ts` the resolution rules; `terminal-tool.test.ts` a subagent's script
   opening a window at its own location.
 - **Tool requirements** (`src/runtime/tool-access.ts`): a plugin declares them on its tool (`P2Tool`, `defineP2Tool`):
-  `origin` (`"any"` default, or `"owner"`: only a turn the owner started) and `scope` (`"any"` default, `"main"`: only
-  top-level conversations, or `"subagent"`: given to subagents only). The worker's Durable registry wraps every tool
-  with requirements (`guardTool`, in `durableRegistry`), so no tool checks them itself. `origin: "owner"`: the location
-  tools, `reload_plugins`, `conversations`, `ports`, MCP tools (the owner's accounts are behind them). A turn's origin
-  (`originOf`, `src/runtime/origin.ts`) is the conversation's current run (`pi.live.run.inputs`, each submission's
-  entry through `tx.submission`): the owner's only if every input the run placed is (`entryOrigin`): a person's input
-  by its author in the entry data, an agent-written one by its `origin`. Agent-written inputs record the writing
-  turn's origin: subagent tasks and one-shot agents' prompts (`p2.subagent-task`), `team` messages and reports
-  (`p2.agent-message`; a report has the origin of the subagent's run that answered, `answerOrigin`: its inputs after
-  the previous run's final answer, `stop` or `length`, past mid-run error answers and compaction markers), and peer messages (`p2.peer-message`). A guest's input steered into a run takes the
-  owner's tools away for the rest of it; a guest-started chain never reaches them. Known gap: inputs of earlier runs
-  still in the context are not considered. `test/p2/inputs.test.ts`, `dev-tools.test.ts`, `tool-access.test.ts`.
+  `scope` (`"any"` default; `"main"`: only top-level conversations, for tools acting on the session as a whole:
+  `subagent`, `rename_session`, `conversations`, `ports`, `sidebar_rollups`; `"subagent"`: given to subagents only,
+  `team`) and `locked` (in a locked session: `pass` default, `never`, or a capability the owner picked: `ports`,
+  `conversations`). The worker's Durable registry wraps every tool with requirements (`guardTool`, in
+  `durableRegistry`), so no tool checks them itself. There is no per-turn authority (removed: the owner decided, as for
+  p3, that "who started this turn" is illusory against prompt injection): whoever may send input in a session may have
+  its agent use every tool it has. What a session's agents reach is decided by its tool selection (subagent and
+  one-shot `tools`), its location (a sandbox) and its lock. `test/p2/tool-access.test.ts`, `dev-tools.test.ts`.
 - **Code mode** (`plugins/codemode`): the worker facet registers Durable's `codemode` extension
   (`createCodemodeExtension`, tool `codemode`, callers `["model"]`, replay-safe) in `Extensions`. One sandbox per worker
   (`CodemodeSandbox`, 256 MiB VM heap: `CODEMODE_MEMORY_LIMIT_BYTES`, kept constant because it is part of the VM
@@ -1392,8 +1788,27 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   does). The worker object (`p2.mcp-worker`) sends `setLocations` with every location its conversations work at (the
   session's, active subagents' own) at start, after moves and subagent commits, and whenever the view re-activates (a
   refusal because a newer generation runs ends it), and
-  contributes one Durable extension `mcp` (a `self.writable`, rebuilt only when the tool list changes): deferred tools
-  named by `createMcpToolName` (every tool of a colliding name gets the hash suffix, as in pi), results through
+  contributes one composing Durable extension, `mcp` (`createMcpExtension`, a `self.writable`, rebuilt only when an
+  instance, its tools, summary or instructions, or a lease change; `Mcp` version 4 gives the worker its `leases`, the
+  instances each location uses, since a project override decides per lease even for instances serving every location).
+  Durable gives every conversation of a worker the same tools, so the extension registers every variant of every tool
+  (a tool as one instance describes it, `toolDescriptor`: title, description, schemas; instances describing it alike
+  share it) and cuts each conversation's view with wraps: the `codemode` section renders, and the `codemode` and
+  `tool_search` tools run (an `api` whose `agent()` is cut; its getters and symbol keys kept), with the servers of the
+  lease at the conversation's location only, each as its own namespace `mcp__<server>` with that instance's summary
+  and instructions. A server only another location has is not there (the main conversation's prompt does not change
+  when a subagent works elsewhere), a variant another location's instance describes is not there, and a call reaches
+  the caller's instance only as the variant it describes (else `MCP tool … is not offered at …`). Names as pi's, the
+  variant the session's lease uses keeping the plain name, other variants of a tool suffixed with a hash of their
+  descriptor. Still the union: Durable's own agent (hooks, `Conversation.agent()`, nested-call resolution, subagent tool
+  choice), and without code mode a loaded tool stays declared after a move. The namespace's description is pi's
+  one-line summary (`mcpServerSummary`: the configured `description` (`Mcp` version 4, the instance's `description`),
+  else the first line of the server's `instructions` (version 3), at most 250 characters), then where the tools are and
+  the sign-in hint for OAuth servers; it changes once when a server without a `description` first sends instructions (a
+  reloaded manager keeps the instructions it listed). The full
+  instructions come from `describeNamespace()`. Without code mode, the `mcp` extension's `mcp_servers` section lists
+  the conversation's servers with their summaries, as pi's does for `tool_search` servers. Deferred
+  tools named by `createMcpToolName` (every tool of a colliding name gets the hash suffix, as in pi), results through
   `toLlmContent` and `limitMcpContent`, `structuredOutput` only for tools with an output schema. Without code mode,
   `tool_search` is installed by the worker's registry (`durableRegistry`: once, while code mode is off and any extension
   has a deferred tool the model may call; MCP's and the terminal tool share it). Tests: `mcp.test.ts` (manager and views on a bare host with `test/fixtures/mcp-server.mjs` and
@@ -1401,7 +1816,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   it: `npm run build:daemon` in `packages/env`, or `PI_ENV_DAEMON`), `mcp-instances.test.ts` (the supervisor with a
   short backoff), `mcp-leases.test.ts`, `mcp-environments.test.ts`, `mcp-project.test.ts`,
   `mcp-windows-command.test.ts`, `mcp-tools.test.ts`, `mcp-worker.test.ts` (fake provider: a project file, `tool_search`,
-  a call, a relocation).
+  a call, a relocation, a subagent's project server kept out of the main conversation, the `mcp_servers` section).
 - **MCP sign-in** (`plugins/mcp/sign-in.ts`, `routes.ts`, `probe.ts`, `pages.ts`, `credentials.ts`; as built:
   `docs/mcp-durable.md` section 4.7): HTTP servers without an `Authorization` header use OAuth with pi-mcp's auth
   provider (stored tokens, refreshed, never a browser) and credentials in `<P2_DATA_DIR>/mcp-auth.json` (0600, keyed like
@@ -1504,8 +1919,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   gaps) are one turn (`chatItems` in `model.ts`). Its thinking blocks and texts stay in the transcript in their order
   ("Thought ›" opens in place; text as prose); each run of consecutive tool calls between them is one **activity row**;
   the turn's last text is its **answer** (Copy, Branch, Reply and the time it began; a stop, an error or the length
-  limit below it), followed by its **results** (artifact and sent-file cards, an inline artifact below its card, an
-  opened port's links).
+  limit below it), followed by its **results** (sent-file cards, an artifact a script showed, an opened port's links).
   The activity row is a wheel of the run's calls: while the agent works the newest call faces the reader in the present
   tense ("Running npm test") and breathes, a failed one is red, and the run's time counts (until the next response
   begins); when it ends the wheel rolls to a summary ("Read 3 files, ran 2 commands · 6 steps") and the total time. The
@@ -1554,7 +1968,7 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   icon, tool and argument, state), opening its detail alone; no wheels (a waiting wheel still stands for a run before
   its first call). `chatItems`' `detail` merges what goes on the wheels into the runs of calls (`wheels` in `model.ts`,
   `WheelEntry`); the summary of a wheel with thinking leads with "Thought". A result its tool shows in place (an
-  inline artifact, `hasResult` "inline") stays in place at 2, 3 and 4 (between wheels, or after its call's row at 4;
+  artifact `artifact_show` showed, `hasResult` "inline") stays in place at 2, 3 and 4 (between wheels, or after its call's row at 4;
   the wheel after it is the row that waited there); at 1 it joins the results after the answer, drawn in full, so the
   turn keeps its one wheel. `activity-model.test.ts` covers the levels, `ui-detail.test.ts` the transcript and the
   sheet as the setting changes live, and the answer arriving once.
@@ -1566,7 +1980,9 @@ startup fencing, the list marker, owner notice, worker-filtered Show logs and re
   summary as a function of the count (tools sharing the function count together: write and edit), its `Detail`, the
   calls it made (`nestedCalls`) and how it words repeats of them (`repeated`), a nested call's `CallInput` and
   `CallDetail`, and a `Result` with `hasResult` saying where: after the answer, or inline, right after its call (an
-  artifact with `inline: true`; the run of calls splits around it; at detail 1 after the answer). Writing one:
+  artifact `artifact_show` showed; the run of calls splits around it; at detail 1 after the answer). A script's
+  nested calls place their results as top-level calls do (`withResults` in `model.ts`, from the nested call's name,
+  arguments and status: it has no result of its own). Writing one:
   `docs/tool-ui.md`. A detail shows everything at once (no
   "Show all" inside it; long output scrolls with the sheet) and follows a running call live; the one cap kept is a
   script's calls: the newest eight, the rest behind "Show all", as the transcript's card had them. Owners: `coding-tools` (bash, read, write, edit), `terminals`, `codemode`, `powershell`,

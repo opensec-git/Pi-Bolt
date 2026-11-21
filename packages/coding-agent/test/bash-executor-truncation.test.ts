@@ -2,6 +2,7 @@ import { readFile, rm } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { bashExecutionToText } from "../src/core/messages.ts";
+import { createLocalBashOperations } from "../src/core/tools/bash.ts";
 
 describe("user bash output truncation (#10164)", () => {
 	const tempFiles: string[] = [];
@@ -55,5 +56,48 @@ describe("user bash output truncation (#10164)", () => {
 		expect(result.output).toBe("done\n");
 		expect(result.truncated).toBe(false);
 		expect(result.fullOutputPath).toBeUndefined();
+	});
+});
+
+describe.skipIf(process.platform === "win32")("local shell output backpressure", () => {
+	it("drains final stdout and stderr after exit while the consumer is still waiting", async () => {
+		const gate = Promise.withResolvers<void>();
+		const parts: Buffer[] = [];
+		try {
+			const result = await createLocalBashOperations().exec(
+				"printf first; sleep 0.05; printf last >&2",
+				process.cwd(),
+				{
+					onData: (data) => parts.push(data),
+					waitForOutputDrain: () => gate.promise,
+				},
+			);
+			expect(result.exitCode).toBe(0);
+			expect(Buffer.concat(parts).toString()).toBe("firstlast");
+		} finally {
+			gate.resolve();
+		}
+	});
+
+	it("can abort a producer while its consumer is stalled", async () => {
+		const controller = new AbortController();
+		const paused = Promise.withResolvers<void>();
+		const gate = Promise.withResolvers<void>();
+		const running = createLocalBashOperations().exec("exec yes", process.cwd(), {
+			onData: () => {},
+			waitForOutputDrain: () => {
+				paused.resolve();
+				return gate.promise;
+			},
+			signal: controller.signal,
+		});
+		try {
+			await paused.promise;
+			controller.abort();
+			await expect(running).rejects.toThrow("aborted");
+		} finally {
+			controller.abort();
+			gate.resolve();
+		}
 	});
 });

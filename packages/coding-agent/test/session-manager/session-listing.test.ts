@@ -242,6 +242,48 @@ describe("session listing", () => {
 			.sort((a, b) => b.localeCompare(a));
 	}
 
+	it("filters ID prefixes by header while preserving full session metadata and activity ordering", async () => {
+		const write = (name: string, id: string, cwd: string, activity: number, separator: string) =>
+			writeFileSync(join(dir, name), [header(id, { cwd }), user(id, activity), ""].join(separator));
+		write("target-misleading.jsonl", "unrelated", "/work", 999, "\n");
+		write("z.jsonl", "part-old", "/work", 300, "\r");
+		write("a.jsonl", "part-latest", "/work", 800, "\r\n");
+		write("other.jsonl", "part-elsewhere", "/elsewhere", 950, "\n");
+		// A header can span the smaller first read, or follow a malformed line.
+		writeFileSync(
+			join(dir, "wide.jsonl"),
+			["incomplete", header("part-wide", { padding: "x".repeat(8192) }), user("wide", 400)].join("\n"),
+		);
+		const local = await SessionManager.list("/work", dir, undefined, undefined, "part-");
+		expect(local.map((s) => s.id)).toEqual(["part-latest", "part-wide", "part-old"]);
+		expect(readdirSync(dir)).not.toContain(INDEX_FILE);
+		const all = await SessionManager.listAll(dir, undefined, undefined, "part-");
+		const full = await SessionManager.listAll(dir);
+		expect(all).toEqual(full.filter((s) => s.id.startsWith("part-")));
+		const index = readFileSync(join(dir, INDEX_FILE));
+		expect(await SessionManager.listAll(dir, undefined, undefined, "missing")).toEqual([]);
+		expect(readFileSync(join(dir, INDEX_FILE))).toEqual(index);
+		expect(await SessionManager.listAll(dir)).toEqual(full);
+		write("a.jsonl", "renamed", "/work", 1000, "\n");
+		const changed = await SessionManager.listAll(dir, undefined, undefined, "part-");
+		expect(changed.map((s) => s.id)).toEqual(["part-elsewhere", "part-wide", "part-old"]);
+		expect((await SessionManager.listAll(dir, undefined, undefined, "renamed"))[0]?.path).toBe(join(dir, "a.jsonl"));
+		expect(readFileSync(join(dir, INDEX_FILE))).toEqual(index);
+	});
+
+	it("recovers a prefix match from the transcript if its cached ID is missing", async () => {
+		const file = join(dir, "renamed.jsonl");
+		writeFileSync(file, header("actual-id"));
+		await SessionManager.listAll(dir);
+		const indexPath = join(dir, INDEX_FILE);
+		const cached = JSON.parse(readFileSync(indexPath, "utf8"));
+		delete cached.sessions[file].info.id;
+		writeFileSync(indexPath, JSON.stringify(cached));
+		expect((await SessionManager.listAll(dir, undefined, undefined, "actual")).map((s) => s.id)).toEqual([
+			"actual-id",
+		]);
+	});
+
 	it("gives what reading and parsing every line gives", async () => {
 		writeCorpus(dir);
 		const sessions = await SessionManager.listAll(dir);

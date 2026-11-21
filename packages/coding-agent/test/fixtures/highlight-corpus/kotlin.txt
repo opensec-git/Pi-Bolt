@@ -1,0 +1,20 @@
+package samples
+
+data class Reading<T>(val tag: String, val value: T?)
+
+/* A comment /* with a nested note */
+   continues here. */
+fun labels(items: List<Reading<Int>>): List<String> =
+    items.mapIndexed { index, item ->
+        val display = item.value?.let { it * 2 } ?: 0
+        val summary = """
+            reading $index
+            ${item.tag}: $display
+        """.trimIndent()
+        summary
+    }
+
+fun main() {
+    val first = Reading("café", 42)
+    println(labels(listOf(first)).joinToString("\n"))
+}

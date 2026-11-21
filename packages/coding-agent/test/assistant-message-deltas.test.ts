@@ -63,7 +63,7 @@ const PIECES = [
 	"naïve 日本語",
 ];
 
-function fresh(msg: AssistantMessage, streaming: boolean, width: number, hide: boolean): string[] {
+function fresh(msg: AssistantMessage, streaming: boolean, width: number, hide: boolean): readonly string[] {
 	const component = new AssistantMessageComponent(undefined, hide, getMarkdownTheme());
 	component.updateContent(msg, streaming);
 	return component.render(width);

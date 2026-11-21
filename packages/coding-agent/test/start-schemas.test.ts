@@ -4,7 +4,7 @@ import { Compile } from "typebox/compile";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { renderStartSchemaModules } from "../scripts/generate-start-schemas.ts";
-import { checkKeybindingValue, checkModelsConfig } from "../src/core/config-checks.generated.ts";
+import { checkKeybindingValue, checkModelsConfig, checkThemeDocument } from "../src/core/config-checks.generated.ts";
 import { KeybindingValueSchema } from "../src/core/key-id-schema.ts";
 import { modelsConfigSchema } from "../src/core/model-config-schema.generated.ts";
 import { createAllToolDefinitions } from "../src/core/tools/index.ts";
@@ -12,6 +12,7 @@ import * as Generated from "../src/core/tools/tool-schemas.generated.ts";
 import * as Built from "../src/core/tools/tool-schemas.ts";
 import { createCodemodeToolDefinition } from "../src/extensions/codemode/tool.ts";
 import { createToolSearchToolDefinition } from "../src/extensions/tool-search/tool.ts";
+import { getThemeSchemas } from "../src/modes/interactive/theme/theme-schema.ts";
 
 /**
  * Everything an object graph exposes: each object's own keys in order with their attributes, its prototype and
@@ -144,6 +145,27 @@ function modelsDocuments(): unknown[] {
 }
 
 describe("generated config checks", () => {
+	it("matches the theme schema for missing tokens, palette boundaries, variables and export settings", () => {
+		const theme = JSON.parse(
+			readFileSync(new URL("../src/modes/interactive/theme/dark.json", import.meta.url), "utf8"),
+		);
+		const schema = getThemeSchemas().ThemeJsonSchema;
+		const compare = (value: unknown) => expect(checkThemeDocument(value)).toBe(Value.Check(schema, value));
+		expect(checkThemeDocument(theme)).toBe(true);
+		for (const token of Object.keys(theme.colors)) {
+			const missing = { ...theme.colors };
+			delete missing[token];
+			compare({ ...theme, colors: missing });
+			for (const color of [null, "", 0, 255, 256, -1, 1.5, [], {}]) {
+				compare({ ...theme, colors: { ...theme.colors, [token]: color } });
+			}
+		}
+		for (const value of [null, [], {}, { unused: false }, { unused: 200 }, { pageBg: "brand" }]) {
+			compare({ ...theme, vars: value });
+			compare({ ...theme, export: value });
+		}
+	});
+
 	it("decide every models.json document as TypeBox's Value.Check does", () => {
 		const documents = modelsDocuments();
 		expect(documents.length).toBeGreaterThan(500);

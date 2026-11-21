@@ -1,3 +1,4 @@
+import type { Hash } from "node:crypto";
 import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
 import type {
 	BetaInputTransformation,
@@ -39,7 +40,7 @@ import type {
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { shortHash } from "../utils/hash.ts";
+import { ShortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -245,6 +246,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 		// Gateways that drop unknown request fields would silently turn a `continue` into a request
 		// without the earlier conversation, so the default is limited to Anthropic's own endpoint.
 		// Widen or remove this restriction once proxies generally forward the `thread` field.
+		// Pi-Bolt: only the anthropic provider, as before Pi 1.6.0 (#11987 widened it to any provider on the host).
 		supportsMessageThreads:
 			model.compat?.supportsMessageThreads ??
 			(model.provider === "anthropic" && hostMatches(hostOf(model.baseUrl), "api.anthropic.com")),
@@ -265,8 +267,9 @@ type ThreadedParams = MessageCreateParamsStreaming & { thread?: ThreadParam };
 interface ThreadEntry {
 	/** Number of messages in the last full request as sent plus the converted reply. */
 	prefixCount: number;
-	/** `hashThreadPrefix()` of the request's settings and those messages. */
+	/** Fingerprint of the request's settings and those messages. */
 	prefixHash: string;
+	encoding: ThreadEncoding;
 	/** Id of the reply to continue from. */
 	replyId: string;
 }
@@ -319,11 +322,63 @@ registerSessionResourceCleanup((sessionId) => {
  *   new thread.
  * - Messages, normalized so messages that mean the same to the API hash the same.
  */
-function hashThreadPrefix(
+interface ThreadFingerprint {
+	readonly encoding: ThreadEncoding;
+	readonly count: number;
+	append(messages: readonly MessageParam[]): void;
+	digest(): string;
+	copy(): ThreadFingerprint;
+}
+
+// A checkpoint owns only a hash state and weak keys. Keeping one old message alive must not keep
+// the rest of a compacted or branched conversation alive through this cache.
+const THREAD_CHECKPOINT_INTERVAL = 64;
+// Caching individual messages costs less for short conversations, especially over the first few prompts.
+const MIN_THREAD_CHECKPOINT_MESSAGES = 4 * THREAD_CHECKPOINT_INTERVAL;
+interface MessageCheckpoint {
+	count: number;
+	headerHash: string;
+	positions: WeakMap<MessageParam, number>;
+	hash: ShortHash | Hash;
+}
+// Keep the same encoding throughout a thread, even if a later request installs a payload hook.
+// The two policies have separate weak caches so an object can be reused under either encoding.
+function makeThreadEncoding(textHashThreshold: number) {
+	return {
+		textHashThreshold,
+		convertedMessageJson: new WeakMap<MessageParam, string>(),
+		// A null entry marks the first sighting. Build a checkpoint only when the converter reuses the key.
+		messageCheckpoints: new WeakMap<MessageParam, MessageCheckpoint | null>(),
+	};
+}
+
+type ThreadEncoding = ReturnType<typeof makeThreadEncoding>;
+const editableThreadEncoding = makeThreadEncoding(2048);
+const compactThreadEncoding = makeThreadEncoding(384);
+
+function hasConverterOwnedContent(message: MessageParam): boolean {
+	// The converter builds these blocks from primitive values. Tool calls and definitions can
+	// retain application-owned objects with custom JSON serialization and must be read again.
+	return (
+		typeof message.content === "string" ||
+		message.content.every(
+			(block) =>
+				block.type === "text" ||
+				block.type === "tool_result" ||
+				block.type === "image" ||
+				block.type === "thinking" ||
+				block.type === "redacted_thinking",
+		)
+	);
+}
+
+function threadFingerprint(
 	model: Model<"anthropic-messages">,
 	params: MessageCreateParamsStreaming,
-	messages: readonly unknown[],
-): string {
+	reuseConverted: boolean,
+	encoding = reuseConverted ? compactThreadEncoding : editableThreadEncoding,
+): ThreadFingerprint {
+	const { convertedMessageJson, messageCheckpoints, textHashThreshold } = encoding;
 	const { system, tools, thinking, output_config, tool_choice, betas, fallbacks } = params;
 	const settings = JSON.stringify([
 		model.provider,
@@ -337,7 +392,10 @@ function hashThreadPrefix(
 		betas,
 		fallbacks,
 	]);
-	const conversation = JSON.stringify(messages, (key, value: unknown) => {
+	const crypto = typeof process === "undefined" ? undefined : process.getBuiltinModule?.("node:crypto");
+	const normalize = (key: string, value: unknown) => {
+		// Tool inputs and schemas are application data. Preserve even keys named content or cache_control.
+		if (key === "input" || key === "input_schema") value = JSON.stringify(value);
 		// Cache markers don't change what a message means, but they move: pi puts one on the newest
 		// message, so the message that had it in the last request has none in this one. Extensions
 		// may add markers anywhere too.
@@ -345,14 +403,107 @@ function hashThreadPrefix(
 		// To attach that marker, the newest user message's string content is sent as one text block;
 		// the next request sends the same message as a string: "hi" vs [{ type: "text", text: "hi" }].
 		if (key === "content" && typeof value === "string") return [{ type: "text", text: value }];
+		if (typeof value === "string" && crypto?.hash) {
+			// Bound the fingerprint JSON for file contents and images. JSON escaping distinguishes lone
+			// surrogates that UTF-8 alone would replace. Escape literal markers as well.
+			// Leave room for the surrounding message fields in the 512-character normalization cache.
+			if (value.length >= 2048 || (key === "text" && value.length >= textHashThreshold)) {
+				return value.isWellFormed()
+					? "\0h" + crypto.hash("sha256", value)
+					: "\0j" + crypto.hash("sha256", JSON.stringify(value));
+			}
+			if (value.startsWith("\0")) return "\0s" + value;
+		}
 		return value;
-	});
-	return shortHash(settings + conversation);
+	};
+	function cursor(hash: ShortHash | Hash, count = 0): ThreadFingerprint {
+		return {
+			encoding,
+			get count() {
+				return count;
+			},
+			append(messages) {
+				if (!messages.length) return;
+				let start = 0;
+				if (reuseConverted && count === 0 && messages.length >= MIN_THREAD_CHECKPOINT_MESSAGES && crypto?.hash) {
+					// Compaction can recreate the leading summary on every request. Hash that message on
+					// each reuse and let the first ordinary converted message own the checkpoint.
+					const key = messages[1];
+					const previous = messageCheckpoints.get(key);
+					if (previous === undefined) {
+						messageCheckpoints.set(key, null);
+					} else {
+						hash.update(",").update(JSON.stringify(messages[0], normalize));
+						start = 1;
+						const headerHash = hash instanceof ShortHash ? hash.digest() : hash.copy().digest("hex");
+						if (previous && previous.count <= messages.length && previous.headerHash === headerHash) {
+							let i = start;
+							while (i < previous.count && previous.positions.get(messages[i]) === i) i++;
+							if (i === previous.count) {
+								hash = previous.hash.copy();
+								start = previous.count;
+							}
+						}
+						let end = start;
+						while (end < messages.length && hasConverterOwnedContent(messages[end])) end++;
+						end -= (end - 1) % THREAD_CHECKPOINT_INTERVAL;
+						if (end > start) {
+							for (let i = start; i < end; i += THREAD_CHECKPOINT_INTERVAL) {
+								const group = messages.slice(i, i + THREAD_CHECKPOINT_INTERVAL);
+								hash.update(",").update(JSON.stringify(group, normalize).slice(1, -1));
+							}
+							const positions = new WeakMap<MessageParam, number>();
+							for (let i = 1; i < end; i++) {
+								positions.set(messages[i], i);
+								if (i >= start) convertedMessageJson.delete(messages[i]);
+							}
+							messageCheckpoints.set(key, { count: end, headerHash, positions, hash: hash.copy() });
+							start = end;
+						}
+					}
+				}
+				// Strip array brackets so separate ranges hash like their concatenation.
+				if (start < messages.length) hash.update(",");
+				if (reuseConverted && messages.length - start > 1) {
+					const parts = new Array<string>(messages.length - start);
+					for (let i = start; i < messages.length; i++) {
+						const message = messages[i];
+						let part = convertedMessageJson.get(message);
+						if (part === undefined) {
+							part = JSON.stringify(message, normalize);
+							if (part.length <= 512 && hasConverterOwnedContent(message))
+								convertedMessageJson.set(message, part);
+						}
+						parts[i - start] = part;
+					}
+					hash.update(parts.join(","));
+				} else if (start < messages.length) {
+					const tail = start ? messages.slice(start) : messages;
+					hash.update(JSON.stringify(tail, normalize).slice(1, -1));
+				}
+				count += messages.length;
+			},
+			digest() {
+				return hash instanceof ShortHash ? hash.digest() : hash.copy().digest("hex");
+			},
+			copy() {
+				return cursor(hash.copy(), count);
+			},
+		};
+	}
+	return cursor((crypto?.createHash("sha256") ?? new ShortHash()).update(settings));
 }
 
 interface PreparedThreadRequest {
 	sessionId: string;
 	body: ThreadedParams;
+	/** The exact history already on the server for a continue. */
+	prefix?: ThreadFingerprint;
+}
+
+interface ThreadResponse {
+	response: Response;
+	thread?: { sessionId: string; fingerprint: ThreadFingerprint };
 }
 
 function createThreadRequest(sessionId: string, params: MessageCreateParamsStreaming): PreparedThreadRequest {
@@ -363,25 +514,26 @@ function prepareThreadRequest(
 	model: Model<"anthropic-messages">,
 	sessionId: string,
 	params: MessageCreateParamsStreaming,
+	reuseConverted: boolean,
 ): PreparedThreadRequest | undefined {
 	const state = threadState.get(sessionId);
 	if (state === "off") return undefined;
-	if (
-		state !== undefined &&
-		params.messages.length > state.prefixCount &&
-		hashThreadPrefix(model, params, params.messages.slice(0, state.prefixCount)) === state.prefixHash
-	) {
-		// Each reply can be continued once; deleting also keeps a concurrent request from trying.
-		threadState.delete(sessionId);
-		const { system: _system, tools: _tools, ...rest } = params;
-		return {
-			body: {
-				...rest,
-				messages: params.messages.slice(state.prefixCount),
-				thread: { type: "continue", previous_message_id: state.replyId },
-			},
-			sessionId,
-		};
+	if (state && params.messages.length > state.prefixCount) {
+		const prefix = threadFingerprint(model, params, reuseConverted, state.encoding);
+		prefix.append(params.messages.slice(0, state.prefixCount));
+		if (prefix.digest() === state.prefixHash) {
+			threadState.delete(sessionId);
+			const { system: _system, tools: _tools, ...rest } = params;
+			return {
+				sessionId,
+				prefix,
+				body: {
+					...rest,
+					messages: params.messages.slice(state.prefixCount),
+					thread: { type: "continue", previous_message_id: state.replyId },
+				},
+			};
+		}
 	}
 	return createThreadRequest(sessionId, params);
 }
@@ -402,12 +554,12 @@ function getThreadErrorCode(error: InstanceType<typeof Anthropic.APIError>): str
 async function sendThreadRequest(
 	thread: PreparedThreadRequest,
 	params: MessageCreateParamsStreaming,
-	send: (body: ThreadedParams) => Promise<Response>,
+	send: (body: ThreadedParams, thread?: PreparedThreadRequest) => Promise<ThreadResponse>,
 	output: AssistantMessage,
 	signal: AbortSignal | undefined,
-): Promise<{ response: Response; thread: PreparedThreadRequest | undefined }> {
+): Promise<ThreadResponse> {
 	try {
-		return { response: await send(thread.body), thread };
+		return await send(thread.body, thread);
 	} catch (error) {
 		if (signal?.aborted || !(error instanceof Anthropic.APIError)) throw error;
 		const errorCode = getThreadErrorCode(error);
@@ -430,23 +582,22 @@ async function sendThreadRequest(
 		});
 		if (startNewThread) {
 			const created = createThreadRequest(thread.sessionId, params);
-			return { response: await send(created.body), thread: created };
+			return await send(created.body, created);
 		}
 		// With the threads beta, a request without `thread` is a normal request.
 		const response = await send(params);
 		setThreadState(thread.sessionId, "off");
-		return { response, thread: undefined };
+		return response;
 	}
 }
 
 /**
  * Records where the session's next request can continue: after `output`, the clean reply to the
- * thread request `thread`, whose full request was `params`.
+ * thread request `thread`, whose fingerprint was captured before sending.
  */
 function recordThreadReply(
 	model: Model<"anthropic-messages">,
-	thread: PreparedThreadRequest,
-	params: MessageCreateParamsStreaming,
+	thread: NonNullable<ThreadResponse["thread"]>,
 	output: AssistantMessage,
 	isOAuth: boolean,
 	allowEmptySignature: boolean,
@@ -462,10 +613,11 @@ function recordThreadReply(
 		undefined,
 		allowEmptySignature,
 	).messages.filter((message) => message.role === "assistant");
-	const prefix = [...params.messages, ...reply];
+	thread.fingerprint.append(reply);
 	setThreadState(thread.sessionId, {
-		prefixCount: prefix.length,
-		prefixHash: hashThreadPrefix(model, params, prefix),
+		prefixCount: thread.fingerprint.count,
+		prefixHash: thread.fingerprint.digest(),
+		encoding: thread.fingerprint.encoding,
 		replyId: output.responseId,
 	});
 }
@@ -669,7 +821,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 	context: TranscriptContext,
 	options?: AnthropicOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	const compat = getAnthropicCompat(model);
 	const normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages);
 	const currentTools = getCurrentTools(normalizedContext.messages);
@@ -768,20 +920,36 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			// A client passed in by the caller is not wrapped. A thread `continue` sends a slice of the messages, which the
 			// SDK serializes itself; a full request (with or without `thread: create`) is sent as bytes.
 			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId, cache);
-			const send = (body: ThreadedParams) =>
-				retryProviderRequest(() => client.beta.messages.create(body, requestOptions).asResponse(), {
-					maxRetries: options?.maxRetries,
-					maxRetryDelayMs: options?.maxRetryDelayMs,
-					signal: options?.signal,
-				});
+			const reuseThreadContent = cache !== undefined && options?.client === undefined;
+			const send = (body: ThreadedParams, prepared?: PreparedThreadRequest): Promise<ThreadResponse> =>
+				retryProviderRequest(
+					async () => {
+						// Snapshot this attempt before the response hook or stream consumer can edit a retained payload.
+						// On a transport retry, only the omitted server prefix is shared across attempts.
+						const fingerprint =
+							prepared && (prepared.prefix?.copy() ?? threadFingerprint(model, body, reuseThreadContent));
+						fingerprint?.append(body.messages.slice());
+						const response = await client.beta.messages.create(body, requestOptions).asResponse();
+						return {
+							response,
+							thread: prepared && fingerprint ? { sessionId: prepared.sessionId, fingerprint } : undefined,
+						};
+					},
+					{
+						maxRetries: options?.maxRetries,
+						maxRetryDelayMs: options?.maxRetryDelayMs,
+						signal: options?.signal,
+					},
+				);
+
 			const prepared =
 				threadSessionId !== undefined && options?.disableContinuation !== true
-					? prepareThreadRequest(model, threadSessionId, params)
+					? prepareThreadRequest(model, threadSessionId, params, reuseThreadContent)
 					: undefined;
 			// The thread request that produced the response; undefined when no `thread` was sent.
 			const { response, thread } = prepared
 				? await sendThreadRequest(prepared, params, send, output, options?.signal)
-				: { response: await send(params), thread: undefined };
+				: await send(params);
 			cache?.end();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
@@ -858,7 +1026,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						});
 						openBlocks.set(event.index, {
 							contentIndex: output.content.length - 1,
-							arguments: new ToolCallArgumentsStream(),
+							arguments: new ToolCallArgumentsStream(stream),
 						});
 						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
 					}
@@ -886,7 +1054,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						}
 					} else if (event.delta.type === "input_json_delta") {
 						if (open?.block.type === "toolCall" && open.arguments !== undefined) {
-							open.block.arguments = open.arguments.append(event.delta.partial_json);
+							open.arguments.appendTo(open.block, event.delta.partial_json);
 							stream.push({
 								type: "toolcall_delta",
 								contentIndex: open.contentIndex,
@@ -993,7 +1161,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
 				throw new Error(output.errorMessage || "An unknown error occurred");
 			}
-			if (thread) recordThreadReply(model, thread, params, output, isOAuth, compat.allowEmptySignature);
+			if (thread) recordThreadReply(model, thread, output, isOAuth, compat.allowEmptySignature);
 			if (inputTransformations && inputTransformations.length > 0) {
 				appendAssistantMessageDiagnostic(output, {
 					type: "anthropic_input_transformations",
@@ -1786,15 +1954,18 @@ function convertTools(
 		const schema = parameters as {
 			properties?: unknown;
 			required?: string[];
+			additionalProperties?: unknown;
 			$defs?: unknown;
 			definitions?: unknown;
 		};
-		// Keep shared definitions so property $refs still resolve. Other root keywords stay out:
+		// Keep shared definitions so property $refs still resolve, and additionalProperties so the
+		// model knows whether extra arguments are allowed. Other root keywords stay out:
 		// Anthropic rejects root anyOf/oneOf/allOf with a 400.
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
 			required: schema.required ?? [],
+			...(schema.additionalProperties === undefined ? {} : { additionalProperties: schema.additionalProperties }),
 			...(schema.$defs === undefined ? {} : { $defs: schema.$defs }),
 			...(schema.definitions === undefined ? {} : { definitions: schema.definitions }),
 		};

@@ -37,8 +37,9 @@
  * is sent as the bytes it was first sent as, without a comparison.
  */
 
+import { registerSessionResourceCleanup } from "../session-resources.ts";
 import { cachedArrayToJSON, cacheJsonSerialization } from "./json-body.ts";
-import type { RequestCacheRun, SentValues } from "./request-cache.ts";
+import type { EncodedItem, RequestCacheRun, SentValues } from "./request-cache.ts";
 
 const { isRawJSON } = JSON as unknown as { isRawJSON?: (value: unknown) => boolean };
 
@@ -139,7 +140,10 @@ function matches(snap: unknown, value: unknown): boolean {
 
 interface Conversation {
 	snapshots: unknown[];
-	bytes: Bytes[];
+	bytes: EncodedItem[];
+	toolText?: Map<string, Blob[]>;
+	/** Recent complete encodings. Later versions may retain immutable slices of their Blobs. */
+	toolVersions?: { content: string; bytes: Blob; data?: Buffer<ArrayBuffer>; jsonSuffix?: Blob }[];
 	head: string;
 	headBytes: Bytes;
 	tail: string;
@@ -152,6 +156,11 @@ const MAX_CONVERSATIONS = 4;
 const MAX_IDLE_REQUESTS = 32;
 
 const conversations = new Map<string, Conversation>();
+registerSessionResourceCleanup((sessionId) => {
+	if (sessionId === undefined) conversations.clear();
+	else conversations.delete(sessionId);
+}, "request-cache");
+
 let requests = 0;
 /** The UTF-8 bytes of `text`. */
 const utf8 = (text: string): Bytes => new Blob([text]);
@@ -188,7 +197,101 @@ function isPlainItems(items: unknown[], allowedToJSON: unknown): boolean {
 	return toJSON === undefined || toJSON === allowedToJSON;
 }
 
-const COMMA: Bytes = utf8(",");
+const TOOL_PREFIX = utf8(',{"role":"tool","content":');
+const MAX_TOOL_VERSIONS = 8;
+const BLOCK_BYTES = 4096;
+const HEADER_CHARS = 256;
+
+/** Reuse unchanged leading and trailing bytes across edits, including insertions that shift all later offsets. */
+function encodeToolText(content: string, state: Conversation): Blob[] {
+	if (content.length <= 16 * 1024 || typeof Buffer === "undefined") return [utf8(JSON.stringify(content))];
+	state.toolVersions ??= [];
+	const versions = state.toolVersions;
+	let data: Buffer<ArrayBuffer> | undefined;
+	for (const version of versions) {
+		// A quick rejection avoids allocating comparison buffers for unrelated files and exact rereads (handled by
+		// toolText). The byte comparison below still validates every range that goes on the wire.
+		const sameEnd = content.endsWith(version.content.slice(-HEADER_CHARS));
+		if (!sameEnd && !content.startsWith(version.content.slice(0, HEADER_CHARS))) continue;
+		const cut = HEADER_CHARS + content.length - version.content.length;
+		const next = version.content.charCodeAt(HEADER_CHARS);
+		// Joining separately quoted text across a surrogate pair could change its JSON escaping.
+		if (
+			sameEnd &&
+			cut >= 0 &&
+			cut <= 2 * HEADER_CHARS &&
+			(next < 0xdc00 || next > 0xdfff) &&
+			content.endsWith(version.content.slice(HEADER_CHARS))
+		) {
+			version.jsonSuffix ??= version.bytes.slice(
+				Buffer.byteLength(JSON.stringify(version.content.slice(0, HEADER_CHARS))) - 1,
+			);
+			return [utf8(JSON.stringify(content.slice(0, cut)).slice(0, -1)), version.jsonSuffix];
+		}
+		data ??= Buffer.from(JSON.stringify(content));
+		version.data ??= Buffer.from(JSON.stringify(version.content));
+		const prior = version.data;
+		const limit = Math.min(prior.length, data.length);
+		let head = 0;
+		let tail = 0;
+		while (
+			head + BLOCK_BYTES <= limit &&
+			data.compare(prior, head, head + BLOCK_BYTES, head, head + BLOCK_BYTES) === 0
+		) {
+			head += BLOCK_BYTES;
+		}
+		while (head + tail + BLOCK_BYTES <= limit) {
+			const priorEnd = prior.length - tail;
+			const end = data.length - tail;
+			if (data.compare(prior, priorEnd - BLOCK_BYTES, priorEnd, end - BLOCK_BYTES, end) !== 0) break;
+			tail += BLOCK_BYTES;
+		}
+		if (head + tail < data.length / 2) continue;
+		const parts: Blob[] = [];
+		if (head > 0) parts.push(version.bytes.slice(0, head));
+		if (head + tail < data.length) parts.push(new Blob([data.subarray(head, data.length - tail)]));
+		if (tail > 0) parts.push(version.bytes.slice(prior.length - tail));
+		return parts;
+	}
+	const bytes = data ? new Blob([data]) : utf8(JSON.stringify(content));
+	// Bound the comparison buffers even for text that expands several times over when JSON-escaped.
+	if (bytes.size <= 128 * 1024) {
+		if (versions.length === MAX_TOOL_VERSIONS) versions.shift();
+		versions.push({ content, data, bytes });
+	}
+	return [bytes];
+}
+
+// Most OpenAI-compatible read results have this exact wire shape. Other shapes use the general serializer.
+function encodeItem(item: unknown, state: Conversation): EncodedItem {
+	if (item && typeof item === "object" && Object.hasOwn(item, "tool_call_id") && isPlainRecord(item)) {
+		const keys = Object.keys(item);
+		if (keys.length === 3 && keys[0] === "role" && keys[1] === "content" && keys[2] === "tool_call_id") {
+			const role = Object.getOwnPropertyDescriptor(item, "role")?.value;
+			const content: unknown = Object.getOwnPropertyDescriptor(item, "content")?.value;
+			const id: unknown = Object.getOwnPropertyDescriptor(item, "tool_call_id")?.value;
+			if (
+				role === "tool" &&
+				typeof content === "string" &&
+				content.length >= 4096 &&
+				content.length <= 65536 &&
+				typeof id === "string"
+			) {
+				state.toolText ??= new Map<string, Blob[]>();
+				const texts = state.toolText;
+				let bytes = texts.get(content);
+				if (!bytes) {
+					bytes = encodeToolText(content, state);
+					// At most eight recent file-sized payloads per live conversation.
+					if (texts.size === 8) texts.delete(texts.keys().next().value!);
+					texts.set(content, bytes);
+				}
+				return [TOOL_PREFIX, ...bytes, utf8(`,"tool_call_id":${JSON.stringify(id)}}`)];
+			}
+		}
+	}
+	return utf8(`,${JSON.stringify(item) ?? "null"}`);
+}
 
 /**
  * The UTF-8 bytes of JSON.stringify(body) in parts, in order, reusing the conversation's previous bytes of each item
@@ -209,7 +312,8 @@ export function jsonBodyParts(
 	for (let i = 0; i < items.length; i++) {
 		const item: unknown = items[i];
 		// JSON.stringify passes an item's own toJSON its index as the key; serialized alone it would get "".
-		if (typeof item === "object" && item !== null && hasToJSON(item)) return undefined;
+		if (item !== null && (typeof item === "object" || typeof item === "function") && hasToJSON(item))
+			return undefined;
 	}
 	const text = JSON.stringify({ ...body, [key]: PLACEHOLDER });
 	const at = text.indexOf(PLACEHOLDER_JSON);
@@ -221,8 +325,8 @@ export function jsonBodyParts(
 	const headBytes = head === state.head ? state.headBytes : utf8(head);
 	const tailBytes = tail === state.tail ? state.tailBytes : utf8(tail);
 	const snapshots = new Array<unknown>(items.length);
-	const bytes = new Array<Bytes>(items.length);
-	const parts: Bytes[] = [headBytes];
+	const bytes = new Array<EncodedItem>(items.length);
+
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i];
 		const previous = state.snapshots[i];
@@ -231,8 +335,6 @@ export function jsonBodyParts(
 		if (cached) {
 			bytes[i] = cached;
 			snapshots[i] = UNCACHEABLE;
-			if (i > 0) parts.push(COMMA);
-			parts.push(cached);
 			continue;
 		}
 		if (previous !== undefined && previous !== UNCACHEABLE && matches(previous, item)) {
@@ -240,17 +342,18 @@ export function jsonBodyParts(
 			bytes[i] = state.bytes[i];
 		} else {
 			// An item that serializes to nothing (undefined, a function) is null in an array.
-			bytes[i] = utf8(JSON.stringify(item) ?? "null");
-			snapshots[i] = snapshot(item);
+			// Keep the comma with the item. A long request then sends one native Blob part per
+			// message, including when a previously encoded item moves to a different position.
+			bytes[i] = encodeItem(item, state);
+			// On a first send, the request cache owns these bytes and validates the item on later requests.
+			// A separate structural snapshot would be discarded immediately.
+			snapshots[i] = cached === null ? UNCACHEABLE : snapshot(item);
 		}
 		if (cached === null) {
 			sent?.keep(bytes[i]);
 			snapshots[i] = UNCACHEABLE;
 		}
-		if (i > 0) parts.push(COMMA);
-		parts.push(bytes[i]);
 	}
-	parts.push(tailBytes);
 
 	state.snapshots = snapshots;
 	state.bytes = bytes;
@@ -258,6 +361,15 @@ export function jsonBodyParts(
 	state.headBytes = headBytes;
 	state.tail = tail;
 	state.tailBytes = tailBytes;
+	const parts: Bytes[] = [headBytes];
+	for (let i = 0; i < bytes.length; i++) {
+		const encoded = bytes[i];
+		if (Array.isArray(encoded)) {
+			parts.push(i === 0 ? encoded[0].slice(1) : encoded[0]);
+			for (let j = 1; j < encoded.length; j++) parts.push(encoded[j]);
+		} else parts.push(i === 0 ? encoded.slice(1) : encoded);
+	}
+	parts.push(tailBytes);
 	return parts;
 }
 
@@ -389,6 +501,6 @@ export function cacheRequestBody(
 	conversation: string | undefined,
 	cache?: RequestCacheRun,
 ): void {
-	cacheJsonSerialization(items);
+	cacheJsonSerialization(items, conversation);
 	sendJsonBodyAsBytes(client, items, key, conversation, cachedArrayToJSON, cache);
 }

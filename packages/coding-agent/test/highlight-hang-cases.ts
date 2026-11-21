@@ -74,6 +74,30 @@ const DELIMITERS: Record<string, { open: string[]; close: string[]; separators: 
 		separators: [",", ";", "*", "&", "::", "\\", " "],
 		words: ["int", "class", "namespace", "x", "std", "0x1fULL", "decltype(auto)"],
 	},
+	swift: {
+		open: ['"', '"""', "/*", "//", "(", '#"', "\\("],
+		close: ['"', '"""', "*/", ")", '"#'],
+		separators: [".", "?", ",", ":"],
+		words: ["func", "let", "Int", "guard", "nil"],
+	},
+	kotlin: {
+		open: ['"', '"""', "/*", "//", "${", "("],
+		close: ['"', '"""', "*/", "}", ")"],
+		separators: ["?.", "?:", "->", ":"],
+		words: ["fun", "val", "when", "String", "null"],
+	},
+	dart: {
+		open: ['"', "'''", "/*", "//", "${", "r'"],
+		close: ['"', "'''", "*/", "}", "'"],
+		separators: ["?.", "??", "=>", ".."],
+		words: ["final", "class", "async", "int", "null"],
+	},
+	lua: {
+		open: ['"', "'", "[=[", "[==[", "--[[", "--"],
+		close: ['"', "'", "]=]", "]==]", "]]"],
+		separators: ["..", "~=", ":", ","],
+		words: ["local", "nil", "function", "end", "42"],
+	},
 	java: {
 		open: ['"', "'", '"""', "/*", "/**", "//", "(", "{", "[", "<", "@", "public static void f(", "class A<"],
 		close: ['"', "'", '"""', "*/", ")", "}", "]", ">"],

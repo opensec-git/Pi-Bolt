@@ -11,7 +11,7 @@
 // before.
 //
 // Plain Node.js (18 or later), no dependencies. On Windows it reads, as install.ps1 does:
-//   PIBOLT_VARIANT        x64 (the default), x64-baseline (picked when the CPU has no AVX2 and the release has it) or x64-jit
+//   PIBOLT_VARIANT        x64 (the default), x64-baseline (picked when the CPU has no AVX2 and the release has it) or jit (x64-jit)
 //   PIBOLT_SOURCE         auto (npm, then GitHub; the default), npm or github
 //   PIBOLT_NPM_REGISTRY   the npm registry or mirror to download the build from (default: https://registry.npmjs.org)
 //   PIBOLT_DOWNLOAD_BASE  a mirror of the release to download everything from instead (its SHA256SUMS.sig too)
@@ -472,7 +472,8 @@ async function installWindows({
 	const source = env.PIBOLT_SOURCE || "auto";
 	if (!["auto", "npm", "github"].includes(source)) fail("PIBOLT_SOURCE must be auto, npm or github");
 	let variant = env.PIBOLT_VARIANT || "";
-	if (variant && !VARIANTS.includes(variant)) fail("PIBOLT_VARIANT must be x64, x64-baseline or x64-jit");
+	if (variant === "jit") variant = "x64-jit";
+	if (variant && !VARIANTS.includes(variant)) fail("PIBOLT_VARIANT must be x64, x64-baseline, x64-jit or jit");
 	const mirror = withoutTrailingSlashes(env.PIBOLT_DOWNLOAD_BASE || "");
 	if (source === "npm" && mirror) fail("PIBOLT_SOURCE=npm needs the release from GitHub (no PIBOLT_DOWNLOAD_BASE)");
 	const base = mirror || `${REPO}/releases/download/bolt-v${version}`;

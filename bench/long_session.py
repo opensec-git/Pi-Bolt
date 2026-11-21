@@ -17,18 +17,20 @@ Example (300 tool calls, a context well past a million tokens):
 import argparse
 import json
 import os
+import random
 import sys
 import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_model import FILES
 from harness import (
     MODEL_ARGS, PROMPT, WINDOWS, Tty, cpu_ms, done, fake_model, memory_mb, parse_builds, pi_env, pi_home, pinned, workdir,
 )
 
 
-def session(build, prompts, every, cpus, think_ms=0):
+def session(build, prompts, every, cpus, think_ms=0, edit_fixtures=False, rewrite_fixtures=False, *, observe_after=None):
     sizes = tempfile.NamedTemporaryFile(prefix="pibolt-sizes-", delete=False).name
     rows = []
     with fake_model(log_sizes=sizes) as port, pi_home(port) as home, workdir() as cwd:
@@ -39,6 +41,24 @@ def session(build, prompts, every, cpus, think_ms=0):
         tty.settle(0.1, deadline)
         t_block, c_block = time.perf_counter(), cpu_ms(tty.pid)
         for i in range(1, prompts + 1):
+            if edit_fixtures or rewrite_fixtures:
+                edit_start = time.perf_counter()
+                marker = f"// {i:08d}".encode()
+                if rewrite_fixtures:
+                    # Keep punctuation, whitespace, UTF-8 and byte counts intact. A repeatable permutation changes
+                    # identifiers and prose across each file so long spans seldom match earlier tool results.
+                    alphabet = b"abcdefghijklmnopqrstuvwxyz"
+                    shuffled = bytes(random.Random(i).sample(list(alphabet), len(alphabet)))
+                    table = bytes.maketrans(alphabet + alphabet.upper(), shuffled + shuffled.upper())
+                for relative in FILES:
+                    with (cwd / relative).open("r+b") as fixture:
+                        if rewrite_fixtures:
+                            data = fixture.read().translate(table)
+                            fixture.seek(0)
+                            fixture.write(data)
+                        else:
+                            fixture.write(marker)
+                t_block += time.perf_counter() - edit_start
             start = len(tty.buf)
             tty.send(PROMPT.encode() + b"\r")
             if not tty.wait_for(done(i), start, deadline):
@@ -59,7 +79,11 @@ def session(build, prompts, every, cpus, think_ms=0):
                     # (own_mb is the private bytes, the commit charge; the private working set is what of it is resident.)
                     rows[-1]["private_ws_mb"] = m.get("private_ws")
                 t_block, c_block = now, c
-        status, ru = tty.quit()
+        try:
+            if observe_after and rows and rows[-1].get("prompt") == prompts and "error" not in rows[-1]:
+                rows[-1]["after_session"] = observe_after(tty)
+        finally:
+            status, ru = tty.quit()
         if WINDOWS and rows and "error" not in rows[-1]:
             # The peaks over the whole session, from the Job object and the sampling (winproc.py).
             res = ru.result
@@ -77,10 +101,13 @@ def main():
     ap.add_argument("--every", type=int, default=10)
     ap.add_argument("--cpus", help="pin Pi to these cores (taskset list)")
     ap.add_argument("--think-ms", type=int, default=0, help="idle time after each answer, not counted in ms/prompt")
+    edits = ap.add_mutually_exclusive_group()
+    edits.add_argument("--edit-fixtures", action="store_true", help="edit the start of all four files before each prompt")
+    edits.add_argument("--rewrite-fixtures", action="store_true", help="change text throughout all four files before each prompt")
     ap.add_argument("--out", help="append the results to this JSONL file")
     a = ap.parse_args()
     for build in parse_builds(a.build):
-        rows, status = session(build, a.prompts, a.every, a.cpus, a.think_ms)
+        rows, status = session(build, a.prompts, a.every, a.cpus, a.think_ms, a.edit_fixtures, a.rewrite_fixtures)
         print(f"== {build.name} (exit {status})")
         for row in rows:
             if "error" in row:

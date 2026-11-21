@@ -615,7 +615,10 @@ const byPath = (a: WalkEntry, b: WalkEntry) => (a.rel < b.rel ? -1 : a.rel > b.r
 
 export interface NativeFindOptions {
 	root: string;
-	/** The glob, as fd takes it: matched against the name, or with a `/` against the path below the search folder. */
+	/**
+	 * The glob, as the find tool takes it: without a `/` matched against the name; with one against the path below the
+	 * search folder (anchored there, like grep's glob: #12066), or against the absolute path when it is absolute.
+	 */
 	pattern: string;
 	limit: number;
 	signal?: AbortSignal;
@@ -623,13 +626,14 @@ export interface NativeFindOptions {
 
 /** The entries that match, in path order, folders with a trailing `/`, at most `limit`. */
 export async function nativeFind(options: NativeFindOptions): Promise<string[]> {
-	let pattern = options.pattern;
+	// A leading "./" is the search folder itself (#12020).
+	const pattern = options.pattern.replace(/^(?:\.\/)+(?=.)/, "");
 	const fullPath = pattern.includes("/");
-	if (pattern.startsWith("/")) pattern = pattern.slice(1);
-	else if (fullPath && !pattern.startsWith("**/") && pattern !== "**") pattern = `**/${pattern}`;
+	const rootPrefix =
+		fullPath && path.isAbsolute(pattern) ? `${options.root.split(path.sep).join("/").replace(/\/+$/, "")}/` : "";
 	const patterns = expandBraces(pattern).map(compileGlob);
 	const keep = (rel: string) => {
-		const subject = fullPath ? rel : rel.slice(rel.lastIndexOf("/") + 1);
+		const subject = fullPath ? rootPrefix + rel : rel.slice(rel.lastIndexOf("/") + 1);
 		return patterns.some((matches) => matches(subject));
 	};
 	return (await walk({ root: options.root, requireGit: false, keep, signal: options.signal }))

@@ -41,7 +41,8 @@ export interface ConsumeSseOptions {
 export async function consumeSseStream(stream: ReadableStream<Uint8Array>, options: ConsumeSseOptions): Promise<void> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
-	let buffered = "";
+	const lineFragments: string[] = [];
+	let pendingLineBytes = 0;
 	let eventName: string | undefined;
 	let eventId: string | undefined;
 	let dataLines: string[] = [];
@@ -65,6 +66,12 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 	};
 
 	const processLine = (line: string) => {
+		if (lineFragments.length > 0) {
+			lineFragments.push(line);
+			line = lineFragments.join("");
+			lineFragments.length = 0;
+			pendingLineBytes = 0;
+		}
 		if (line === "") {
 			dispatch();
 			return;
@@ -87,44 +94,40 @@ export async function consumeSseStream(stream: ReadableStream<Uint8Array>, optio
 
 	// SSE lines end with CRLF, LF, or a lone CR.
 	let skipLeadingLf = false;
-	const consumeLines = () => {
-		let start = 0;
-		for (let i = 0; i < buffered.length; i++) {
-			const char = buffered[i];
+	const consumeLines = (text: string) => {
+		if (!text.length) return;
+		let start = skipLeadingLf && text.startsWith("\n") ? 1 : 0;
+		skipLeadingLf = false;
+		for (let i = start; i < text.length; i++) {
+			const char = text[i];
 			if (char !== "\r" && char !== "\n") continue;
-			processLine(buffered.slice(start, i));
+			processLine(text.slice(start, i));
 			if (char === "\r") {
-				if (i + 1 < buffered.length) {
-					if (buffered[i + 1] === "\n") i++;
+				if (i + 1 < text.length) {
+					if (text[i + 1] === "\n") i++;
 				} else {
 					skipLeadingLf = true;
 				}
 			}
 			start = i + 1;
 		}
-		buffered = buffered.slice(start);
+		if (start < text.length) {
+			const fragment = text.slice(start);
+			pendingLineBytes += Buffer.byteLength(fragment);
+			if (pendingLineBytes > maxEventBytes) throw new Error(`MCP SSE event exceeds ${maxEventBytes} bytes`);
+			lineFragments.push(fragment);
+		}
 	};
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
 			if (done) break;
-			let text = decoder.decode(value, { stream: true });
-			// A CRLF split across chunks: the CR already ended the line, so drop the LF.
-			if (skipLeadingLf && text.length > 0) {
-				if (text.startsWith("\n")) text = text.slice(1);
-				skipLeadingLf = false;
-			}
-			buffered += text;
-			consumeLines();
-			if (Buffer.byteLength(buffered) > maxEventBytes)
-				throw new Error(`MCP SSE event exceeds ${maxEventBytes} bytes`);
+			consumeLines(decoder.decode(value, { stream: true }));
 		}
-		let tail = decoder.decode();
-		if (skipLeadingLf && tail.startsWith("\n")) tail = tail.slice(1);
-		buffered += tail;
-		consumeLines();
-		if (buffered) processLine(buffered);
+		// Flushing UTF-8 can add a replacement character for an incomplete sequence.
+		const tail = decoder.decode();
+		if (lineFragments.length || tail) processLine(tail);
 		dispatch();
 	} catch (error) {
 		// Releasing the lock alone leaves the response open; the original error wins over a failed cancel.

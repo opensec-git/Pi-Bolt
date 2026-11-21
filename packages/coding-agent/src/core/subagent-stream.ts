@@ -12,11 +12,13 @@
  * A message too large for a phone is cut (`capMessage`).
  */
 
-import { closeSync, openSync, readdirSync, readSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, type FSWatcher, fstatSync, openSync, readdirSync, readSync, statSync, watch } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { toJsonEvent } from "../modes/json-event.ts";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import { liveSessions } from "./live-sessions.ts";
+import { nativeByteScans } from "./native-byte-scans.ts";
 
 /** The `remote_hello.features` entry of hosts that answer `subagent_subscribe`. */
 export const SUBAGENT_STREAM_FEATURE = "subagent_stream";
@@ -34,6 +36,14 @@ const ENTRIES_BATCH_BYTES = 512 * 1024;
 /** Lines of a session file read to find its header, name and first prompt. */
 const HEADER_LINES = 40;
 const HEADER_BYTES = 256 * 1024;
+const HEADER_PREFIX_BYTES = 4 * 1024;
+// Linux reports each neighboring write to a directory watch. macOS directory events reliably cover replacement.
+const WATCH_INODE = process.platform === "linux";
+
+interface FileIdentity {
+	dev: number;
+	ino: number;
+}
 
 export interface SubagentStreamLimits {
 	/** Streams one client may hold at once. */
@@ -63,6 +73,13 @@ interface Header {
 	firstUser?: string;
 }
 
+/** Shared only while one timer callback polls the client's active subscriptions. */
+interface StreamPoll {
+	parent?: AgentSession;
+	runs?: Map<string, RunInfo>;
+	listing?: { parentFile: string; paths: string[] };
+}
+
 function isRecord(value: unknown): value is Json {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -76,48 +93,37 @@ function textOf(content: unknown): string {
 		.join("\n");
 }
 
-/** Every `Agent` call of the parent's messages by its id: its prompt, and its agent id once its result names one. */
-function findRuns(messages: readonly unknown[]): Map<string, RunInfo> {
-	const runs = new Map<string, RunInfo>();
-	for (const message of messages) {
-		if (!isRecord(message)) continue;
-		if (message.role === "assistant" && Array.isArray(message.content)) {
-			for (const block of message.content) {
-				if (!isRecord(block) || block.type !== "toolCall" || typeof block.id !== "string") continue;
-				if (typeof block.name !== "string" || block.name.toLowerCase() !== "agent") continue;
-				const args = isRecord(block.arguments) ? block.arguments : {};
-				const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
-				// Seen again (the saved branch, then the session's messages): the first keeps what its result added.
-				if (runs.has(block.id)) continue;
-				runs.set(block.id, {
-					prompt: typeof args.prompt === "string" ? args.prompt : "",
-					agentId: resume,
-					since: typeof message.timestamp === "number" ? message.timestamp : undefined,
-				});
-			}
-		} else if (message.role === "toolResult" && typeof message.toolCallId === "string" && isRecord(message.details)) {
-			const run = runs.get(message.toolCallId);
-			const agentId = message.details.agentId;
-			if (run && typeof agentId === "string" && agentId) run.agentId = agentId;
+/** Record a parent message's Agent calls or attach the agent ID from a later tool result. */
+function collectRun(message: unknown, runs: Map<string, RunInfo>): void {
+	if (!isRecord(message)) return;
+	if (message.role === "assistant" && Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if (!isRecord(block) || block.type !== "toolCall" || typeof block.id !== "string") continue;
+			if (typeof block.name !== "string" || block.name.toLowerCase() !== "agent") continue;
+			const args = isRecord(block.arguments) ? block.arguments : {};
+			const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
+			// Seen again (the saved branch, then the session's messages): the first keeps what its result added.
+			if (runs.has(block.id)) continue;
+			runs.set(block.id, {
+				prompt: typeof args.prompt === "string" ? args.prompt : "",
+				agentId: resume,
+				since: typeof message.timestamp === "number" ? message.timestamp : undefined,
+			});
+		}
+	} else if (message.role === "toolResult" && typeof message.toolCallId === "string" && isRecord(message.details)) {
+		const run = runs.get(message.toolCallId);
+		const agentId = message.details.agentId;
+		if (run && typeof agentId === "string" && agentId && run.agentId !== agentId) {
+			runs.set(message.toolCallId, { ...run, agentId });
 		}
 	}
-	return runs;
-}
-
-/**
- * The `Agent` runs of [session]: of its saved current branch, which keeps calls a compaction took out of the model's
- * context (a phone still shows those runs), and of its messages, which may hold some not saved yet.
- */
-function sessionRuns(session: AgentSession): Map<string, RunInfo> {
-	const saved = session.sessionManager
-		.getBranch()
-		.flatMap((entry) => (entry.type === "message" ? [entry.message as unknown] : []));
-	return findRuns([...saved, ...session.messages]);
 }
 
 /** The `Agent` call `runId` of the parent's messages: its prompt, and its agent id once its result names one. */
 export function findRun(messages: readonly unknown[], runId: string): RunInfo | undefined {
-	return findRuns(messages).get(runId);
+	const runs = new Map<string, RunInfo>();
+	for (const message of messages) collectRun(message, runs);
+	return runs.get(runId);
 }
 
 /** The agents of the other runs, by the 8 characters their sessions' names end with: they are not this run's. */
@@ -153,15 +159,28 @@ function parseTime(value: unknown): number | undefined {
 	return Number.isFinite(time) ? time : undefined;
 }
 
-function readHeader(file: string): Header | undefined {
+function readHeader(file: string, buffer: Buffer): Header | undefined {
 	let fd: number | undefined;
 	try {
 		fd = openSync(file, "r");
-		const buffer = Buffer.alloc(HEADER_BYTES);
-		const length = readSync(fd, buffer, 0, HEADER_BYTES, 0);
-		const lines = buffer.subarray(0, length).toString("utf8").split("\n").slice(0, HEADER_LINES);
+		let limit = HEADER_PREFIX_BYTES;
+		let bytes = buffer.subarray(0, readSync(fd, buffer, 0, limit, 0));
+		let start = 0;
 		let header: Header | undefined;
-		for (const line of lines) {
+		for (let i = 0; i < HEADER_LINES; i++) {
+			let end = bytes.indexOf(0x0a, start);
+			// Most files identify the child on the first page. A long setup or prompt may span several reads.
+			while (end < 0 && bytes.length === limit && limit < HEADER_BYTES) {
+				const offset = limit;
+				limit = Math.min(limit * 4, HEADER_BYTES);
+				const read = readSync(fd, buffer, offset, limit - offset, offset);
+				bytes = buffer.subarray(0, offset + read);
+				end = bytes.indexOf(0x0a, offset);
+			}
+			if (start >= bytes.length) break;
+			if (end < 0) end = bytes.length;
+			const line = bytes.toString("utf8", start, end);
+			start = end + 1;
 			let entry: unknown;
 			try {
 				entry = JSON.parse(line);
@@ -200,6 +219,106 @@ export function messageOfEntry(entry: unknown): Json | undefined {
 		return { role: "compactionSummary", summary: entry.summary ?? "", tokensBefore: entry.tokensBefore ?? 0 };
 	}
 	return undefined;
+}
+
+function collectSavedLine(line: string, messages: Json[]): void {
+	if (!line) return;
+	let entry: unknown;
+	try {
+		entry = JSON.parse(line);
+	} catch {
+		return;
+	}
+	const message = messageOfEntry(entry);
+	if (message) messages.push(message);
+}
+
+/**
+ * Find an open string value in the first 32 KiB. Only a value after a colon is eligible: shortening a key could
+ * change the object. capMessage cuts or omits every string value longer than the budget, including strings inside
+ * serialized tool arguments. Keeping more than the budget also preserves every size decision in the fallback.
+ */
+function previewStringStart(first: string): number {
+	const head = first.slice(0, 32 * 1024);
+	let open = -1;
+	for (let quote = head.indexOf('"'); quote >= 0; quote = head.indexOf('"', quote + 1)) {
+		if (open < 0) {
+			open = quote;
+			continue;
+		}
+		let slash = quote;
+		while (slash > open && head.charCodeAt(slash - 1) === 0x5c) slash--;
+		if ((quote - slash) % 2 === 0) open = -1;
+	}
+	let before = open - 1;
+	while (before >= 0) {
+		const c = head.charCodeAt(before);
+		if (c === 0x3a) return open + 1;
+		if (c !== 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) break;
+		before--;
+	}
+	return -1;
+}
+
+/** Number of decoded code units in an entire JSON string body, or -1 for a delimiter or invalid escape. */
+function stringBodyLength(piece: string): number {
+	try {
+		const value = JSON.parse(`"${piece}"`);
+		return typeof value === "string" ? value.length : -1;
+	} catch {
+		return -1;
+	}
+}
+
+interface PartialSavedLine {
+	decoder: StringDecoder;
+	pieces: string[];
+	readBuffer?: Buffer;
+	skipping?: boolean;
+	pendingEscape?: Buffer;
+}
+
+/** A connection with a fixed cap can discard the middle of a string once its retained prefix is itself oversized.
+ * A delimiter, invalid escape or escape split across reads ends the shortcut. Keep that piece and the rest verbatim
+ * so the regular parser still validates the complete structure, including later keys and duplicate properties. */
+function appendSavedPiece(line: PartialSavedLine, bytes: Buffer, limits: SubagentStreamLimits, final = false): void {
+	if (line.skipping) {
+		const scan = nativeByteScans()?.jsonStringBodyEnd;
+		if (scan) {
+			if (line.pendingEscape) {
+				bytes = Buffer.concat([line.pendingEscape, bytes]);
+				line.pendingEscape = undefined;
+			}
+			const end = scan(bytes);
+			if (end === bytes.length) return;
+			if (!final && bytes[end] === 0x5c && bytes.length - end < 6) {
+				// A JSON escape occupies up to six ASCII bytes. Validate it with the next read.
+				line.pendingEscape = Buffer.from(bytes.subarray(end));
+				return;
+			}
+			// The retained suffix begins at an ASCII delimiter, control or backslash. Any split UTF-8
+			// code point before it belongs solely to the already capped string.
+			bytes = bytes.subarray(end);
+			line.skipping = false;
+		}
+	}
+	const piece = final ? line.decoder.end(bytes) : line.decoder.write(bytes);
+	if (line.skipping) {
+		if (stringBodyLength(piece) >= 0) return;
+		line.skipping = false;
+	}
+	line.pieces.push(piece);
+	// Inspect one disk block, or two if the record started near the end of the previous block.
+	const count = line.pieces.length;
+	if (final || count > 2 || line.skipping !== undefined || !Object.isFrozen(limits)) return;
+	const minLength = Math.max(1024, limits.maxMessageBytes);
+	const first = line.pieces[0]!;
+	if (count === 1 && first.length <= minLength) return;
+	line.skipping = false;
+	const prefix = count === 1 ? first : first + piece;
+	if (!(prefix.length > minLength)) return;
+	const start = previewStringStart(prefix);
+	if (start >= 0) line.skipping = stringBodyLength(prefix.slice(start)) > minLength;
 }
 
 const CUT_NOTE = "\n… (cut for the phone)";
@@ -243,7 +362,10 @@ function capBlock(block: unknown, share: number): unknown {
  * small top-level fields and its text are kept, cut to fit. Messages that fit are returned unchanged.
  */
 export function capMessage(message: Json, maxBytes: number): Json {
-	if (jsonBytes(message) <= maxBytes) return message;
+	return jsonBytes(message) <= maxBytes ? message : capOversizedMessage(message, maxBytes);
+}
+
+function capOversizedMessage(message: Json, maxBytes: number): Json {
 	const capped: Json = { ...message };
 	delete capped.details;
 	const content = message.content;
@@ -270,9 +392,24 @@ export function capMessage(message: Json, maxBytes: number): Json {
 	return small;
 }
 
+/** A parsed file record has plain JSON values. Each UTF-16 unit of a string needs at least one serialized byte. */
+function savedMessageSize(message: Json, maxBytes: number): number {
+	const content = message.content;
+	if (typeof content === "string" && content.length > maxBytes) return content.length;
+	if (typeof message.summary === "string" && message.summary.length > maxBytes) return message.summary.length;
+	if (Array.isArray(content)) {
+		for (const block of content) {
+			if (!isRecord(block)) continue;
+			const value = block.type === "text" ? block.text : block.type === "thinking" ? block.thinking : block.data;
+			if (typeof value === "string" && value.length > maxBytes) return value.length;
+		}
+	}
+	return jsonBytes(message);
+}
+
 /** [value] in at most [maxBytes] of JSON: as it is when it fits, else cut (an array or object as its JSON). */
 function fitJson(value: unknown, maxBytes: number): unknown {
-	if (jsonBytes(value) <= maxBytes) return value;
+	if (!(typeof value === "string" && value.length > maxBytes) && jsonBytes(value) <= maxBytes) return value;
 	const capped = capValue(value, Math.floor(maxBytes / 2));
 	if (jsonBytes(capped) <= maxBytes) return capped;
 	const text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
@@ -285,9 +422,14 @@ function fitJson(value: unknown, maxBytes: number): unknown {
  * call's arguments, a final message or error) get a fifth each; one of them is large at a time.
  */
 export function capUpdate(event: Json, maxBytes: number): Json {
-	if (jsonBytes(event) <= maxBytes || !isRecord(event.assistantMessageEvent)) return event;
+	const inner = event.assistantMessageEvent;
+	if (!isRecord(inner) || jsonBytes(event) <= maxBytes) return event;
+	return capOversizedUpdate(event, inner, maxBytes);
+}
+
+function capOversizedUpdate(event: Json, update: Json, maxBytes: number): Json {
 	const share = Math.floor(maxBytes / 5);
-	const inner: Json = { ...event.assistantMessageEvent };
+	const inner: Json = { ...update };
 	for (const key of ["delta", "content"]) if (inner[key] !== undefined) inner[key] = fitJson(inner[key], share);
 	if (isRecord(inner.toolCall)) {
 		const call: Json = {};
@@ -311,7 +453,11 @@ class SubagentStream {
 	private live: AgentSession | undefined;
 	private unsubscribeLive: (() => void) | undefined;
 	private offset = 0;
-	private rest = Buffer.alloc(0);
+	private fileIdentity?: FileIdentity;
+	private unwatch?: () => void;
+	/** Pieces of an unfinished JSONL record, joined once its newline arrives. */
+	private partialLine?: PartialSavedLine;
+	private lineContinuation?: ReturnType<typeof setImmediate>;
 	/** For a live session without a file: messages already sent. */
 	private sentMessages = 0;
 	private resetPending = true;
@@ -323,15 +469,15 @@ class SubagentStream {
 	/** Set by `stop()`: a poll deferred before it does nothing, so a stopped stream never listens again. */
 	private stopped = false;
 	private lastScan = 0;
-	private lastRefresh = 0;
+	// subscribe() has just read the parent's runs.
+	private lastRefresh = Date.now();
 	/**
 	 * Live events not sent yet, in order. A `boundary` marks where a streamed assistant message ended: the events after
 	 * it wait until that message's saved copy has been sent (`sendEntries`), so the phone gets them in the order they
 	 * happened. A boundary whose saved message does not come within `BOUNDARY_WAIT_MS` is dropped.
 	 */
-	private queue: Array<{ event: unknown } | { boundary: number }> = [];
+	private queue: Array<{ json: string; bytes: number } | { boundary: number }> = [];
 	private eventTimer: ReturnType<typeof setTimeout> | undefined;
-	private readonly timer: ReturnType<typeof setInterval>;
 
 	constructor(
 		owner: SubagentStreams,
@@ -345,9 +491,6 @@ class SubagentStream {
 		this.run = run;
 		this.others = others;
 		this.parentFile = parentFile;
-		this.timer = setInterval(() => this.poll(), owner.pollMs);
-		this.timer.unref?.();
-		this.poll();
 	}
 
 	/** The file this stream reads, once found. */
@@ -362,21 +505,27 @@ class SubagentStream {
 
 	stop(): void {
 		this.stopped = true;
-		clearInterval(this.timer);
-		if (this.eventTimer) clearTimeout(this.eventTimer);
-		this.queue = [];
-		this.eventTimer = undefined;
+		this.unwatch?.();
+		this.unwatch = undefined;
+		this.partialLine = undefined;
+		clearImmediate(this.lineContinuation);
+		this.lineContinuation = undefined;
+		this.clearEvents();
 		this.unsubscribeLive?.();
 		this.unsubscribeLive = undefined;
 		this.live = undefined;
 	}
 
-	poll(): void {
+	poll(snapshot?: StreamPoll): void {
 		if (this.stopped) return;
+		if (this.lineContinuation) {
+			clearImmediate(this.lineContinuation);
+			this.lineContinuation = undefined;
+		}
 		try {
-			this.refresh();
+			this.refresh(snapshot);
 			this.bindLive();
-			if (!this.file && !this.live) this.scan();
+			if (!this.file && !this.live) this.scan(snapshot);
 			if (this.file) this.readFile();
 			else if (this.live) this.readLiveMessages();
 		} catch {
@@ -388,12 +537,12 @@ class SubagentStream {
 	 * While the run is matched by its prompt, reads the parent's messages again (once a second): when the result names
 	 * the agent and the session found by prompt is another agent's, the stream lets go of it and finds the right one.
 	 */
-	private refresh(): void {
+	private refresh(snapshot?: StreamPoll): void {
 		if (this.run.agentId) return;
 		const now = Date.now();
 		if (now - this.lastRefresh < SCAN_MS) return;
 		this.lastRefresh = now;
-		const runs = this.owner.runs(this.parentFile);
+		const runs = this.owner.runs(this.parentFile, snapshot);
 		const run = runs?.get(this.runId);
 		if (!runs || !run) return;
 		this.run = run;
@@ -405,17 +554,20 @@ class SubagentStream {
 
 	/** Forgets the session found so far; the next batch the phone gets starts over (`reset`). */
 	private unbind(): void {
+		this.unwatch?.();
+		this.unwatch = undefined;
+		this.fileIdentity = undefined;
 		this.unsubscribeLive?.();
 		this.unsubscribeLive = undefined;
 		this.live = undefined;
 		this.file = undefined;
 		this.offset = 0;
-		this.rest = Buffer.alloc(0);
+		this.partialLine = undefined;
 		this.sentMessages = 0;
 		this.resetPending = true;
 		this.caughtUp = false;
 		this.lastScan = 0;
-		this.queue = [];
+		this.clearEvents();
 	}
 
 	/** The agent's session open in this process, if it is: its streaming message comes from its events. */
@@ -425,6 +577,7 @@ class SubagentStream {
 			this.unsubscribeLive?.();
 			this.unsubscribeLive = undefined;
 			this.live = undefined;
+			if (this.file && this.fileIdentity) this.followWrites(this.file, this.fileIdentity);
 		}
 		if (this.live || !this.parentFile) return;
 		// Newest first: of two sessions with the same prompt, the later one is the later run's.
@@ -449,6 +602,8 @@ class SubagentStream {
 				if (!matches(this.run, candidate, this.others)) continue;
 			}
 			this.live = session;
+			this.unwatch?.();
+			this.unwatch = undefined;
 			this.file ??= session.sessionFile;
 			this.unsubscribeLive = session.subscribe((event) => this.onLiveEvent(event));
 			if (this.caughtUp) this.sendSnapshot();
@@ -495,17 +650,18 @@ class SubagentStream {
 		this.sendSnapshot();
 	}
 
-	private scan(): void {
+	private scan(snapshot?: StreamPoll): void {
 		const now = Date.now();
 		if (!this.parentFile || now - this.lastScan < SCAN_MS) return;
 		this.lastScan = now;
-		const dir = dirname(this.parentFile);
-		const candidates = readdirSync(dir)
-			.filter((name) => name.endsWith(".jsonl"))
-			.map((name) => join(dir, name))
-			.filter((path) => path !== this.parentFile && !this.owner.taken(path, this))
-			.map((path) => ({ path, mtime: statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0 }))
-			.sort((a, b) => b.mtime - a.mtime);
+		const candidates: Array<{ path: string; mtime: number }> = [];
+		for (const path of this.owner.candidateFiles(this.parentFile, snapshot)) {
+			const known = this.owner.cachedHeader(path);
+			if (known && (known.parent !== this.parentFile || !matches(this.run, known, this.others))) continue;
+			if (this.owner.taken(path, this)) continue;
+			candidates.push({ path, mtime: statSync(path, { throwIfNoEntry: false })?.mtimeMs ?? 0 });
+		}
+		candidates.sort((a, b) => b.mtime - a.mtime);
 		for (const { path } of candidates) {
 			const header = this.owner.header(path);
 			if (!header || header.parent !== this.parentFile) continue;
@@ -516,18 +672,44 @@ class SubagentStream {
 		}
 	}
 
+	private appendPartialLine(bytes: Buffer): void {
+		this.partialLine ??= { decoder: new StringDecoder("utf8"), pieces: [] };
+		appendSavedPiece(this.partialLine, bytes, this.owner.limits);
+	}
+
+	private scheduleRead(): void {
+		if (this.lineContinuation || this.stopped) return;
+		this.lineContinuation = setImmediate(() => {
+			this.lineContinuation = undefined;
+			this.poll();
+		});
+	}
+
+	private followWrites(file: string, identity: FileIdentity): void {
+		this.unwatch?.();
+		this.unwatch = this.owner.watchFile(file, identity, () => {
+			if (this.caughtUp) this.scheduleRead();
+		});
+	}
+
 	private readFile(): void {
 		const file = this.file;
 		if (!file) return;
-		const size = statSync(file, { throwIfNoEntry: false })?.size;
-		if (size === undefined) return;
-		if (size < this.offset) {
+		const stat = statSync(file, { throwIfNoEntry: false });
+		if (!stat) return;
+		const { dev, ino, size } = stat;
+		const replaced = this.fileIdentity && (this.fileIdentity.dev !== dev || this.fileIdentity.ino !== ino);
+		if (!this.fileIdentity || replaced) {
+			this.fileIdentity = { dev, ino };
+			if (!this.live && (!this.unwatch || WATCH_INODE)) this.followWrites(file, this.fileIdentity);
+		}
+		if (size < this.offset || replaced) {
 			// Rewritten (a new branch): read it again.
 			this.offset = 0;
-			this.rest = Buffer.alloc(0);
+			this.partialLine = undefined;
 			this.resetPending = true;
 			this.caughtUp = false;
-			this.queue = [];
+			this.clearEvents();
 		}
 		if (size === this.offset && !this.resetPending) return;
 		const messages: Json[] = [];
@@ -535,32 +717,44 @@ class SubagentStream {
 			const fd = openSync(file, "r");
 			let data: Buffer;
 			try {
+				const opened = fstatSync(fd);
+				if (opened.ino !== ino || opened.dev !== dev) {
+					this.scheduleRead();
+					return;
+				}
 				const length = Math.min(READ_CHUNK, size - this.offset);
-				const buffer = Buffer.alloc(length);
+				const buffer = this.partialLine?.readBuffer ?? Buffer.allocUnsafe(length);
 				const read = readSync(fd, buffer, 0, length, this.offset);
 				this.offset += read;
-				data =
-					this.rest.length > 0 ? Buffer.concat([this.rest, buffer.subarray(0, read)]) : buffer.subarray(0, read);
+				data = buffer.subarray(0, read);
 			} finally {
 				closeSync(fd);
 			}
 			const end = data.lastIndexOf(0x0a);
-			this.rest = Buffer.from(end < 0 ? data : data.subarray(end + 1));
 			if (end >= 0) {
-				for (const line of data.subarray(0, end).toString("utf8").split("\n")) {
-					if (!line) continue;
-					let entry: unknown;
-					try {
-						entry = JSON.parse(line);
-					} catch {
-						continue;
-					}
-					const message = messageOfEntry(entry);
-					if (message) messages.push(message);
+				let start = 0;
+				if (this.partialLine) {
+					const first = data.indexOf(0x0a);
+					appendSavedPiece(this.partialLine, data.subarray(0, first), this.owner.limits, true);
+					const line = this.partialLine.pieces.join("");
+					this.partialLine = undefined;
+					collectSavedLine(line, messages);
+					start = first + 1;
 				}
+				if (start < end) {
+					for (const line of data.toString("utf8", start, end).split("\n")) collectSavedLine(line, messages);
+				}
+				if (end + 1 < data.length) this.appendPartialLine(data.subarray(end + 1));
+			} else if (data.length > 0) {
+				this.appendPartialLine(data);
+				// A complete record may already be on disk. Yield between blocks without waiting a poll interval
+				// for every block of a single line. Ordinary batches of complete records keep their usual pacing.
+				if (this.offset < size) this.scheduleRead();
 			}
+			// The decoder owns the text and any unfinished UTF-8 sequence. The next block can overwrite these bytes.
+			if (this.partialLine && data.length === READ_CHUNK) this.partialLine.readBuffer = data;
 		}
-		this.sendEntries(messages);
+		this.sendEntries(messages, "file");
 		if (this.offset >= size) this.markCaughtUp();
 	}
 
@@ -570,15 +764,15 @@ class SubagentStream {
 			this.sentMessages = 0;
 			this.resetPending = true;
 			this.caughtUp = false;
-			this.queue = [];
+			this.clearEvents();
 		}
 		const fresh = all.slice(this.sentMessages).filter((message) => message.role !== "system") as unknown as Json[];
 		this.sentMessages = all.length;
-		this.sendEntries(fresh);
+		this.sendEntries(fresh, "live");
 		this.markCaughtUp();
 	}
 
-	private sendEntries(messages: Json[]): void {
+	private sendEntries(messages: Json[], source: "file" | "live"): void {
 		if (messages.length === 0 && !this.resetPending) return;
 		const max = this.owner.limits.maxMessageBytes;
 		let batch: Json[] = [];
@@ -602,15 +796,20 @@ class SubagentStream {
 				if (batch.length > 0) flush();
 				this.flushEvents();
 				this.queue.shift();
+				// The wait for this saved message is over. A later boundary has its own deadline.
+				clearTimeout(this.eventTimer);
+				this.eventTimer = undefined;
 			}
-			const capped = capMessage(message, max);
-			bytes += Buffer.byteLength(JSON.stringify(capped));
+			const size = source === "file" ? savedMessageSize(message, max) : jsonBytes(message);
+			const capped = size <= max ? message : capOversizedMessage(message, max);
+			bytes += source === "file" && capped === message ? size : jsonBytes(capped);
 			batch.push(capped);
 			if (bytes >= ENTRIES_BATCH_BYTES) flush();
 		}
 		if (batch.length > 0 || this.resetPending) flush();
 		// The events that came after the saved messages.
 		this.flushEvents();
+		this.armTimer();
 	}
 
 	private onLiveEvent(event: AgentSessionEvent): void {
@@ -635,7 +834,7 @@ class SubagentStream {
 				return;
 			case "message_update":
 				if (event.message.role !== "assistant") return;
-				this.queueEvent(capUpdate(toJsonEvent(event) as unknown as Json, this.owner.limits.maxMessageBytes));
+				this.queueEvent(toJsonEvent(event) as unknown as Json);
 				return;
 			case "tool_execution_start":
 				this.queueEvent({
@@ -658,21 +857,49 @@ class SubagentStream {
 		}
 	}
 
-	private queueEvent(event: unknown): void {
+	private queueEvent(event: Json): void {
 		if (this.stopped) return;
-		// A copy now: providers keep appending to the streaming message's content while the batch waits, and the
-		// phone would get text in `message_start` that the following deltas add again.
-		this.queue.push({ event: JSON.parse(JSON.stringify(event)) });
+		if (event.type === "message_update" && isRecord(event.assistantMessageEvent)) {
+			const update = event.assistantMessageEvent;
+			const max = this.owner.limits.maxMessageBytes;
+			// A string longer than the whole budget cannot fit, even before JSON escaping.
+			if (!(typeof update.delta === "string" && update.delta.length > max)) {
+				const json = JSON.stringify(event);
+				const bytes = Buffer.byteLength(json);
+				if (bytes <= max) {
+					this.enqueueJson(json, bytes);
+					return;
+				}
+			}
+			event = capOversizedUpdate(event, update, max);
+		}
+		this.enqueueJson(JSON.stringify(event));
+	}
+
+	private enqueueJson(json: string, bytes = Buffer.byteLength(json)): void {
+		// Providers keep mutating usage, content and arguments. Capture exactly the JSON visible at this event.
+		this.queue.push({ json, bytes });
 		this.armTimer();
 	}
 
+	private clearEvents(): void {
+		this.queue = [];
+		clearTimeout(this.eventTimer);
+		this.eventTimer = undefined;
+	}
+
 	private armTimer(): void {
-		if (this.eventTimer || this.queue.length === 0 || this.stopped) return;
+		const head = this.queue[0];
+		if (this.eventTimer || !head || this.stopped) return;
+		// File notifications and the fallback poll deliver a saved message as soon as it arrives.
+		// Until then this timer only needs to enforce the boundary's expiry.
+		const delay =
+			"boundary" in head ? Math.max(1, head.boundary + BOUNDARY_WAIT_MS - Date.now()) : this.owner.eventBatchMs;
 		this.eventTimer = setTimeout(() => {
 			this.eventTimer = undefined;
 			this.flushEvents(true);
 			this.armTimer();
-		}, this.owner.eventBatchMs);
+		}, delay);
 		this.eventTimer.unref?.();
 	}
 
@@ -681,10 +908,10 @@ class SubagentStream {
 	 * `BOUNDARY_WAIT_MS` is dropped, so events never wait forever for a saved message that does not come.
 	 */
 	private flushEvents(timed = false): void {
-		let events: unknown[] = [];
+		let events: string[] = [];
 		let bytes = 0;
 		const send = () => {
-			if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
+			if (events.length > 0) this.owner.sendEvents(this.runId, events);
 			events = [];
 			bytes = 0;
 		};
@@ -694,9 +921,9 @@ class SubagentStream {
 				if (!timed || Date.now() - head.boundary < BOUNDARY_WAIT_MS) break;
 			} else {
 				// Each event is capped, a burst of them is not: a message holds about `ENTRIES_BATCH_BYTES` of them.
-				const size = jsonBytes(head.event);
+				const size = head.bytes;
 				if (events.length > 0 && bytes + size > ENTRIES_BATCH_BYTES) send();
-				events.push(head.event);
+				events.push(head.json);
 				bytes += size;
 			}
 			this.queue.shift();
@@ -709,6 +936,8 @@ export interface SubagentStreamsOptions {
 	/** The session whose subagents are followed. */
 	getSession: () => AgentSession | undefined;
 	send: (message: object) => void;
+	/** Send an already serialized JSON message through the usual transport. */
+	sendJson?: (json: string) => void;
 	limits?: Partial<SubagentStreamLimits>;
 	/** Tests shorten these. */
 	pollMs?: number;
@@ -723,12 +952,22 @@ export class SubagentStreams {
 	private readonly options: SubagentStreamsOptions;
 	private readonly streams = new Map<string, SubagentStream>();
 	private readonly headers = new Map<string, Header>();
+	private savedRuns = new WeakMap<AgentSession["sessionManager"], { revision: number; runs: Map<string, RunInfo> }>();
+	private readonly watches = new Map<string, { watcher: FSWatcher; files: Map<string, Set<() => void>> }>();
+	private headerBuffer?: Buffer;
+	private pollTimer?: ReturnType<typeof setInterval>;
 
 	constructor(options: SubagentStreamsOptions) {
 		this.options = options;
 		this.limits = { ...DEFAULT_SUBAGENT_STREAM_LIMITS, ...options.limits };
 		this.pollMs = options.pollMs ?? POLL_MS;
 		this.eventBatchMs = options.eventBatchMs ?? EVENT_BATCH_MS;
+	}
+
+	/** Wire connections use a fixed preview limit, so readers can release oversized string tails as they arrive. */
+	withFixedLimits(): this {
+		Object.freeze(this.limits);
+		return this;
 	}
 
 	get size(): number {
@@ -741,19 +980,71 @@ export class SubagentStreams {
 		if (this.streams.has(runId)) return;
 		const session = this.options.getSession();
 		if (!session) throw new Error("No session is open yet");
-		const runs = sessionRuns(session);
+		const runs = this.sessionRuns(session);
 		const run = runs.get(runId);
 		if (!run) throw new Error(`No subagent run ${runId} in this session`);
 		if (this.streams.size >= this.limits.maxStreams) {
 			throw new Error(`At most ${this.limits.maxStreams} subagent streams at once`);
 		}
-		this.streams.set(runId, new SubagentStream(this, runId, run, otherAgents(runs, runId), session.sessionFile));
+		const stream = new SubagentStream(this, runId, run, otherAgents(runs, runId), session.sessionFile);
+		this.streams.set(runId, stream);
+		if (!this.pollTimer) {
+			this.pollTimer = setInterval(() => this.pollStreams(), this.pollMs);
+			this.pollTimer.unref?.();
+		}
+		stream.poll();
+	}
+
+	/** Pending runs on the same parent share its history and directory listing during this synchronous poll. */
+	private pollStreams(): void {
+		const snapshot: StreamPoll = {};
+		for (const stream of this.streams.values()) stream.poll(snapshot);
 	}
 
 	/** The `Agent` runs of the session phones see now, when it is still the one saved in [parentFile]. */
-	runs(parentFile: string | undefined): Map<string, RunInfo> | undefined {
+	runs(parentFile: string | undefined, snapshot?: StreamPoll): Map<string, RunInfo> | undefined {
 		const session = this.options.getSession();
-		return session && session.sessionFile === parentFile ? sessionRuns(session) : undefined;
+		if (!session || session.sessionFile !== parentFile) return undefined;
+		if (!snapshot) return this.sessionRuns(session);
+		if (snapshot.parent !== session) {
+			snapshot.runs = this.sessionRuns(session);
+			snapshot.parent = session;
+		}
+		return snapshot.runs;
+	}
+
+	/** Known sessions of other parents can be excluded for every pending run before ranking the remaining files. */
+	candidateFiles(parentFile: string, snapshot?: StreamPoll): string[] {
+		if (snapshot?.listing?.parentFile === parentFile) return snapshot.listing.paths;
+		const dir = dirname(parentFile);
+		const paths: string[] = [];
+		for (const name of readdirSync(dir)) {
+			if (!name.endsWith(".jsonl")) continue;
+			const path = join(dir, name);
+			if (path === parentFile) continue;
+			const known = this.headers.get(path);
+			if (!known || known.parent === parentFile) paths.push(path);
+		}
+		if (snapshot) snapshot.listing = { parentFile, paths };
+		return paths;
+	}
+
+	/** Keep runs from the saved branch, including compacted calls. Unsaved live messages can change between polls. */
+	private sessionRuns(session: AgentSession): Map<string, RunInfo> {
+		const manager = session.sessionManager;
+		const revision = manager.getProjectionRevision();
+		let saved = this.savedRuns.get(manager);
+		if (saved?.revision !== revision) {
+			const runs = new Map<string, RunInfo>();
+			for (const entry of manager.getBranch()) {
+				if (entry.type === "message") collectRun(entry.message, runs);
+			}
+			saved = { revision, runs };
+			this.savedRuns.set(manager, saved);
+		}
+		const runs = new Map(saved.runs);
+		for (const message of session.messages) collectRun(message, runs);
+		return runs;
 	}
 
 	unsubscribe(runId: unknown): boolean {
@@ -762,6 +1053,7 @@ export class SubagentStreams {
 		if (!stream) return false;
 		stream.stop();
 		this.streams.delete(runId);
+		if (this.streams.size === 0) this.clear();
 		return true;
 	}
 
@@ -770,10 +1062,61 @@ export class SubagentStreams {
 		for (const stream of this.streams.values()) stream.stop();
 		this.streams.clear();
 		this.headers.clear();
+		this.savedRuns = new WeakMap();
+		this.headerBuffer = undefined;
+		clearInterval(this.pollTimer);
+		this.pollTimer = undefined;
 	}
 
 	send(message: object): void {
 		this.options.send(message);
+	}
+
+	/** Queue entries are complete JSON values serialized at event time. Only the envelope is new. */
+	sendEvents(runId: string, events: string[]): void {
+		const json = `{"type":"subagent_events","runId":${JSON.stringify(runId)},"events":[${events.join(",")}]}`;
+		if (this.options.sendJson) this.options.sendJson(json);
+		else this.send(JSON.parse(json));
+	}
+
+	/** Share watches by inode generation on Linux, or by containing directory on other platforms. */
+	watchFile(file: string, identity: FileIdentity, changed: () => void): (() => void) | undefined {
+		const path = WATCH_INODE ? file : dirname(file);
+		const key = WATCH_INODE ? `${path}\0${identity.dev}:${identity.ino}` : path;
+		const name = basename(file);
+		let entry = this.watches.get(key);
+		if (!entry) {
+			const files = new Map<string, Set<() => void>>();
+			try {
+				const watcher = watch(path, { persistent: false }, (_event, filename) => {
+					if (!WATCH_INODE && filename) {
+						const listeners = files.get(filename);
+						if (listeners) for (const notify of listeners) notify();
+					} else {
+						for (const listeners of files.values()) for (const notify of listeners) notify();
+					}
+				});
+				watcher.on("error", () => watcher.close());
+				entry = { watcher, files };
+				this.watches.set(key, entry);
+			} catch {
+				// The periodic poll still catches writes on filesystems without notifications.
+				return undefined;
+			}
+		}
+		let listeners = entry.files.get(name);
+		if (!listeners) {
+			listeners = new Set();
+			entry.files.set(name, listeners);
+		}
+		listeners.add(changed);
+		return () => {
+			if (!listeners.delete(changed) || listeners.size) return;
+			entry.files.delete(name);
+			if (entry.files.size) return;
+			entry.watcher.close();
+			this.watches.delete(key);
+		};
 	}
 
 	/**
@@ -786,11 +1129,17 @@ export class SubagentStreams {
 		return false;
 	}
 
+	/** A known header can rule out an unrelated file before reading its modification time. */
+	cachedHeader(file: string): Header | undefined {
+		return this.headers.get(file);
+	}
+
 	/** A session file's header, cached once its first prompt is known (until then it is read again). */
 	header(file: string): Header | undefined {
 		const cached = this.headers.get(file);
 		if (cached) return cached;
-		const header = readHeader(file);
+		this.headerBuffer ??= Buffer.allocUnsafe(HEADER_BYTES);
+		const header = readHeader(file, this.headerBuffer);
 		if (header?.firstUser !== undefined) this.headers.set(file, header);
 		return header;
 	}

@@ -9,6 +9,7 @@
 import { splitIncompleteAnsiSuffix, stripAnsi } from "../utils/ansi.ts";
 import { createOutputFile, type OutputFile } from "../utils/output-files.ts";
 import { sanitizeBinaryOutput } from "../utils/shell.ts";
+import { isStdoutTakenOver, waitForRawStdoutBackpressure } from "./output-guard.ts";
 import type { BashOperations } from "./tools/bash.ts";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./tools/truncate.ts";
 
@@ -102,7 +103,8 @@ export async function executeBashWithOperations(
 		outputBytes += text.length;
 		while (outputBytes > maxOutputBytes && outputChunks.length - outputStart > 1) {
 			outputBytes -= outputChunks[outputStart].length;
-			outputStart++;
+			// Release the text immediately. The array may hold another 1,024 slots before compaction.
+			outputChunks[outputStart++] = "";
 			discardedOutput = true;
 		}
 		if (outputStart > 1024 && outputStart * 2 > outputChunks.length) {
@@ -131,7 +133,11 @@ export async function executeBashWithOperations(
 
 	let exitCode: number | null = null;
 	try {
-		({ exitCode } = await operations.exec(command, cwd, { onData, signal: options?.signal }));
+		({ exitCode } = await operations.exec(command, cwd, {
+			onData,
+			signal: options?.signal,
+			waitForOutputDrain: isStdoutTakenOver() ? waitForRawStdoutBackpressure : undefined,
+		}));
 	} catch (err) {
 		// An aborted command still returns the output it produced so far
 		if (!options?.signal?.aborted) {

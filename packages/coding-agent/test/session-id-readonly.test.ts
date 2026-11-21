@@ -8,6 +8,7 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -212,6 +213,42 @@ describe("--session-id", () => {
 
 		expect(SessionManager.findById(projectA, "foreign-id", sessionDir)).toBeUndefined();
 		expect(SessionManager.findById(projectB, "foreign-id", sessionDir)).toBe(foreign.getSessionFile());
+	});
+
+	it("opens a unique local prefix from its header and keeps session-id lookups exact", async () => {
+		const cwd = createTempDir();
+		const dir = join(cwd, "sessions");
+		const session = SessionManager.create(cwd, dir, { id: "work-local" });
+		persistSession(session, "local");
+		const foreign = SessionManager.create(join(cwd, "elsewhere"), dir, { id: "work-foreign" });
+		persistSession(foreign, "foreign");
+		const list = vi.spyOn(SessionManager, "list");
+		const reopened = await createSessionManager(args({ session: "work-" }), cwd, dir, SettingsManager.inMemory());
+		expect(reopened.getSessionFile()).toBe(session.getSessionFile());
+		expect(list).not.toHaveBeenCalled();
+		expect(SessionManager.findById(cwd, "work-", dir)).toBeUndefined();
+	});
+
+	it("keeps ambiguous prefixes and incomplete header scans on the activity-ranked listing path", () => {
+		const cwd = createTempDir();
+		const dir = join(cwd, "sessions");
+		const first = SessionManager.create(cwd, dir, { id: "work-first" });
+		persistSession(first, "first");
+		const second = SessionManager.create(cwd, dir, { id: "work-second" });
+		persistSession(second, "second");
+		expect(SessionManager.findById(cwd, "work", dir, "unique-prefix")).toBeUndefined();
+		expect(SessionManager.findById(cwd, "work-second", dir, "unique-prefix")).toBe(second.getSessionFile());
+
+		const file = second.getSessionFile()!;
+		const contents = readFileSync(file, "utf8");
+		writeFileSync(file, " ".repeat(1024 * 1024) + contents);
+		expect(SessionManager.findById(cwd, "work", dir, "unique-prefix")).toBeUndefined();
+
+		const exact = SessionManager.create(cwd, dir, { id: "work" });
+		persistSession(exact, "exact");
+		const exactPath = join(dir, "zzz-exact.jsonl");
+		renameSync(exact.getSessionFile()!, exactPath);
+		expect(SessionManager.findById(cwd, "work", dir, "unique-prefix")).toBe(exactPath);
 	});
 
 	it("rejects an existing fork target in process", async () => {

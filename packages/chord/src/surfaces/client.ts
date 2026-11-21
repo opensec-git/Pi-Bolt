@@ -10,7 +10,7 @@ import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { BACKGROUND_CONTEXT, type Context, withAbortSignal } from "../context/index.ts";
 import type { Principal } from "../data/index.ts";
 import { createHost, type Host, type HostError, type PluginFacet, type PluginFailure } from "../host/index.ts";
-import type { Link } from "../link/index.ts";
+import type { Link, PartLimits } from "../link/index.ts";
 import { type ConnectionState, keepConnected, type LoopEnvironment, type SocketEvents } from "./connection.ts";
 import type { MessagesReport } from "./language.ts";
 import { LoadedFacets, type SetEntry } from "./loaded.ts";
@@ -49,16 +49,18 @@ export type ClientOptions<P extends Principal> = {
 	readonly core: readonly PluginFacet<P>[];
 	/** Opens one socket to the server and its link; the socket reports to `events`. */
 	readonly open: (events: SocketEvents) => Link;
+	/** The limits per part of what arrives from the server (default: an untrusted link's, 16 MiB on the wire). */
+	readonly limits?: PartLimits;
 	/** Fetches a plugin's script of a set (at its `url`), which registers itself. */
 	readonly fetchScript: (entry: ScriptEntry) => Promise<RegisteredScript>;
 	/**
-	 * The server's current base bundle hash, asked before each reconnect (`undefined`: unknown, try again): another one
-	 * means this client is outdated (a new protocol comes with a new base bundle).
+	 * The server's current base bundle hash, asked at each reconnect beside the next attempt (`undefined`: unknown, try
+	 * again): another one means this client is outdated (a new protocol comes with a new base bundle).
 	 */
 	readonly serverBase: () => Promise<string | undefined>;
 	/** This client's code is outdated: the app starts it over (a page reloads); the loop has stopped. */
 	readonly outdated: () => void;
-	/** Asked before each reconnect; `false` stops the loop (a guest's ended share). */
+	/** Asked at each reconnect, beside the next attempt; `false` stops the loop (a guest's ended share). */
 	readonly canRetry?: () => Promise<boolean>;
 	readonly onConnection?: (state: ConnectionState) => void;
 	/** The plugins' stylesheets (a page's; a terminal has none). */
@@ -69,6 +71,11 @@ export type ClientOptions<P extends Principal> = {
 	 * first span, after the host was made).
 	 */
 	readonly telemetry?: (incarnation: () => string) => TelemetryContext;
+	/**
+	 * Whether the client follows the scripts object (new sets applied, another base `outdated`, the server's base asked
+	 * at each reconnect): yes by default; `false` for a static client (a page built offline and served elsewhere).
+	 */
+	readonly follow?: boolean;
 	readonly onError: (error: ClientError) => void;
 };
 
@@ -94,7 +101,10 @@ export type ClientStyles = {
 /** A running client: its host, once its plugins are loaded, and its stop. */
 export type Client<P extends Principal> = { readonly host: Host<P>; stop(context: Context): Promise<void> };
 
-/** Starts a client: its host loaded with the initial scripts, its link kept, its plugins kept current. */
+/**
+ * Starts a client: its host loaded with the initial scripts, its link kept, its plugins kept current from the scripts
+ * object once the server answers (resolving before: a client starts offline).
+ */
 export async function startClient<P extends Principal>(options: ClientOptions<P>): Promise<Client<P>> {
 	const context = BACKGROUND_CONTEXT;
 	let made: Host<P> | undefined;
@@ -106,10 +116,15 @@ export async function startClient<P extends Principal>(options: ClientOptions<P>
 	const { loaded, report } = await LoadedFacets.load(host, options.core, entries, context);
 	if (report.failed.length > 0) options.onError({ kind: "plugins", failed: report.failed });
 	const updates = new Updates(host, loaded, new Set(report.failed.map(({ plugin }) => plugin)), options);
-	const loop = connect(host, options, (state) => {
-		if (state === "connected") updates.reconnected(context);
+	const follow = options.follow !== false;
+	// A static client asks no base: it never learns it is outdated.
+	const serverBase = follow ? options.serverBase : async () => undefined;
+	const loop = connect(host, options, serverBase, (state) => {
+		if (follow && state === "connected") updates.reconnected(context);
 	});
-	await updates.follow(context);
+	// In the background: the scripts object is the server's, and a client starts (a page renders) without it, offline too.
+	if (follow)
+		void updates.follow(context).catch((error: unknown) => options.onError({ kind: "update_failed", error }));
 	return {
 		host,
 		stop: async (ctx) => {
@@ -121,20 +136,26 @@ export async function startClient<P extends Principal>(options: ClientOptions<P>
 }
 
 /**
- * Keeps `host`'s parent link to the server, asking `serverBase` and `canRetry` before every reconnect; `onState` hears
+ * Keeps `host`'s parent link to the server, asking `serverBase` and `canRetry` at every reconnect; `onState` hears
  * each state after the app's `onConnection`.
  */
 function connect<P extends Principal>(
 	host: Host<P>,
 	options: ClientOptions<P>,
+	serverBase: () => Promise<string | undefined>,
 	onState: (state: ConnectionState) => void,
 ): { stop(): void } {
-	return keepConnected({
+	const loop = keepConnected({
 		open: (events) => {
 			// The loop and the host both follow the link's close; a link has one close listener.
 			const link = new SharedClose(options.open(events));
 			// A client's parent is the server; the principal only labels the link (a client serves no remote types).
-			host.connect(link, { principal: { kind: "server" } as unknown as P }, BACKGROUND_CONTEXT);
+			const principal = { kind: "server" } as unknown as P;
+			host.connect(
+				link,
+				options.limits === undefined ? { principal } : { principal, limits: options.limits },
+				BACKGROUND_CONTEXT,
+			);
 			return link;
 		},
 		onState: (state) => {
@@ -142,8 +163,10 @@ function connect<P extends Principal>(
 			onState(state);
 		},
 		canRetry: async () => {
-			const base = await options.serverBase();
+			const base = await serverBase();
 			if (base !== undefined && base !== options.base) {
+				// Stopped first, as `outdated` promises: an attempt made meanwhile ends with it.
+				loop.stop();
 				options.outdated();
 				return false;
 			}
@@ -151,6 +174,7 @@ function connect<P extends Principal>(
 		},
 		environment: options.environment,
 	});
+	return loop;
 }
 
 /** A link whose close several follow (the host and the connection loop): each listener added runs once it closes. */
@@ -244,15 +268,20 @@ class Updates<P extends Principal> {
 		const held = this.#host.hold(this.#options.scripts, {}, context);
 		this.#release = () => held.release();
 		const watch = await held.set.watch(withAbortSignal(this.#abort.signal, context));
+		// The set shown when the watch began (a set published before it, while the client started, is no frame).
+		void this.#take(watch.value as ScriptSet, context);
 		watch.start(async (call, ctx) => {
-			if (call.kind !== "value") return;
-			const set = call.value as ScriptSet;
-			this.#latest = set;
-			this.#retry?.cancel();
-			this.#retry = undefined;
-			this.#pause = 0;
-			await this.#queue(set, ctx);
+			if (call.kind === "value") await this.#take(call.value as ScriptSet, ctx);
 		});
+	}
+
+	/** Takes `set` as the newest: a pending retry of an older one is dropped, `set` applied in turn. */
+	#take(set: ScriptSet, context: Context): Promise<void> {
+		this.#latest = set;
+		this.#retry?.cancel();
+		this.#retry = undefined;
+		this.#pause = 0;
+		return this.#queue(set, context);
 	}
 
 	/**

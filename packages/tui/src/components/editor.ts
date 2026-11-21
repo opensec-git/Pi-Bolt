@@ -501,6 +501,9 @@ export class Editor implements Component, Focusable {
 
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
+	/** The unstyled border shared by the top and bottom rows when there is no overflow. */
+	private plainBorderWidth?: number;
+	private plainBorder = "";
 
 	// Autocomplete support
 	private autocompleteProvider?: AutocompleteProvider;
@@ -769,13 +772,21 @@ export class Editor implements Component, Focusable {
 	}
 
 	protected renderTopBorder(width: number, hiddenLineCount: number): string {
-		const border = hiddenLineCount > 0 ? createScrollBorder("↑", hiddenLineCount, width) : "─".repeat(width);
+		const border = hiddenLineCount > 0 ? createScrollBorder("↑", hiddenLineCount, width) : this.plainBorderFor(width);
 		return this.borderColor(border);
 	}
 
 	protected renderBottomBorder(width: number, hiddenLineCount: number): string {
-		const border = hiddenLineCount > 0 ? createScrollBorder("↓", hiddenLineCount, width) : "─".repeat(width);
+		const border = hiddenLineCount > 0 ? createScrollBorder("↓", hiddenLineCount, width) : this.plainBorderFor(width);
 		return this.borderColor(border);
+	}
+
+	private plainBorderFor(width: number): string {
+		if (this.plainBorderWidth !== width) {
+			this.plainBorder = "─".repeat(width);
+			this.plainBorderWidth = width;
+		}
+		return this.plainBorder;
 	}
 
 	/**
@@ -786,6 +797,7 @@ export class Editor implements Component, Focusable {
 	 */
 	private renderedText?: {
 		width: number;
+		layoutWidth: number;
 		paddingX: number;
 		terminalRows: number;
 		focused: boolean;
@@ -830,23 +842,13 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
-		const paddingX = Math.min(this.paddingX, maxPadding);
-		const contentWidth = Math.max(1, width - paddingX * 2);
-
-		// Layout width: with padding the cursor can overflow into it,
-		// without padding we reserve 1 column for the cursor.
-		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
-
-		// Store for cursor navigation (must match wrapping width)
-		this.lastWidth = layoutWidth;
-
 		const terminalRows = this.tui.terminal.rows;
 		const showAutocomplete = Boolean(this.autocompleteState && this.autocompleteList);
 		const known = this.renderedText;
 		if (!showAutocomplete && known !== undefined) {
 			const pasteIds = this.pastes.size === 0 ? "" : [...this.pastes.keys()].join(",");
 			if (this.isRenderedText(known, width, terminalRows, pasteIds)) {
+				this.lastWidth = known.layoutWidth;
 				this.renderedVisibleLineCount = known.visibleLineCount;
 				this.renderedAutocompleteHeight = 0;
 				const top = this.renderTopBorder(width, this.scrollOffset);
@@ -861,6 +863,15 @@ export class Editor implements Component, Focusable {
 			}
 		}
 		this.renderedText = undefined;
+
+		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
+		const paddingX = Math.min(this.paddingX, maxPadding);
+		const contentWidth = Math.max(1, width - paddingX * 2);
+
+		// Layout width: with padding the cursor can overflow into it,
+		// without padding we reserve 1 column for the cursor.
+		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
+		this.lastWidth = layoutWidth;
 
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
@@ -948,6 +959,7 @@ export class Editor implements Component, Focusable {
 		if (!showAutocomplete) {
 			this.renderedText = {
 				width,
+				layoutWidth,
 				paddingX: this.paddingX,
 				terminalRows,
 				focused: this.focused,
@@ -1143,6 +1155,12 @@ export class Editor implements Component, Focusable {
 			if (kb.matches(data, "tui.select.confirm")) {
 				const selected = this.autocompleteList.getSelectedItem();
 				if (selected && this.autocompleteProvider) {
+					// Enter runs a slash command only from the command-name menu. Path and argument menus can also have a
+					// "/" prefix ("look at /tmp/fi", "/open /tm"), so the prefix alone does not identify the menu. Read the
+					// context before applying the completion: the completed "/model " already contains a space.
+					const beforeCursor = (this.state.lines[this.state.cursorLine] || "").slice(0, this.state.cursorCol);
+					const submitsCommand =
+						this.autocompletePrefix.startsWith("/") && this.isInSlashCommandNameContext(beforeCursor);
 					this.pushUndoSnapshot();
 					this.lastAction = null;
 					const result = this.autocompleteProvider.applyCompletion(
@@ -1156,7 +1174,7 @@ export class Editor implements Component, Focusable {
 					this.state.cursorLine = result.cursorLine;
 					this.setCursorCol(result.cursorCol);
 
-					if (this.autocompletePrefix.startsWith("/")) {
+					if (submitsCommand) {
 						this.cancelAutocomplete();
 						// Fall through to submit
 					} else {
@@ -2564,6 +2582,11 @@ export class Editor implements Component, Focusable {
 		return this.isSlashMenuAllowed() && textBeforeCursor.trimStart().startsWith("/");
 	}
 
+	// A slash command name is being typed: "/mo", not "/model cla" or "/open /tm".
+	private isInSlashCommandNameContext(textBeforeCursor: string): boolean {
+		return this.isInSlashCommandContext(textBeforeCursor) && !textBeforeCursor.trimStart().includes(" ");
+	}
+
 	// Autocomplete methods
 	/**
 	 * Find the best autocomplete item index for the given prefix.
@@ -2630,7 +2653,7 @@ export class Editor implements Component, Focusable {
 		const currentLine = this.state.lines[this.state.cursorLine] || "";
 		const beforeCursor = currentLine.slice(0, this.state.cursorCol);
 
-		if (this.isInSlashCommandContext(beforeCursor) && !beforeCursor.trimStart().includes(" ")) {
+		if (this.isInSlashCommandNameContext(beforeCursor)) {
 			this.handleSlashCommandCompletion();
 		} else {
 			this.forceFileAutocomplete(true);

@@ -1,5 +1,6 @@
 import { execFileSync } from "child_process";
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import type * as fsPromises from "fs/promises";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 import { pathToFileURL } from "url";
@@ -25,6 +26,26 @@ vi.mock("util", async (importOriginal) => {
 		}
 	}
 	return { ...actual, TextDecoder: HookedTextDecoder };
+});
+
+// Runs when a file is opened, so a test can abort while the read tool opens the file.
+const openHook = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
+// Runs after each read() of an opened file (Pi-Bolt reads large local files in chunks with it, not through a stream).
+const readHook = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
+vi.mock("fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof fsPromises>();
+	const open: typeof actual.open = async (...args) => {
+		openHook.run?.();
+		const handle = await actual.open(...args);
+		const read = handle.read.bind(handle) as (...readArgs: unknown[]) => ReturnType<typeof handle.read>;
+		(handle as { read: unknown }).read = async (...readArgs: unknown[]) => {
+			const result = await read(...readArgs);
+			readHook.run?.();
+			return result;
+		};
+		return handle;
+	};
+	return { ...actual, open };
 });
 
 // The read tool's text path before it streamed (#9654), kept as the reference the new path must match.
@@ -242,6 +263,55 @@ describe("read tool streaming", () => {
 			type: "text",
 			text: "head\n\n[1 more lines in file. Use offset=2 to continue.]",
 		});
+	});
+
+	// #11956
+	it("rejects without an unhandled stream error when aborted while opening a local file", async () => {
+		const path = join(tempDir, "abort-on-open.txt");
+		// Pi-Bolt reads a local file under 1 MB whole (readFile, no stream); one of 1 MB or more is opened and streamed.
+		writeFileSync(path, "line\n".repeat(256 * 1024));
+		const controller = new AbortController();
+		openHook.run = () => {
+			openHook.run = undefined;
+			controller.abort();
+		};
+		const uncaught: unknown[] = [];
+		const onUncaught = (error: unknown) => uncaught.push(error);
+		process.on("uncaughtException", onUncaught);
+		try {
+			const tool = createReadToolDefinition(tempDir);
+			await expect(tool.execute("call", { path }, controller.signal, undefined, undefined as never)).rejects.toThrow(
+				"Operation aborted",
+			);
+			// The stream's 'error' would be emitted on a later tick.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			process.off("uncaughtException", onUncaught);
+			openHook.run = undefined;
+		}
+		expect(uncaught).toEqual([]);
+	});
+
+	it("stops reading a local file when aborted mid-read", async () => {
+		const path = join(tempDir, "abort-mid-read.txt");
+		// Pi-Bolt reads a local file of 1 MB or more in 1 MB chunks: four, so the abort lands with most of the file unread.
+		writeFileSync(path, "x".repeat(4 * 1024 * 1024));
+		const controller = new AbortController();
+		let reads = 0;
+		readHook.run = () => {
+			reads++;
+			controller.abort();
+		};
+		try {
+			const tool = createReadToolDefinition(tempDir);
+			await expect(tool.execute("call", { path }, controller.signal, undefined, undefined as never)).rejects.toThrow(
+				"Operation aborted",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			readHook.run = undefined;
+		}
+		expect(reads).toBe(1);
 	});
 
 	it("reads a 200 MB line with a 64 MB heap", () => {

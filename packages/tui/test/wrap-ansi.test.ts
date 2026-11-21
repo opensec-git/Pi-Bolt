@@ -152,6 +152,16 @@ describe("wrapTextWithAnsi", () => {
 	});
 
 	describe("basic wrapping", () => {
+		it("keeps an ASCII row with styles and trailing spaces when it fits", () => {
+			const text = "\x1b[1mword\x1b[22m  ";
+			assert.deepStrictEqual(wrapTextWithAnsi(text, text.length), [text]);
+		});
+
+		it("wraps tabs and wide characters even when the source length fits", () => {
+			assert.deepStrictEqual(wrapTextWithAnsi("ab\tcd", 5), ["ab", "cd"]);
+			assert.deepStrictEqual(wrapTextWithAnsi("日本語", 3), ["日", "本", "語"]);
+		});
+
 		it("should handle LF, CRLF, and CR line endings", () => {
 			assert.deepStrictEqual(wrapTextWithAnsi("first\nsecond\r\nthird\rfourth", 80), [
 				"first",

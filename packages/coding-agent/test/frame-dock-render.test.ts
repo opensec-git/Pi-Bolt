@@ -4,6 +4,8 @@ import { renderLayoutFrame } from "../../tui/src/layout.ts";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import type { FileEntry } from "../src/core/session-manager.ts";
+import { accumulateSessionStats } from "../src/core/usage-totals.ts";
 import { createChatViewport } from "../src/modes/interactive/chat-viewport.ts";
 import { CustomEditor } from "../src/modes/interactive/components/custom-editor.ts";
 import { FooterComponent } from "../src/modes/interactive/components/footer.ts";
@@ -48,6 +50,8 @@ function createFooterSource(state: FooterState): { session: AgentSession; footer
 		},
 		sessionManager: {
 			getEntries: () => state.entries,
+			// The fixtures are partial session entries: only the fields the footer reads.
+			getEntryStats: () => accumulateSessionStats(state.entries as unknown as FileEntry[]),
 			getEntryCount: () => state.entries.length,
 			getSessionId: () => "session",
 			getLeafId: () => (state.entries.length === 0 ? null : `leaf-${state.entries.length}`),

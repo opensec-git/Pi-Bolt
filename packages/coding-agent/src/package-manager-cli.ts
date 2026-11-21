@@ -9,12 +9,12 @@ import {
 	truncateSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { ModelsError } from "@earendil-works/pi-ai";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import lockfile from "proper-lockfile";
-import { parseArgs } from "./cli/args.ts";
 import { selectConfig } from "./cli/config-selector.ts";
+import { getPiBoltPackageFlagError, isPackageManagementCommand } from "./cli/package-commands.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import {
 	APP_NAME,
@@ -79,6 +79,8 @@ import {
 	cleanupWindowsSelfUpdateQuarantine,
 	quarantineWindowsNativeDependencies,
 } from "./utils/windows-self-update.ts";
+
+export { getPiBoltPackageFlagError } from "./cli/package-commands.ts";
 
 export type PackageCommand = "install" | "remove" | "update" | "list";
 
@@ -145,6 +147,19 @@ async function runManagedNpmCi(stageDir: string): Promise<void> {
 	if (code !== 0) throw new Error(`npm ${args.join(" ")} exited with code ${code ?? "unknown"}`);
 }
 
+/**
+ * Environment for the managed release smoke test, with the Node.js running this update
+ * first on PATH. On Windows the managed launcher runs Pi on the installer's standalone
+ * Node without changing PATH, so the release's `node_modules/.bin` shim may otherwise
+ * run an older system Node that cannot load the new release.
+ */
+function getManagedReleaseVerifyEnv(): NodeJS.ProcessEnv {
+	const nodeDir = dirname(process.execPath);
+	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+	const currentPath = process.env[pathKey] ?? "";
+	return { ...process.env, [pathKey]: [nodeDir, currentPath].filter(Boolean).join(delimiter) };
+}
+
 function verifyManagedRelease(releaseDir: string, expectedVersion: string): void {
 	const binPath = join(
 		releaseDir,
@@ -155,6 +170,7 @@ function verifyManagedRelease(releaseDir: string, expectedVersion: string): void
 	const result = spawnProcessSync(binPath, ["--version"], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
+		env: getManagedReleaseVerifyEnv(),
 	});
 	if (result.error || result.status !== 0) {
 		const reason = result.error?.message || result.stderr.trim() || `exit code ${result.status ?? "unknown"}`;
@@ -301,27 +317,6 @@ const SELF_UPDATE_NOTE_MARKDOWN_THEME: MarkdownTheme = {
 	strikethrough: (text) => chalk.strikethrough(text),
 	underline: (text) => chalk.underline(text),
 };
-
-/** Checked before startup reads settings: even the historical safety migration is a write. */
-export function getPiBoltPackageFlagError(args: string[]): string | undefined {
-	if (!["install", "remove", "uninstall", "update", "list", "config"].includes(args[0])) {
-		// Startup options can consume dash-prefixed values, including a literal "--".
-		if (!parseArgs(args).unknownFlags.has("pi-bolt")) return undefined;
-		if (PIBOLT === undefined) return "--pi-bolt requires a Pi-Bolt build";
-		return "--pi-bolt is only supported by install, remove, and uninstall";
-	}
-
-	const endOfOptions = args.indexOf("--");
-	const flags = args
-		.slice(0, endOfOptions === -1 ? args.length : endOfOptions)
-		.filter((arg) => arg === "--pi-bolt" || arg.startsWith("--pi-bolt="));
-	if (flags.length === 0) return undefined;
-	if (PIBOLT === undefined) return "--pi-bolt requires a Pi-Bolt build";
-	if (flags.some((flag) => flag !== "--pi-bolt")) return "--pi-bolt does not take a value";
-	if (!["install", "remove", "uninstall"].includes(args[0]))
-		return "--pi-bolt is only supported by install, remove, and uninstall";
-	return undefined;
-}
 
 interface PackageCommandOptions {
 	command: PackageCommand;
@@ -470,15 +465,8 @@ Options:
 
 function parsePackageCommand(args: string[]): PackageCommandOptions | undefined {
 	const [rawCommand, ...rest] = args;
-	let command: PackageCommand | undefined;
-	if (rawCommand === "uninstall") {
-		command = "remove";
-	} else if (rawCommand === "install" || rawCommand === "remove" || rawCommand === "update" || rawCommand === "list") {
-		command = rawCommand;
-	}
-	if (!command) {
-		return undefined;
-	}
+	if (!isPackageManagementCommand(rawCommand)) return undefined;
+	const command: PackageCommand = rawCommand === "uninstall" ? "remove" : rawCommand;
 
 	let local = false;
 	let piBolt = false;

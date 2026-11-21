@@ -4,6 +4,7 @@ import {
 	colorToHex,
 	colorToOkhsl,
 	colorToRgb,
+	foregroundAnsi,
 	indexedColor,
 	okhslColor,
 	oklchColor,
@@ -13,6 +14,24 @@ import {
 } from "../src/index.ts";
 
 describe("colors", () => {
+	it("chooses the lower cube or gray index at exact palette midpoints", () => {
+		for (const [channel, index] of [
+			[47.5, 0],
+			[115, 1],
+			[155, 2],
+			[195, 3],
+			[235, 4],
+		]) {
+			expectCube(channel, index);
+			expectCube(channel + 0.001, index + 1);
+		}
+		function expectCube(channel: number, index: number) {
+			assert.equal(foregroundAnsi(rgbColor(channel, 255, 0), "256color"), `\x1b[38;5;${16 + 36 * index + 30}m`);
+		}
+		assert.equal(foregroundAnsi(rgbColor(23, 23, 23), "256color"), "\x1b[38;5;233m");
+		assert.equal(foregroundAnsi(rgbColor(24, 24, 24), "256color"), "\x1b[38;5;234m");
+	});
+
 	it("parses hex and OKLCH colors and rejects everything else", () => {
 		assert.deepStrictEqual(parseColor("#abc"), { kind: "rgb", r: 170, g: 187, b: 204 });
 		assert.deepStrictEqual(parseColor("oklch(62% 0.1 200)"), { kind: "oklch", l: 0.62, c: 0.1, h: 200 });

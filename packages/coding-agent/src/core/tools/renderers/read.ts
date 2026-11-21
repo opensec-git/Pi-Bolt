@@ -6,7 +6,7 @@
  * definition, so the tool's public shape is unchanged.
  */
 
-import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { basename, dirname, relative, sep } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { getReadmePath } from "../../../config.ts";
@@ -41,24 +41,22 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 	}
 	return lines.slice(0, end);
 }
-function toPosixPath(filePath: string): string {
-	return filePath.split(sep).join("/");
-}
-function getPiDocsClassification(absolutePath: string): CompactReadClassification | undefined {
-	const packageRoot = dirname(getReadmePath());
-	const relativePath = relative(resolvePath(packageRoot), resolvePath(absolutePath));
+function getPiDocsClassification(absolutePath: string, fileName: string): CompactReadClassification | undefined {
+	// An ordinary project file cannot be the package README or a descendant of docs/ or examples/.
 	if (
-		relativePath === "" ||
-		relativePath === ".." ||
-		relativePath.startsWith(`..${sep}`) ||
-		isAbsolute(relativePath)
+		fileName !== "README.md" &&
+		!absolutePath.includes(`${sep}docs${sep}`) &&
+		!absolutePath.includes(`${sep}examples${sep}`)
 	) {
 		return undefined;
 	}
-
-	const label = toPosixPath(relativePath);
-	if (label === "README.md" || label.startsWith("docs/") || label.startsWith("examples/")) {
-		return { kind: "docs", label };
+	const relativePath = relative(dirname(getReadmePath()), absolutePath);
+	if (
+		relativePath === "README.md" ||
+		relativePath.startsWith(`docs${sep}`) ||
+		relativePath.startsWith(`examples${sep}`)
+	) {
+		return { kind: "docs", label: sep === "/" ? relativePath : relativePath.split(sep).join("/") };
 	}
 	return undefined;
 }
@@ -75,7 +73,7 @@ function getCompactReadClassification(
 		return { kind: "skill", label: basename(dirname(absolutePath)) || fileName };
 	}
 
-	const docsClassification = getPiDocsClassification(absolutePath);
+	const docsClassification = getPiDocsClassification(absolutePath, fileName);
 	if (docsClassification) return docsClassification;
 
 	if (COMPACT_RESOURCE_FILE_NAMES.has(fileName)) {
@@ -116,8 +114,12 @@ function formatReadResult(
 	_cwd: string,
 	isError: boolean,
 ): string {
+	const unsupportedBy = result.details?.imageUnsupportedByModel;
+	const imageWarning = unsupportedBy
+		? `\n${theme.fg("warning", `[${unsupportedBy} does not support images; it saw a placeholder instead]`)}`
+		: "";
 	if (!options.expanded && !isError) {
-		return "";
+		return imageWarning;
 	}
 
 	const rawPath = str(args?.file_path ?? args?.path);
@@ -143,7 +145,7 @@ function formatReadResult(
 			text += `\n${theme.fg("warning", `[Truncated: ${truncation.outputLines} lines shown (${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)]`)}`;
 		}
 	}
-	return text;
+	return text + imageWarning;
 }
 
 export const readRenderers: Pick<ToolDefinition<any, ReadToolDetails | undefined>, "renderCall" | "renderResult"> = {
