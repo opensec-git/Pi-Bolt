@@ -28,6 +28,7 @@ import {
 } from "../../core/output-guard.ts";
 import { SubagentStreams } from "../../core/subagent-stream.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
+import { writeDiagnosticsToStderr } from "../diagnostics-stderr.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
@@ -356,11 +357,23 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
+		// stderr, never stdout: stdout carries the RPC protocol.
+		writeDiagnosticsToStderr(runtimeHost.takeUnreportedDiagnostics());
 	});
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
 		subagentStreams?.clear();
+		// Subscribe before binding so events emitted by session_start handlers (e.g. appended entries) reach the client.
+		unsubscribe?.();
+		unsubscribeBackpressure?.();
+		unsubscribe = session.subscribe((event) => {
+			output(toJsonEvent(event));
+			if (event.type === "agent_settled") {
+				checkShutdownRequested();
+			}
+		});
+		unsubscribeBackpressure = session.agent.subscribe(() => waitForRawStdoutBackpressure());
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -398,16 +411,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				output({ type: "extension_error", extensionPath: err.extensionPath, event: err.event, error: err.error });
 			},
 		});
-
-		unsubscribe?.();
-		unsubscribeBackpressure?.();
-		unsubscribe = session.subscribe((event) => {
-			output(toJsonEvent(event));
-			if (event.type === "agent_settled") {
-				checkShutdownRequested();
-			}
-		});
-		unsubscribeBackpressure = session.agent.subscribe(() => waitForRawStdoutBackpressure());
 	};
 
 	const registerSignalHandlers = (): void => {
@@ -496,9 +499,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			case "new_session": {
 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
 				const result = await runtimeHost.newSession(options);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "new_session", result);
 			}
 
@@ -668,17 +668,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			case "switch_session": {
 				const result = await runtimeHost.switchSession(command.sessionPath);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "switch_session", result);
 			}
 
 			case "fork": {
 				const result = await runtimeHost.fork(command.entryId);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
 			}
 
@@ -688,9 +682,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 					return error(id, "clone", "Cannot clone session: no current entry selected");
 				}
 				const result = await runtimeHost.fork(leafId, { position: "at" });
-				if (!result.cancelled) {
-					await rebindSession();
-				}
 				return success(id, "clone", { cancelled: result.cancelled });
 			}
 

@@ -201,7 +201,7 @@ const OpenAICompletionsCompatProperties = {
 	),
 	supportsDeveloperRole: optionalCompatBoolean({
 		description:
-			"Whether the provider supports the developer role instead of system. Default: auto-detected from URL.",
+			"Whether to send system messages of reasoning models (the system prompt and mid-conversation system messages) with the developer role instead of system. Default: true only for api.openai.com.",
 	}),
 	supportsReasoningEffort: opt(
 		bool({
@@ -425,7 +425,7 @@ const OpenAIResponsesCompatProperties = {
 	supportsMidConvoEffort: opt(
 		bool({
 			description:
-				"Whether thinking level changes are sent as configuration_update input items instead of changing reasoning.effort, so a change keeps the prompt cache. Only used by the openai-responses API, and ignored with Sign in with ChatGPT on the openai provider.",
+				"Whether thinking level changes are sent as configuration_update input items instead of changing reasoning.effort, so a change keeps the prompt cache. Used by the openai-responses and openai-codex-responses APIs, and ignored with Sign in with ChatGPT on the openai provider.",
 			default: false,
 		}),
 	),
@@ -518,7 +518,7 @@ const AnthropicMessagesCompatProperties = {
 	),
 	supportsMessageThreads: optionalCompatBoolean({
 		description:
-			"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+			"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
 	}),
 	allowedFallbackModels: opt(
 		arr(AnthropicAllowedFallbackModelSchema, {
@@ -550,6 +550,10 @@ const MistralConversationsCompatProperties = {
 	supportsMidConvoSystemMessages: optionalCompatBoolean({
 		description:
 			"Whether the exact model accepts system messages after the conversation has started. When false, later system messages are folded into the leading system message.",
+		default: false,
+	}),
+	supportsStrictMode: optionalCompatBoolean({
+		description: "Whether the model supports strict (schema-constrained) function tools.",
 		default: false,
 	}),
 };
@@ -595,7 +599,7 @@ const ProviderCompatPropertyOverrides = {
 	}),
 	supportsMidConvoEffort: optionalCompatBoolean({
 		description:
-			"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
+			"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages, openai-responses, and openai-codex-responses APIs.",
 		default: false,
 	}),
 	supportsLongCacheRetention: optionalCompatBoolean({

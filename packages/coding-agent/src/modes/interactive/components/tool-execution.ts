@@ -50,7 +50,7 @@ export class ToolExecutionComponent extends Container {
 	private selfRenderContainer!: Container;
 	private selfRenderHeight = 0;
 	/** What the self-rendered shell was joined from, and the joined lines (renderShared()). */
-	private selfRenderParts?: string[][];
+	private selfRenderParts?: (readonly string[])[];
 	private selfRenderLines: string[] = [];
 	private readonly emptyLines: string[] = [];
 	private callRendererComponent?: Component;
@@ -394,7 +394,8 @@ export class ToolExecutionComponent extends Container {
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
 				lines.push("");
-				lines.push(...contentLines);
+				// Append in a loop: spreading hundreds of thousands of wrapped lines exceeds V8's argument limit.
+				for (const line of contentLines) lines.push(line);
 			}
 			for (let i = 1; i < parts.length; i++) {
 				lines.push(...parts[i]!);

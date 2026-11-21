@@ -29,7 +29,7 @@ class LoggingTerminal extends VirtualTerminal {
 
 /** Its root renders through render(), which overrides Container's: no live lines, so every frame copies all the lines. */
 class FullCopyScreen extends TuiMainScreen {
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		return super.render(width);
 	}
 }

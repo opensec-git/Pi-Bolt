@@ -14,11 +14,13 @@ import {
 	type DocumentReader,
 	type Conversation as DurableConversation,
 	Harness as DurableHarness,
+	type HarnessOptions,
 	type HarnessSettings,
 	ROOT_CONVERSATION_ID,
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import type { ImageProcessor } from "@earendil-works/pi-durable/tools";
 import { Connection, LocalExecutionEnv, localDaemon, RemoteExecutionEnv } from "@earendil-works/pi-env";
 import {
 	type Ctx,
@@ -47,6 +49,8 @@ export type WorkerInit = {
 	readonly app: string;
 	readonly dataDir: string;
 	readonly fake: boolean;
+	/** Whether the worker records telemetry and sends it to the server (settings.json's `telemetry`, read at its start). */
+	readonly telemetry: boolean;
 	readonly generation: number;
 	readonly values: { readonly session: SessionInit } & Readonly<Record<string, JsonValue>>;
 };
@@ -114,8 +118,8 @@ export class SessionLocation {
 }
 
 /**
- * Whether `env` runs on this machine (not an SSH environment): p2's private data directory is denied there. Decided
- * from the environment, not from `SessionLocation.value`, which lags behind the environments during a move.
+ * Whether `env` runs on this machine (not an SSH environment; attachments need no copy there). Decided from the
+ * environment, not from `SessionLocation.value`, which lags behind the environments during a move.
  */
 export const isLocalEnvironment = (env: ExecutionEnv): boolean => !(env instanceof RemoteExecutionEnv);
 
@@ -295,6 +299,16 @@ export type WorkerParts = {
 	 * `session`, which must not exist yet: a fork, whose worker waits while it copies. The session goes on meanwhile.
 	 */
 	readonly copyFilesTo: (session: string, context: Context) => Promise<void>;
+	/**
+	 * Fits images to a model's limits (Photon in a worker thread that exits when idle): one per process, for `read`, the
+	 * `fit-images` extension and attachments.
+	 */
+	readonly images: ImageProcessor;
+	/**
+	 * The session's Chord store (one writer: this worker), for its backup (`plugins/backup`). Never close it. Absent in
+	 * test hosts without a store.
+	 */
+	readonly store?: Store;
 };
 
 /**
@@ -400,6 +414,9 @@ export function workerCore(
 	location: SessionLocation,
 	store: Store,
 	root: WorkerParts["root"],
+	images: ImageProcessor,
+	/** The worker host's telemetry adapter, the Harness's too (its `pi.durable.*` and pi-ai's spans); none in tests. */
+	telemetry: HarnessOptions["telemetry"],
 ): Facet {
 	return defineFacet((host, self) => {
 		serveWorkerRegistries(host);
@@ -407,10 +424,10 @@ export function workerCore(
 		const own = sessionDirectory(init.dataDir, init.values.session.id);
 		const copyFilesTo = (session: string, context: Context) =>
 			copyFiles({ store, files: hostFiles(own) }, sessionDirectory(init.dataDir, session), context);
-		self.contribute(WorkerProcess, { init, liveness, location, root, copyFilesTo });
+		self.contribute(WorkerProcess, { init, liveness, location, root, copyFilesTo, images, store });
 		host.serve(HarnessNative, { compose: (table) => table[0]?.value });
 		host.serve(HarnessHost, (_params, self) => {
-			self.contribute(HarnessNative, openHarness(self, init, location, store));
+			self.contribute(HarnessNative, openHarness(self, init, location, store, telemetry));
 			return {};
 		});
 		host.serve(WorkerBoundary, (_params, principal, self) => {
@@ -667,7 +684,13 @@ async function followSession(
  * with the root conversation created from the session's model and cwd. Scheduling starts with `resume()` once the
  * worker's plugins are loaded (the worker entry). Returns the contribution: the natives, read at each use.
  */
-function openHarness(self: Self, init: WorkerInit, location: SessionLocation, store: Store): HarnessParts {
+function openHarness(
+	self: Self,
+	init: WorkerInit,
+	location: SessionLocation,
+	store: Store,
+	telemetry: HarnessOptions["telemetry"],
+): HarnessParts {
 	const { values } = init;
 	const session = values.session;
 	const config = self.registry(HarnessConfig);
@@ -737,6 +760,7 @@ function openHarness(self: Self, init: WorkerInit, location: SessionLocation, st
 				storage,
 				{
 					models,
+					...(telemetry === undefined ? {} : { telemetry }),
 					registry: durableRegistry(extensions, switches, durableContext(observing.signal)),
 					settings,
 					// The conversation's location, not its agent cwd alone: a subagent's own may be on another machine.

@@ -5,14 +5,103 @@
 // upstream (slice 9).
 
 import type { TelemetryCarrier, TelemetrySpan } from "@earendil-works/pi-telemetry";
-import { ChordError } from "../data/index.ts";
-import type { Caller } from "../host/internal.ts";
+import { ChordError, type FailureCause } from "../data/index.ts";
+import { type Caller, revoked } from "../host/internal.ts";
 import { errorFromWire, type Message, type OriginMessage, wireError } from "../link/internal.ts";
 import { capped, carrierOf, ended, OpenSpan, parentOf, spanFailed, untraced } from "../telemetry.ts";
+import type { CallWindow } from "./calls.ts";
 import { actingFor, type HoldRequest } from "./hold.ts";
 import type { HostLink } from "./host-link.ts";
 import type { Path } from "./path.ts";
 import type { ProviderSide } from "./provider.ts";
+
+/** A `call` message. */
+type CallMessage = Extract<Message, { readonly kind: "call" }>;
+
+/**
+ * Where a relayed call stands: registered (`new`, answered at once when its hold has no upstream link), waiting in its
+ * upstream link's window for its origin (`queued`), forwarded upstream (`forwarded`, its `chord.relay` span when this
+ * host records), or `ended` (answered, aborted, its hold or origin gone).
+ */
+type RelayedCallState =
+	| { readonly kind: "new" }
+	| { readonly kind: "queued"; readonly window: CallWindow<RelayedCall> }
+	| {
+			readonly kind: "forwarded";
+			readonly window: CallWindow<RelayedCall>;
+			readonly span: OpenSpan<"chord.relay"> | undefined;
+	  }
+	| { readonly kind: "ended" };
+
+const NEW: RelayedCallState = { kind: "new" };
+
+const ENDED: RelayedCallState = { kind: "ended" };
+
+/**
+ * A downstream call on a relayed hold, as its downstream origin keeps it (decision "Call windows only for untrusted
+ * links": a relay honours each upstream window): queued in its upstream link's window for the origin until a slot
+ * forwards it (`send`), then in flight until its reply, its abort, its hold's end or the upstream's drop.
+ */
+export class RelayedCall {
+	readonly kind = "relayed";
+	readonly hold: RelayedHold;
+	readonly message: CallMessage;
+	#state: RelayedCallState = NEW;
+
+	constructor(hold: RelayedHold, message: CallMessage) {
+		this.hold = hold;
+		this.message = message;
+	}
+
+	/** Whether it was forwarded upstream and is not answered yet. */
+	get forwarded(): boolean {
+		return this.#state.kind === "forwarded";
+	}
+
+	/** Waits in `window` (its hold's upstream link's, for its origin), forwarded at once when a slot is free. */
+	queue(window: CallWindow<RelayedCall>): void {
+		this.#state = { kind: "queued", window };
+		window.submit(this);
+	}
+
+	/** Its window has a slot for it: forwarded upstream. */
+	send(): void {
+		// A window sends only the calls queued in it.
+		const { window } = this.#state as Extract<RelayedCallState, { readonly kind: "queued" }>;
+		this.#state = { kind: "forwarded", window, span: this.hold.call(this.message) };
+	}
+
+	/** Takes it out of its window when it still waits there (ended unsent); whether it did. */
+	unqueue(): boolean {
+		const state = this.#state;
+		if (state.kind !== "queued") return false;
+		this.#state = ENDED;
+		state.window.remove(this);
+		return true;
+	}
+
+	/**
+	 * Ends it: a waiting one leaves its window, a forwarded one frees its slot (which may forward the next waiting call)
+	 * and its span ends with `reply` (none: `aborted`).
+	 */
+	end(reply?: Extract<OriginMessage, { readonly kind: "result" | "error" }>): void {
+		const state = this.#state;
+		this.#state = ENDED;
+		if (state.kind === "queued") state.window.remove(this);
+		if (state.kind !== "forwarded") return;
+		if (state.span !== undefined) relayEnded(state.span, reply);
+		state.window.freed();
+	}
+}
+
+/**
+ * Ends `calls` (of one hold or origin): the waiting ones leave their windows first, so a slot a forwarded one frees
+ * never forwards one of them.
+ */
+export function endAll(calls: readonly RelayedCall[]): void {
+	for (const call of calls) call.unqueue();
+	for (const call of calls) call.end();
+}
 
 /**
  * One relayed hold: `id` on its downstream origin, and the same id upstream on its path's current link (none while
@@ -43,6 +132,8 @@ export class RelayedHold {
 	readonly #trace: TelemetryCarrier | undefined;
 	/** How many times it was held upstream. */
 	#holds = 0;
+	/** What its downstream was told holds it back (`withheld`), until it is told that it is admitted again. */
+	#heldBack: FailureCause | undefined;
 
 	constructor(id: number, downstream: ProviderSide, request: HoldRequest, caller: Caller, path: Path) {
 		this.id = id;
@@ -138,6 +229,32 @@ export class RelayedHold {
 	}
 
 	/**
+	 * Its route's admission holds it back with `cause` (slice 14 §2.3): released upstream when it is held there (what
+	 * still arrives for it from that link is dropped: a link answers only for what is relayed over it); downstream its
+	 * calls, in flight and waiting, are rejected and it is told `failed` with the cause. It stays on its path: an allow
+	 * holds it again, under its id.
+	 */
+	withheld(cause: FailureCause): void {
+		const upstream = this.#upstream;
+		this.#upstream = undefined;
+		upstream?.link.send({ kind: "release", origin: upstream.origin, hold: this.id });
+		this.#relayed("error", cause.error);
+		this.#heldBack = cause;
+		this.#downstream.withheld(this, cause);
+	}
+
+	/**
+	 * Its route's admission allows it: a hold that was told what held it back is `loading` downstream from here on,
+	 * through the fence and its host's start, until its next `bound` (the caller has access again: it is not shown
+	 * "no access" meanwhile). A hold never told anything is loading already.
+	 */
+	admitted(): void {
+		if (this.#heldBack === undefined) return;
+		this.#heldBack = undefined;
+		this.#downstream.send({ kind: "loading", hold: this.id });
+	}
+
+	/**
 	 * Whether it waits for its path's link (a route still resolving, or a dropped link's next): a revocation ends it then,
 	 * since the link it is held on next gets no past `revoke` (§4).
 	 */
@@ -159,16 +276,39 @@ export class RelayedHold {
 	}
 
 	/**
-	 * A call from downstream (registered there under its id), forwarded upstream at once; its reply comes back by the
-	 * origin. Without an upstream link it is answered `unavailable` at once (it crossed the `loading` notice).
+	 * A call from downstream (registered there under its id): it waits in its upstream link's window for this origin
+	 * and is forwarded (`call`) as a slot frees, at once when one is free and nothing waits (a trusted upstream announced
+	 * no window); its reply comes back by the origin. Without an upstream link it is answered at once: `unavailable`
+	 * (it crossed the `loading` notice), or, held back by its route's admission, what held it back (it crossed that
+	 * `failed`: `forbidden/revoked` for a denial, access withdrawn under a call already made).
 	 */
-	call(message: Extract<Message, { readonly kind: "call" }>): OpenSpan<"chord.relay"> | undefined {
+	submit(call: RelayedCall): void {
 		const upstream = this.#upstream;
 		if (upstream === undefined) {
-			const error = new ChordError({ code: "unavailable", message: `hold ${this.id}: its upstream link is down` });
-			this.#downstream.reply(message.call, { kind: "error", call: message.call, error: wireError(error) });
-			return undefined;
+			const error = this.#unreached();
+			this.#downstream.reply(call.message.call, { kind: "error", call: call.message.call, error: wireError(error) });
+			return;
 		}
+		call.queue(upstream.link.consumer.relayWindow(upstream.origin));
+	}
+
+	/** What a call that finds it on no upstream link is answered. */
+	#unreached(): ChordError {
+		const cause = this.#heldBack;
+		const label = `hold ${this.id}`;
+		if (cause === undefined)
+			return new ChordError({ code: "unavailable", message: `${label}: its upstream link is down` });
+		return cause.kind === "denied" ? revoked(label, cause.error) : cause.error;
+	}
+
+	/**
+	 * Forwards a submitted call upstream, now that its window has a slot; returns its `chord.relay` span when this host
+	 * records.
+	 */
+	call(message: CallMessage): OpenSpan<"chord.relay"> | undefined {
+		// A call waits only in its hold's current upstream window: the drop answers it first (`upstreamDropped`), a
+		// release forgets it.
+		const upstream = this.#upstream!;
 		// A downstream link that is not trusted (a page) cannot claim old work: its flag is dropped here.
 		const forwarded = message.old === true && !this.#downstream.link.trusted ? unmarked(message) : message;
 		const adapter = upstream.link.host.telemetry;
@@ -242,7 +382,7 @@ export function relayEnded(
 }
 
 /** `message` without its old-work flag (`call.old`), as a relay forwards it from a link that is not trusted. */
-function unmarked(message: Extract<Message, { readonly kind: "call" }>): Extract<Message, { readonly kind: "call" }> {
+function unmarked(message: CallMessage): CallMessage {
 	const { old: _old, ...rest } = message;
 	return rest;
 }

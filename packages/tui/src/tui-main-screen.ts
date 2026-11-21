@@ -214,7 +214,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	}
 
 	/** The lines of the last frame before and after resolveFakeCursors(), and whether the hardware cursor was shown. */
-	private unresolvedLines: string[] = [];
+	private unresolvedLines: readonly string[] = [];
 	private resolvedLines: string[] = [];
 	private resolvedWithHardwareCursor = false;
 
@@ -223,7 +223,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	 * before: resolving looks for a cursor in every line of the transcript, each frame (0.5 ms at 27,500 lines). Returns
 	 * a new array, which the frame may change (extractCursorPosition() does).
 	 */
-	private resolveFrameFakeCursors(lines: string[], unchanged: number): string[] {
+	private resolveFrameFakeCursors(lines: readonly string[], unchanged: number): string[] {
 		const showHardwareCursor = this.getShowHardwareCursor();
 		const previous = showHardwareCursor === this.resolvedWithHardwareCursor ? this.unresolvedLines : [];
 		const previousResolved = this.resolvedLines;
@@ -506,13 +506,18 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			finished = changed;
 		} else {
 			// (A copy of the live lines, which change at the next render: made again only when they changed.)
-			const root =
-				live === undefined
-					? renderSharedLines(this, width)
-					: before?.live === live && before.width === width && before.revision === live.revision
+			let root: readonly string[];
+			if (live === undefined) {
+				root = renderSharedLines(this, width);
+				this.frameLive = undefined;
+			} else {
+				const lines =
+					before?.live === live && before.width === width && before.revision === live.revision
 						? before.lines
 						: live.lines.slice();
-			this.frameLive = live === undefined ? undefined : { live, revision: live.revision, width, lines: root };
+				this.frameLive = { live, revision: live.revision, width, lines };
+				root = lines;
+			}
 			raw = this.resolveFrameFakeCursors(root, unchanged);
 
 			// Composite overlays into the rendered lines (before differential compare)

@@ -39,7 +39,7 @@ import ignore from "ignore";
 import { minimatch } from "minimatch";
 import { CONFIG_DIR_NAME, isBunBinary } from "../config.ts";
 import { PIBOLT } from "../pi-bolt.ts";
-import { findExecutableOnPath, spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
+import { findExecutableOnPath, spawnProcess, spawnProcessSync, waitForChildProcess } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import { semver } from "../utils/lazy-packages.ts";
 import {
@@ -69,6 +69,26 @@ interface NpmCommand {
 }
 
 const NETWORK_TIMEOUT_MS = 10000;
+
+/** End of a captured command's output kept for its error message. */
+const CAPTURED_OUTPUT_TAIL_CHARS = 8000;
+
+/** Output of git, or of ssh run by git, that failed because it could not ask for credentials. */
+const GIT_PROMPT_FAILURE =
+	/terminal prompts disabled|could not read (Username|Password)|Permission denied \(publickey|Host key verification failed|passphrase/i;
+
+const GIT_CREDENTIALS_HINT =
+	"git cannot ask for a password or passphrase while pi runs. Set up a git credential helper or an ssh agent, or install the package once from the shell with `pi install <source>`.";
+
+/** Make git and ssh fail instead of prompting on the terminal, which a captured command cannot answer. */
+function getNonInteractiveGitEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	return {
+		...env,
+		GIT_TERMINAL_PROMPT: "0",
+		// A user-defined GIT_SSH_COMMAND is kept: it may be needed to reach the host at all.
+		GIT_SSH_COMMAND: env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes",
+	};
+}
 const UPDATE_CHECK_CONCURRENCY = 4;
 const GIT_UPDATE_CONCURRENCY = 4;
 
@@ -173,10 +193,21 @@ export interface PackageManager {
 	getInstalledPath(source: string, scope: "user" | "project"): string | undefined;
 }
 
+/**
+ * Where git and npm output goes while packages are installed, updated or refreshed.
+ *
+ * - `inherit`: the terminal, live (`pi install`, `pi update`).
+ * - `capture`: nothing is written to the terminal and git and ssh never prompt, for hosts that draw on it
+ *   (the interactive TUI). A failure carries the end of the output.
+ */
+export type PackageCommandOutput = "inherit" | "capture";
+
 interface PackageManagerOptions {
 	cwd: string;
 	agentDir: string;
 	settingsManager: SettingsManager;
+	/** Default `inherit`. */
+	commandOutput?: PackageCommandOutput;
 	/** Names of built-in extensions, resolved as `builtin:<name>` extension resources. */
 	builtinExtensions?: string[];
 }
@@ -956,12 +987,14 @@ export class DefaultPackageManager implements PackageManager {
 	private globalNpmRootCommandKey: string | undefined;
 	private npmOnPath: boolean | undefined;
 	private progressCallback: ProgressCallback | undefined;
+	private commandOutput: PackageCommandOutput;
 
 	constructor(options: PackageManagerOptions) {
 		this.cwd = resolvePath(options.cwd);
 		this.agentDir = resolvePath(options.agentDir);
 		this.settingsManager = options.settingsManager;
 		this.builtinExtensions = options.builtinExtensions ?? [];
+		this.commandOutput = options.commandOutput ?? "inherit";
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -1634,7 +1667,9 @@ export class DefaultPackageManager implements PackageManager {
 				// A source that cannot be installed (no network, missing package, failing git prepare step)
 				// must not abort startup. Skip its resources, like offline mode does, and report the failure.
 				try {
-					await this.installParsedSource(parsed, resolvedScope);
+					await this.withProgress("install", resolvedSource, `Installing ${resolvedSource}...`, () =>
+						this.installParsedSource(parsed, resolvedScope),
+					);
 					return true;
 				} catch (error) {
 					installFailures.push({
@@ -3316,6 +3351,9 @@ export class DefaultPackageManager implements PackageManager {
 		args: string[],
 		options?: { cwd?: string; env?: Record<string, string> },
 	): Promise<void> {
+		if (this.commandOutput === "capture") {
+			return this.runCommandCaptured(command, args, options);
+		}
 		return new Promise((resolvePromise, reject) => {
 			const child = this.spawnCommand(command, args, options);
 			child.on("error", reject);
@@ -3327,6 +3365,35 @@ export class DefaultPackageManager implements PackageManager {
 				}
 			});
 		});
+	}
+
+	/**
+	 * Run a command without touching the terminal: output is piped and git and ssh cannot prompt.
+	 * Only the end of the output is kept, for the error message.
+	 */
+	private async runCommandCaptured(
+		command: string,
+		args: string[],
+		options?: { cwd?: string; env?: Record<string, string> },
+	): Promise<void> {
+		const baseEnv = getEnv();
+		const child = spawnProcess(command, args, {
+			cwd: options?.cwd,
+			stdio: ["ignore", "pipe", "pipe"],
+			env: getNonInteractiveGitEnv(options?.env ? { ...baseEnv, ...options.env } : baseEnv),
+		});
+		let output = "";
+		const append = (chunk: Buffer) => {
+			output = (output + chunk.toString()).slice(-CAPTURED_OUTPUT_TAIL_CHARS);
+		};
+		child.stdout.on("data", append);
+		child.stderr.on("data", append);
+		// Waits for the pipes too, but not for a background process an npm script left holding them.
+		const code = await waitForChildProcess(child);
+		if (code === 0) return;
+		const tail = output.trim();
+		const hint = command === "git" && GIT_PROMPT_FAILURE.test(tail) ? `\n${GIT_CREDENTIALS_HINT}` : "";
+		throw new Error(`${command} ${args.join(" ")} failed with code ${code}${tail ? `:\n${tail}` : ""}${hint}`);
 	}
 
 	private runCommandSync(command: string, args: string[], extraEnv?: Record<string, string>): string {

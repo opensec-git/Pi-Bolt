@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { Context, Location } from "@p2/app/v1";
 import type { P2Tool } from "@p2/app/v1/worker";
+import { modelRefOf } from "./contract.ts";
 
 export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 export const TEAM_TOOL = "team";
@@ -120,13 +121,7 @@ export async function resolveChoice(
 ): Promise<({ model: ModelRef; thinkingLevel: ModelThinkingLevel } & ToolChoice) | string> {
 	const own = await api.agent(context);
 	const text = choice.model ?? current?.model;
-	const slash = text?.indexOf("/") ?? -1;
-	const ref =
-		text === undefined
-			? own.model
-			: slash > 0
-				? { provider: text.slice(0, slash), modelId: text.slice(slash + 1) }
-				: undefined;
+	const ref = text === undefined ? own.model : modelRefOf(text);
 	const model = ref ? models.getModel(ref.provider, ref.modelId) : undefined;
 	if (!ref || !model)
 		return `Unknown model ${choice.model ?? "(none)"}. Use the subagent tool's models action to list them.`;
@@ -171,14 +166,13 @@ export function resolveTools(
 ): ToolChoice | string {
 	const all = everyTool(caller);
 	const choosable = choosableTools(caller, access);
-	const unknown = (names ?? []).filter((name) => !choosable.some((tool) => tool.name === name));
+	const named = (names ?? []).map((name) => ({ name, tool: toolNamed(choosable, name) }));
+	const unknown = named.filter((each) => !each.tool).map((each) => each.name);
 	if (unknown.length)
 		return `Unknown tools: ${unknown.join(", ")}. Choose from your own tools: ${choosable.map((tool) => tool.name).join(", ")}.`;
 	// In the order given, each once.
-	const chosen =
-		names === undefined
-			? choosable
-			: [...new Set(names)].flatMap((name) => choosable.filter((tool) => tool.name === name));
+	const chosen = names === undefined ? choosable : [...new Set(named.flatMap((each) => each.tool ?? []))];
+	const toLoad = new Set(load.map((name) => toolNamed(choosable, name)));
 	const scripts = chosen.some((tool) => tool.name === CODEMODE_TOOL)
 		? all.filter((tool) => !calledByModel(tool) && scopeOf(tool, access) !== "main")
 		: [];
@@ -186,8 +180,19 @@ export function resolveTools(
 	return {
 		chosen: chosen.map((tool) => tool.name),
 		tools: [...chosen, ...scripts, ...own],
-		loaded: [...own, ...chosen.filter((tool) => tool.deferred && load.includes(tool.name))],
+		loaded: [...own, ...chosen.filter((tool) => tool.deferred && toLoad.has(tool))],
 	};
+}
+
+/**
+ * The tool `name` names: the exact match, else the only one matching regardless of case. Providers may show the model
+ * other casings (Anthropic subscriptions show `read` as `Read`), and the model passes back the names it saw.
+ */
+function toolNamed(tools: readonly ToolRegistration[], name: string): ToolRegistration | undefined {
+	const exact = tools.find((tool) => tool.name === name);
+	if (exact) return exact;
+	const folded = tools.filter((tool) => tool.name.toLowerCase() === name.toLowerCase());
+	return folded.length === 1 ? folded[0] : undefined;
 }
 
 /** A caller's resolved agent: the tools offered to its model, its deferred ones and the ones scripts call. */

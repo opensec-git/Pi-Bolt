@@ -52,7 +52,7 @@ export class Text implements Component {
 		reportRenderChange(this);
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		// Check cache
 		if (this.cachedLines && this.cachedText === this.text && this.cachedWidth === width) {
 			return this.cachedLines;

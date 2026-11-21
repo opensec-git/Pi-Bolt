@@ -1547,14 +1547,21 @@ export class Markdown implements Component {
 			// (Blank lines and code fences are drawn alike in every message: one copy of each, internLine().)
 			lines.push(line.length <= INTERNED_LINE_LENGTH ? internLine(drawn) : drawn);
 		};
-		const addRendered = (line: string) => {
+		const addWrapped = (line: string) => {
 			// Wrap lines (NO padding, NO background yet)
-			if (isImageLine(line)) {
-				add(line);
-			} else {
-				for (const wrappedLine of this.wrapLine(line, contentWidth)) {
-					add(wrappedLine);
-				}
+			for (const wrappedLine of this.wrapLine(line, contentWidth)) {
+				add(wrappedLine);
+			}
+		};
+		const addRendered = (line: string) => {
+			if (!isImageLine(line)) {
+				addWrapped(line);
+				return;
+			}
+			// Image lines skip wrapping, so split them here: hard breaks after an image must stay separate rows.
+			for (const piece of line.split("\n")) {
+				if (isImageLine(piece)) add(piece);
+				else addWrapped(piece);
 			}
 		};
 		const parts =

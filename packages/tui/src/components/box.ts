@@ -15,7 +15,7 @@ import {
 import { applyBackgroundAround, flattenLines, INTERNED_LINE_LENGTH, internLine, visibleWidth } from "../utils.ts";
 
 type RenderCache = {
-	childLines: string[];
+	childLines: readonly string[];
 	width: number;
 	bgSample: string | undefined;
 	lines: string[];

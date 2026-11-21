@@ -42,7 +42,7 @@ function assistant(index: number): AssistantMessage {
 /** Counts its renders. */
 class CountedText extends Text {
 	renders = 0;
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		this.renders++;
 		return super.render(width);
 	}

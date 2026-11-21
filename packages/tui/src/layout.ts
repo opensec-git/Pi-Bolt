@@ -34,12 +34,17 @@ export interface LayoutBox {
 	layer: number;
 }
 
+/** Component output by width, as rendered for one layout frame. */
+export type LayoutRenderCache = Map<Component, RenderedAt>;
+
 export interface LayoutFrame {
 	root: LayoutBox;
 	width: number;
 	height: number;
 	lines: string[];
 	primaryScrollView?: ScrollView;
+	/** Output of every component this frame rendered; pass it to a later frame whose content did not change. */
+	renderCache: LayoutRenderCache;
 }
 
 export interface ScrollbarGeometry {
@@ -52,15 +57,22 @@ export interface ScrollbarGeometry {
 }
 
 /** A component's lines at the width it was rendered at first this frame, and at any other widths it was rendered at. */
-interface RenderedAt {
+export interface RenderedAt {
 	width: number;
 	lines: readonly string[];
 	others?: Map<number, readonly string[]>;
 }
 
+function linesAt(rendered: RenderedAt | undefined, width: number): readonly string[] | undefined {
+	if (rendered === undefined) return undefined;
+	return rendered.width === width ? rendered.lines : rendered.others?.get(width);
+}
+
 interface LayoutContext {
 	viewport: { width: number; height: number };
-	renderCache: Map<Component, RenderedAt>;
+	renderCache: LayoutRenderCache;
+	/** Output of an earlier frame with the same content; entries are copied into `renderCache` when used. */
+	reusableOutput: LayoutRenderCache | undefined;
 	/** measureHeight() in this context, for VStack.measureHeight(): made once a frame. */
 	heightOf: (component: Component, width: number) => number;
 	requestRender: () => void;
@@ -78,14 +90,14 @@ function intersect(a: LayoutRect, b: LayoutRect): LayoutRect {
 function renderCached(context: LayoutContext, component: Component, width: number): readonly string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
 	const known = context.renderCache.get(component);
-	if (known !== undefined) {
-		if (known.width === safeWidth) return known.lines;
-		const other = known.others?.get(safeWidth);
-		if (other !== undefined) return other;
-	}
+	const knownLines = linesAt(known, safeWidth);
+	if (knownLines !== undefined) return knownLines;
 	// (Shared lines, or live lines that change at the next render: the layout reads them for this frame only, and the
-	// frame's boxes until the next one is laid out.)
-	const lines = renderLiveLines(component, safeWidth)?.lines ?? renderSharedLines(component, safeWidth);
+	// frame's boxes until the next one is laid out. An earlier frame's are what they were while nothing was rendered since.)
+	const lines =
+		linesAt(context.reusableOutput?.get(component), safeWidth) ??
+		renderLiveLines(component, safeWidth)?.lines ??
+		renderSharedLines(component, safeWidth);
 	if (known === undefined) context.renderCache.set(component, { width: safeWidth, lines });
 	else {
 		known.others ??= new Map();
@@ -415,17 +427,28 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 	paintScrollbar(box, screen, totalWidth);
 }
 
+/**
+ * Lay out and paint one frame.
+ *
+ * `reusableOutput` is an earlier frame's `renderCache`; its output is used instead of calling
+ * `render()`. Pass it only when no component changed since that frame, e.g. when only a scroll
+ * position moved: the frame then costs O(viewport) instead of re-rendering the whole scrollable
+ * document. Each frame keeps only the output it used, so reuse never accumulates across frames.
+ */
 export function renderLayoutFrame(
 	root: Component,
 	width: number,
 	height: number,
 	requestRender: () => void,
+	reusableOutput?: LayoutRenderCache,
 ): LayoutFrame {
 	const safeWidth = Math.max(1, Math.floor(width));
 	const safeHeight = Math.max(1, Math.floor(height));
+	const renderCache: LayoutRenderCache = new Map();
 	const context: LayoutContext = {
 		viewport: { width: safeWidth, height: safeHeight },
-		renderCache: new Map(),
+		renderCache,
+		reusableOutput,
 		heightOf: (component, width) => measureHeight(context, component, width),
 		requestRender,
 		primaryScrollView: undefined,
@@ -446,6 +469,7 @@ export function renderLayoutFrame(
 		height: safeHeight,
 		lines,
 		...(context.primaryScrollView === undefined ? {} : { primaryScrollView: context.primaryScrollView }),
+		renderCache,
 	};
 }
 

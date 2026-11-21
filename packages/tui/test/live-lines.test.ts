@@ -75,7 +75,7 @@ function makeTree(): Tree {
 }
 
 /** The tree's lines rendered from nothing: no caches, every container's children joined by a loop. */
-function reference(component: Component, width: number): string[] {
+function reference(component: Component, width: number): readonly string[] {
 	if (component instanceof Container) return component.children.flatMap((child) => reference(child, width));
 	return component.render(width);
 }
@@ -219,7 +219,8 @@ describe("live lines", () => {
 				if (way === 0) {
 					assert.deepStrictEqual(follower.read(renderLiveLines(live.root, width)!), want, label);
 				} else if (way === 1) {
-					const lines = live.root.render(width);
+					// (Container.render() returns a copy, which the caller may change.)
+					const lines = live.root.render(width) as string[];
 					assert.deepStrictEqual(lines, want, label);
 					handedOut.push({ lines, copy: lines.slice() });
 					lines.push("changed by the caller");

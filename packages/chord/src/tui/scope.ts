@@ -1,18 +1,20 @@
 // `TuiScope` (slice 11 §4, decision "Slice 11, P9"; p2's `TuiScope`): a terminal component's Chord resources, the
 // counterpart of the React bindings for terminal UI libraries. It holds references, follows watchables and registries,
-// calls one `changed` callback (the app's redraw) on every change, and releases everything at `dispose`. Its page state
+// calls one `changed` callback (the app's redraw) on every change, reads a reference in one variant, subscribes to
+// event members, and releases everything at `dispose`. Its page state
 // is the host's, shared by every scope (React's `usePageState`): a scope opened again after a plugin reload finds it.
 // Its messages render in the host's language, and a change of the locale or a translation redraws. A reader can show
 // an optimistic value while a call is pending (React's `useOptimistic`).
 // References wait and rebind by themselves (no retry loop, unlike p2's); no terminal library dependency.
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from "../context/index.ts";
-import type { Contract, ParamsOf } from "../contracts/index.ts";
+import type { Contract, EventMember, ParamsOf } from "../contracts/index.ts";
 import type { Principal } from "../data/index.ts";
 import type { Held, Host } from "../host/index.ts";
 import type { Registry } from "../registries/index.ts";
 import { hostLanguage, type Language, type MessageData, type Messages, type Translator } from "../surfaces/index.ts";
 import { type PageState, pageState } from "../surfaces/page-state.ts";
+import { type InVariant, liveIn, type VariantOf, type VariantRef } from "../surfaces/variant.ts";
 import type { NativeWatchable, Watchable } from "../watch.ts";
 
 /** Adds an optimistic action shown while `call` is in flight; returns `call` (see `TuiScope.optimistic`). */
@@ -24,6 +26,11 @@ export class TuiScope<P extends Principal = Principal> {
 	readonly #changed: () => void;
 	readonly #abort = new AbortController();
 	readonly #releases: (() => void)[] = [];
+	/**
+	 * The reference states it follows: one watch each, however often `hold` and `variant` ask. Weak: a reference
+	 * released by its own holder is not kept by a scope that read its variant.
+	 */
+	readonly #states = new WeakSet<VariantRef["state"]>();
 
 	constructor(host: Host<P>, changed: () => void) {
 		this.#host = host;
@@ -34,8 +41,19 @@ export class TuiScope<P extends Principal = Principal> {
 	hold<C extends Contract>(Type: C, params: ParamsOf<C>): Held<C> {
 		const held = this.#host.hold(Type, params, this.#context());
 		this.#releases.push(() => held.release());
-		this.watch(held.state);
+		this.#follow(held.state);
 		return held;
+	}
+
+	/**
+	 * A reader of `ref` narrowed to `variant` while it is live in it, else `undefined` (loading, failed or denied,
+	 * ended, another variant), as React's `useVariant`: `ref`'s state is followed until `dispose`, so a change of its
+	 * variant calls `changed` (an admission's other allowed value binds another variant while it is held). True of the
+	 * redraw that read it: a call made after an `await` may find another variant.
+	 */
+	variant<R extends VariantRef, const V extends VariantOf<R>>(ref: R, variant: V): () => InVariant<R, V> | undefined {
+		this.#follow(ref.state);
+		return () => liveIn(ref, variant);
 	}
 
 	/**
@@ -61,6 +79,15 @@ export class TuiScope<P extends Principal = Principal> {
 				return undefined;
 			}
 		};
+	}
+
+	/**
+	 * Subscribes `listener` to event member `member` (a reference's, decision "Events: fire-and-forget members") until
+	 * `dispose`. Events call `listener` only, never `changed`: the listener decides what redraws.
+	 */
+	on<T>(member: EventMember<T>, listener: (event: { readonly value: T; readonly at: number }) => void): void {
+		// Rejected only once released or disposed: nothing to follow then.
+		member.on(listener, this.#context()).catch(() => {});
 	}
 
 	/** Registry `R`'s composed value, followed until `dispose`; a reader, `undefined` until it is usable. */
@@ -156,6 +183,13 @@ export class TuiScope<P extends Principal = Principal> {
 			render: (message: MessageData) => current().render(message),
 		});
 		return t as unknown as Translator<N, M>;
+	}
+
+	/** Follows the reference state `state` until `dispose`, once. */
+	#follow(state: VariantRef["state"]): void {
+		if (this.#states.has(state)) return;
+		this.#states.add(state);
+		this.watch(state);
 	}
 
 	/** Releases every reference and ends every watch; `changed` is not called after it. */

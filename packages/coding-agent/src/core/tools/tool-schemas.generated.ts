@@ -98,7 +98,8 @@ export const findSchema: typeof Source.findSchema = typeBoxShaped(
 			pattern: typeBoxShaped(
 				{
 					type: "string",
-					description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+					description:
+						"Glob pattern relative to the search directory, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth",
 				},
 				{ "~kind": "String" },
 			),
@@ -131,7 +132,7 @@ export const grepSchema: typeof Source.grepSchema = typeBoxShaped(
 				{
 					type: "string",
 					description:
-						"Filter files by glob pattern, relative to path, e.g. '*.ts', 'src/**/*.ts' or '**/*.spec.ts'. A pattern without '/' matches file names at any depth",
+						"Filter files by glob pattern relative to path, e.g. 'src/**/*.ts'. Without '/', e.g. '*.ts', it matches file names at any depth",
 				},
 				{ "~kind": "String", "~optional": true },
 			),

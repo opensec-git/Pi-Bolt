@@ -1,4 +1,4 @@
-import type { Api, ImageContent, Model, ModelImageResizeOptions, TextContent } from "@earendil-works/pi-ai";
+import type { ImageContent, ModelImageResizeOptions, TextContent } from "@earendil-works/pi-ai";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
 import {
@@ -39,6 +39,11 @@ export type ReadToolOutput = Static<typeof readOutputSchema>;
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
+	/**
+	 * Id of the model that was selected when the image was read, if it has no image input. Shown to the user only:
+	 * the model gets pi-ai's placeholder per request, so the stored result stays right after a model switch.
+	 */
+	imageUnsupportedByModel?: string;
 }
 
 /**
@@ -70,14 +75,17 @@ const defaultReadOperations: ReadOperations = {
 /**
  * Stream a local file the way fs.readFile reads it: a regular file up to its size when opened, so text
  * appended during the read is not counted and a growing file still ends; a file reporting size 0 (such
- * as /proc files) and other file types until EOF.
+ * as /proc files) and other file types until EOF. Abort is left to the read tool, which stops consuming
+ * the stream when its signal aborts; leaving its loop closes the stream.
  */
-async function* readLocalFileChunks(path: string, { signal }: { signal?: AbortSignal }): AsyncIterable<Uint8Array> {
+async function* readLocalFileChunks(path: string): AsyncIterable<Uint8Array> {
 	const handle = await fsOpen(path, "r");
 	try {
 		const stats = await handle.stat();
 		const end = stats.isFile() && stats.size > 0 ? stats.size - 1 : undefined;
-		yield* handle.createReadStream({ end, signal, autoClose: false });
+		// No signal for the stream: one that aborts before the stream's iterator attaches makes the stream
+		// emit an 'error' no listener handles, which crashes the process (#11956).
+		yield* handle.createReadStream({ end, autoClose: false });
 	} finally {
 		await handle.close();
 	}
@@ -263,13 +271,6 @@ function truncateSelection(selection: ChunkedSelection): TruncationResult {
 	return { ...truncation, totalLines: selection.selectedLines, totalBytes: selection.selectedBytes };
 }
 
-function getNonVisionImageNote(model: Model<Api> | undefined): string | undefined {
-	if (!model || model.input.includes("image")) {
-		return undefined;
-	}
-	return "[Current model does not support images. The image will be omitted from this request.]";
-}
-
 /** The lines a read shows, with the file's line count; line counts follow `text.split("\n")`. */
 interface SelectedLines {
 	totalFileLines: number;
@@ -435,7 +436,6 @@ export function createReadToolDefinition(
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
-							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
 							if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
@@ -445,13 +445,11 @@ export function createReadToolDefinition(
 								};
 								const processed = await processImage(buffer, mimeType, processOptions);
 								if (!processed.ok) {
-									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
-									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
+									const textNote = `Read image file [${mimeType}]\n${processed.message}`;
 									content = [{ type: "text", text: textNote }];
 								} else {
 									let textNote = `Read image file [${processed.mimeType}]`;
 									if (processed.hints.length > 0) textNote += `\n${processed.hints.join("\n")}`;
-									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
 									const image: ImageContent = {
 										type: "image",
 										data: processed.data,
@@ -459,6 +457,9 @@ export function createReadToolDefinition(
 									};
 									markProcessedImageBlock(image, processOptions);
 									content = [{ type: "text", text: textNote }, image];
+									if (ctx?.model && !ctx.model.input.includes("image")) {
+										details = { imageUnsupportedByModel: ctx.model.id };
+									}
 								}
 							} else {
 								// Read text content. Convert offset from 1-indexed input to 0-indexed line access.

@@ -71,7 +71,7 @@ interface Settings {
 	overrides: Map<number, boolean>;
 }
 
-function fresh(msg: AssistantMessage, streaming: boolean, settings: Settings, width: number): string[] {
+function fresh(msg: AssistantMessage, streaming: boolean, settings: Settings, width: number): readonly string[] {
 	const component = new AssistantMessageComponent(
 		undefined,
 		settings.hide,
@@ -168,7 +168,7 @@ describe("assistant message plan", () => {
 				const before = made;
 				component.updateContent(msg, streaming);
 				const width = next() < 0.8 ? 80 : 37;
-				let lines: string[];
+				let lines: readonly string[];
 				if (step % 2 === 0) {
 					lines = component.render(width);
 				} else {
