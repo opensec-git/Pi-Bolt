@@ -32,6 +32,11 @@ A Pi-Bolt executable is a Bun single-file executable with two extra sections app
 
 Both appended sections are page-aligned, so that they can be mapped directly from the file.
 
+On macOS and Linux, the bundled program's bytecode descriptors can point directly into the serialized static heap.
+The writer checks that the linked bytecode and its string table are byte-identical, aligned, disjoint ranges before
+sharing them. Workers and the bytecode fallback read those same ranges through the module graph, even when the VM
+declines the native image. Windows keeps its fallback data in the graph because its heap arenas occupy separate PE sections.
+
 ## Build pipeline
 
 `scripts/build-pi.sh` runs `bun build --compile --bytecode` with the Pi-Bolt runtime and these settings:
@@ -119,7 +124,8 @@ are the engine stamp, the CPU features, the address space (for example a tight `
 - **Code and the static heap are file-backed.** Pages that are only read are shared with the page cache, and the kernel can drop
   them under memory pressure. A process's own memory (private dirty pages) is what it writes.
 - **No JIT.** With the JIT off there are no compiler threads, no JIT code caches and no profiling data.
-- **No bytecode**, because it is left out of the heap.
+- **Fallback bytecode stays file-backed.** In the default AOT build, bundled functions execute machine code.
+  The executable retains the serialized bytecode needed for fallback.
 
 ## JIT off and JIT on
 
