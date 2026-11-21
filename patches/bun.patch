@@ -19023,3 +19023,507 @@ index 7a72a775..e210d4ef 100644
 2.54.0 (Apple Git-157)
 
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Wed, 18 Nov 2026 10:00:00 +0530
+Subject: [PATCH] standalone: back graph bytecode with the static heap on Mach-O and ELF
+
+Use JSC's full in-image bytecode and string ranges when their lengths,
+alignment and bytes match the graph's fallback inputs. Existing records
+still address the full bytecode even when the native image is declined.
+Compact PE images keep fallback data in their graph.
+---
+ src/jsc/bindings/ZigSourceProvider.cpp        |  11 +-
+ src/standalone_graph/StandaloneModuleGraph.rs | 221 ++++++++++++++++----------
+ 2 files changed, 150 insertions(+), 82 deletions(-)
+
+diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
+index 549b471..5bef1b1 100644
+--- a/src/jsc/bindings/ZigSourceProvider.cpp
++++ b/src/jsc/bindings/ZigSourceProvider.cpp
+@@ -509,7 +509,7 @@ static void checkPointersOutOfStaticHeap(std::span<const uint8_t> heap)
+ }
+ #endif
+
+-extern "C" bool Bun__StaticHeap__takeBuilt(uint8_t** data, size_t* size)
++extern "C" bool Bun__StaticHeap__takeBuilt(uint8_t** data, size_t* size, size_t* bytecodeRanges)
+ {
+     if (s_builtStaticHeap.isEmpty())
+         return false;
+@@ -558,6 +558,15 @@ extern "C" bool Bun__StaticHeap__takeBuilt(uint8_t** data, size_t* size)
+         *data = compactData;
+         *size = compactSize;
+     }
++#else
++    // The full heap stays inside the Mach-O/ELF graph. PE stores its arenas in separate
++    // sections; its compact graph image must retain independent fallback storage.
++    if (auto copies = JSC::StaticHeap::copiesIn({ *data, *size }); copies && !copies->payloadIsOmitted) {
++        bytecodeRanges[0] = copies->offsetOfStrings;
++        bytecodeRanges[1] = copies->sizeOfStrings;
++        bytecodeRanges[2] = copies->offsetOfPayload;
++        bytecodeRanges[3] = copies->sizeOfPayload;
++    }
+ #endif
+     s_builtStaticHeap = { };
+     s_builtAOTImage = { };
+diff --git a/src/standalone_graph/StandaloneModuleGraph.rs b/src/standalone_graph/StandaloneModuleGraph.rs
+index e59bd77..d3dc75f 100644
+--- a/src/standalone_graph/StandaloneModuleGraph.rs
++++ b/src/standalone_graph/StandaloneModuleGraph.rs
+@@ -64,7 +64,8 @@ pub struct StandaloneModuleGraph {
+     pub startup_module_count: u32,
+     pub runtime_options: RuntimeOptions,
+     /// `Flags::HAS_STATIC_HEAP`: the image `JSC::StaticHeap::map` takes; empty when there is none.
+-    pub static_heap: &'static [u8],
++    /// The linked bytecode may be backed by this image and patched in place during fallback decoding.
++    pub static_heap: *const [u8],
+ }
+
+ /// Runtime defaults chosen at build time (`Flags::HAS_RUNTIME_OPTIONS` record: `u32 flags`, `u32 value`).
+@@ -1060,7 +1061,7 @@ impl StandaloneModuleGraph {
+     /// Maps `Flags::HAS_STATIC_HEAP`'s image where JSC keeps it. Call before anything has made an atom string. False if
+     /// there is none, or JSC declines it (another engine build, the address range taken); the program then decodes as usual.
+     pub fn map_static_heap(&self) -> bool {
+-        if self.static_heap.is_empty() {
++        if self.static_heap.len() == 0 {
+             return false;
+         }
+         unsafe extern "C" {
+@@ -1068,20 +1069,20 @@ impl StandaloneModuleGraph {
+         }
+         // First: whether the executable runs without the JIT holds also when the image is not mapped (no /proc, say).
+         // SAFETY: the image is mapped for the life of the process; only its trailer is read.
+-        unsafe { Bun__AOTImage__noteImage(self.static_heap.as_ptr(), self.static_heap.len()) };
++        unsafe { Bun__AOTImage__noteImage(self.static_heap.cast::<u8>(), self.static_heap.len()) };
+         #[cfg(target_os = "linux")]
+         {
+             unsafe extern "C" {
+                 fn Bun__StaticHeap__map(image: *const u8, size: usize, fd: i32, offset_in_file: u64) -> bool;
+             }
+-            let Some(offset) = elf::file_offset_of(self.static_heap.as_ptr() as usize) else {
++            let Some(offset) = elf::file_offset_of(self.static_heap.cast::<u8>() as usize) else {
+                 return false;
+             };
+             let Ok(file) = bun_sys::File::open(bun_core::zstr!("/proc/self/exe"), bun_sys::O::RDONLY | bun_sys::O::CLOEXEC, 0) else {
+                 return false;
+             };
+             // SAFETY: the image is mapped for the life of the process; JSC maps the file again itself, so `file` may close after.
+-            return unsafe { Bun__StaticHeap__map(self.static_heap.as_ptr(), self.static_heap.len(), file.fd().native(), offset) };
++            return unsafe { Bun__StaticHeap__map(self.static_heap.cast::<u8>(), self.static_heap.len(), file.fd().native(), offset) };
+         }
+         #[cfg(target_os = "macos")]
+         {
+@@ -1090,7 +1091,7 @@ impl StandaloneModuleGraph {
+             }
+             // (The `__BUN` section's pages are covered by the executable's code signature, so its code may be mapped
+             // executable from the file, as on Linux: no writable code, no MAP_JIT.)
+-            let Some((file, offset)) = macho::open_file_of(self.static_heap.as_ptr() as usize) else {
++            let Some((file, offset)) = macho::open_file_of(self.static_heap.cast::<u8>() as usize) else {
+                 // (Bun__StaticHeap__map() says why for every other reason.)
+                 if !std::env::var_os("BUN_AOT").is_some_and(|value| value.as_encoded_bytes().starts_with(b"0")) {
+                     eprintln!("pi-bolt: the executable's ahead-of-time compiled code is not used (the executable's file could not be opened); running from bytecode");
+@@ -1098,7 +1099,7 @@ impl StandaloneModuleGraph {
+                 return false;
+             };
+             // SAFETY: as above.
+-            return unsafe { Bun__StaticHeap__map(self.static_heap.as_ptr(), self.static_heap.len(), file.fd().native(), offset) };
++            return unsafe { Bun__StaticHeap__map(self.static_heap.cast::<u8>(), self.static_heap.len(), file.fd().native(), offset) };
+         }
+         #[cfg(windows)]
+         {
+@@ -1108,7 +1109,7 @@ impl StandaloneModuleGraph {
+             // (Nothing is mapped from the file: the arenas and the code are sections of this executable, which
+             // Bun__StaticHeap__rewritePE() put there when it was written. JSC checks that they are this heap's.)
+             // SAFETY: the image is in the executable's .bun section, mapped for the life of the process.
+-            return unsafe { Bun__StaticHeap__map(self.static_heap.as_ptr(), self.static_heap.len(), -1, 0) };
++            return unsafe { Bun__StaticHeap__map(self.static_heap.cast::<u8>(), self.static_heap.len(), -1, 0) };
+         }
+         #[allow(unreachable_code)]
+         false
+@@ -1134,7 +1135,7 @@ impl StandaloneModuleGraph {
+                 prelinked_module_graph: &[],
+                 prelinked_module_files: Vec::new(),
+                 startup_module_count: 0,
+-                static_heap: &[],
++                static_heap: core::ptr::slice_from_raw_parts(core::ptr::null(), 0),
+                 runtime_options: RuntimeOptions::default(),
+             });
+         }
+@@ -1217,7 +1218,7 @@ impl StandaloneModuleGraph {
+                     length: read_u32(record_at + 4),
+                 };
+                 record_at += 2 * size_of::<u32>();
+-                // SAFETY: `to_bytes` placed the serialized table via `append_bytecode_aligned` into a read-only, disjoint subrange.
++                // SAFETY: the serialized string table is disjoint from all writable bytecode and module info.
+                 unsafe { slice_to(raw_const, raw_len, ptr) }
+             } else {
+                 &[]
+@@ -1338,7 +1339,7 @@ impl StandaloneModuleGraph {
+             // refers to what lies before it, like a module's, so it cannot be decoded as a payload of its own either.
+             builtin_bytecode.clear();
+         }
+-        let mut static_heap: &'static [u8] = &[];
++        let mut static_heap = core::ptr::slice_from_raw_parts(core::ptr::null(), 0);
+         if offsets.flags.contains(Flags::HAS_STATIC_HEAP) && record_at + 2 * size_of::<u32>() <= raw_len {
+             let ptr = StringPointer {
+                 offset: read_u32(record_at),
+@@ -1346,8 +1347,10 @@ impl StandaloneModuleGraph {
+             };
+             record_at += 2 * size_of::<u32>();
+             if (ptr.offset as usize).saturating_add(ptr.length as usize) <= raw_len {
+-                // SAFETY: bounds checked above; the section is mapped for the life of the process and JSC only reads it.
+-                static_heap = unsafe { core::slice::from_raw_parts(raw_ptr.add(ptr.offset as usize), ptr.length as usize) };
++                static_heap = core::ptr::slice_from_raw_parts(
++                    raw_const.wrapping_add(ptr.offset as usize),
++                    ptr.length as usize,
++                );
+             }
+         }
+         let _ = record_at;
+@@ -1653,14 +1656,37 @@ pub(crate) fn to_bytes(
+     let mut has_entry_point = false;
+     let mut string_builder = bun_core::StringBuilder::default();
+     let mut module_count: usize = 0;
+-    let static_heap = take_built_static_heap();
++    let linked_payload: Option<(&[u8], [u32; bun_bundler::bytecode_order::REGION_COUNT])> =
++        output_files
++            .iter()
++            .find(|f| f.output_kind == options::OutputKind::BytecodePayload)
++            .map(|f| bun_bundler::bytecode_order::split_payload_file(f.value.as_slice()));
++    let bytecode_strings = output_files.iter().rev().find_map(|file| {
++        if let options::OutputFileValue::Buffer { bytes } = &file.value
++            && file.output_kind == options::OutputKind::BytecodeStringTable
++        {
++            Some(bytes.as_ref())
++        } else {
++            None
++        }
++    });
++    let payload_bytes = linked_payload.map(|(bytes, _)| bytes);
++    let static_heap = take_built_static_heap(bytecode_strings, payload_bytes)
++        .filter(|_| target.is_host_platform() && payload_bytes.is_some());
++    let shares_bytecode = static_heap.as_ref().is_some_and(|heap| heap.copies.is_some());
+     if let Some(heap) = &static_heap {
+-        string_builder.cap += heap.len() + STATIC_HEAP_ALIGNMENT + 2 * size_of::<u32>();
++        string_builder.cap += heap.image.len() + STATIC_HEAP_ALIGNMENT + 2 * size_of::<u32>();
+     }
+     for output_file in output_files {
+         string_builder.count_z(&output_file.dest_path);
+         string_builder.count_z(prefix);
+         if let options::OutputFileValue::Buffer { bytes } = &output_file.value {
++            if shares_bytecode && matches!(
++                output_file.output_kind,
++                options::OutputKind::BytecodeStringTable | options::OutputKind::BytecodePayload
++            ) {
++                continue;
++            }
+             if output_file.output_kind == options::OutputKind::Sourcemap {
+                 // This is an over-estimation to ensure that we allocate
+                 // enough memory for the source-map contents. Calculating
+@@ -1756,20 +1782,6 @@ pub(crate) fn to_bytes(
+         .iter()
+         .take_while(|f| f.loads_at_startup)
+         .count();
+-    let mut shared_bytecode: Option<(Vec<u8>, StringPointer, StringPointer, StringPointer)> = None;
+-    // Built with a payload order file: all modules' bytecode is one payload (`JSC::BytecodeLinkEncoder`), written
+-    // right after the shared bytecode so that its hot front extends the startup run; each module's `Bytecode` file says
+-    // where its cache entry is in it (`bytecode_entry_offset`).
+-    let linked_payload: Option<(&[u8], [u32; bun_bundler::bytecode_order::REGION_COUNT])> =
+-        output_files
+-            .iter()
+-            .find(|f| f.output_kind == options::OutputKind::BytecodePayload)
+-            .map(|f| bun_bundler::bytecode_order::split_payload_file(f.value.as_slice()));
+-    let mut linked_payload_ptr = StringPointer::default();
+-    // Beside the payload it was built from, in the data region (the records come after everything).
+-    let static_heap_for_link = static_heap.as_deref().filter(|_| linked_payload.is_some() && target.is_host_platform());
+-    let mut static_heap_ptr = StringPointer::default();
+-
+     // `Flags::HAS_PRELINKED_MODULE_GRAPH`: graph module index -> file-table position, so the runtime registers a whole
+     // import closure by index without looking any path up. Empty (and the graph is not embedded) unless every graph
+     // module's chunk is in the executable.
+@@ -1797,21 +1809,21 @@ pub(crate) fn to_bytes(
+     };
+     let embed_prelinked_graph = !prelinked_module_to_file.is_empty();
+
++    let write_shared = |builder: &mut bun_core::StringBuilder| {
++        append_shared_bytecode(
++            builder,
++            output_files,
++            embed_prelinked_graph,
++            bytecode_strings,
++            payload_bytes,
++            static_heap.as_ref(),
++        )
++    };
++    let mut shared_bytecode = None;
+     let mut modules: Vec<CompiledModuleGraphFile> = Vec::with_capacity(module_files.len());
+     for (i, &output_file) in module_files.iter().enumerate() {
+         if i == startup_module_count {
+-            shared_bytecode = Some(append_shared_bytecode(
+-                &mut string_builder,
+-                output_files,
+-                embed_prelinked_graph,
+-                linked_payload.is_some(),
+-            ));
+-            if let Some((payload, _)) = linked_payload {
+-                linked_payload_ptr = append_bytecode_aligned(&mut string_builder, payload);
+-                if let Some(heap) = static_heap_for_link {
+-                    static_heap_ptr = append_static_heap_aligned(&mut string_builder, heap);
+-                }
+-            }
++            shared_bytecode = Some(write_shared(&mut string_builder)?);
+         }
+         let buf_bytes = output_file.value.as_slice();
+
+@@ -1940,27 +1952,17 @@ pub(crate) fn to_bytes(
+         });
+     }
+
+-    let (
+-        builtin_bytecode_table,
++    let SharedBytecode {
++        mut builtin_bytecode_table,
+         bytecode_string_table_ptr,
+         module_info_string_table_ptr,
+         prelinked_module_graph_ptr,
+-    ) = shared_bytecode.unwrap_or_else(|| {
+-        let shared = append_shared_bytecode(
+-            &mut string_builder,
+-            output_files,
+-            embed_prelinked_graph,
+-            linked_payload.is_some(),
+-        );
+-        if let Some((payload, _)) = linked_payload {
+-            linked_payload_ptr = append_bytecode_aligned(&mut string_builder, payload);
+-            if let Some(heap) = static_heap_for_link {
+-                static_heap_ptr = append_static_heap_aligned(&mut string_builder, heap);
+-            }
+-        }
+-        shared
+-    });
+-    let mut builtin_bytecode_table = builtin_bytecode_table;
++        linked_payload_ptr,
++        static_heap_ptr,
++    } = match shared_bytecode {
++        Some(shared) => shared,
++        None => write_shared(&mut string_builder)?,
++    };
+     if linked_payload.is_some() {
+         // `u32 count`, then `{ u32 id, StringPointer bytes }` each.
+         for record in builtin_bytecode_table[4..].as_chunks_mut::<12>().0 {
+@@ -3328,7 +3330,7 @@ impl StandaloneModuleGraph {
+         // Pi-Bolt's macOS launcher reads ahead what a start does touch (pi-bin.hot). (If the heap is then declined, the
+         // program decodes from these bytes as they fault in, as without this read.)
+         #[cfg(target_os = "macos")]
+-        if !self.static_heap.is_empty() {
++        if self.static_heap.len() != 0 {
+             return;
+         }
+         let startup = &self.files.values()[..self.startup_module_count as usize];
+@@ -3470,16 +3472,24 @@ fn address_span(regions: impl Iterator<Item = (*const u8, usize)>) -> Option<(us
+     (lo < hi).then_some((lo, hi))
+ }
+
+-/// Writes the ahead-of-time bytecode of the internal modules, the shared
+-/// bytecode string table and the module-info string table. Returns the builtin
+-/// table (`u32 count`, then `count` × `{ u32 id, StringPointer bytes }`) and
+-/// the two string tables' pointers.
++struct SharedBytecode {
++    builtin_bytecode_table: Vec<u8>,
++    bytecode_string_table_ptr: StringPointer,
++    module_info_string_table_ptr: StringPointer,
++    prelinked_module_graph_ptr: StringPointer,
++    linked_payload_ptr: StringPointer,
++    static_heap_ptr: StringPointer,
++}
++
++/// Write shared data at the end of the startup modules' bytecode run.
+ fn append_shared_bytecode(
+     string_builder: &mut bun_core::StringBuilder,
+     output_files: &[OutputFile],
+     embed_prelinked_graph: bool,
+-    linked: bool,
+-) -> (Vec<u8>, StringPointer, StringPointer, StringPointer) {
++    strings: Option<&[u8]>,
++    payload: Option<&[u8]>,
++    heap: Option<&BuiltStaticHeap>,
++) -> crate::Result<SharedBytecode> {
+     let mut builtin_bytecode_table: Vec<u8> = Vec::new();
+     let mut count: u32 = 0;
+     builtin_bytecode_table.extend_from_slice(&0u32.to_le_bytes());
+@@ -3496,7 +3506,7 @@ fn append_shared_bytecode(
+         else {
+             continue;
+         };
+-        let pointer = if linked {
++        let pointer = if payload.is_some() {
+             // The cache-entry offset for now; `to_bytes` makes it a range of the payload once that is placed.
+             StringPointer {
+                 offset: output_file.bytecode_entry_offset,
+@@ -3512,15 +3522,10 @@ fn append_shared_bytecode(
+     }
+     builtin_bytecode_table[0..4].copy_from_slice(&count.to_le_bytes());
+
++    let copies = heap.and_then(|heap| heap.copies);
+     let mut bytecode_string_table_ptr = StringPointer::default();
+-    for output_file in output_files {
+-        if output_file.output_kind != options::OutputKind::BytecodeStringTable {
+-            continue;
+-        }
+-        let options::OutputFileValue::Buffer { bytes } = &output_file.value else {
+-            continue;
+-        };
+-        bytecode_string_table_ptr = append_bytecode_aligned(string_builder, bytes);
++    if let Some(strings) = strings.filter(|_| copies.is_none()) {
++        bytecode_string_table_ptr = append_bytecode_aligned(string_builder, strings);
+     }
+     let mut module_info_string_table_ptr = StringPointer::default();
+     if let Some(table) = output_files
+@@ -3543,12 +3548,31 @@ fn append_shared_bytecode(
+                 append_bytecode_aligned(string_builder, graph.value.as_slice());
+         }
+     }
+-    (
++    let mut linked_payload_ptr = StringPointer::default();
++    if let Some(payload) = payload.filter(|_| copies.is_none()) {
++        linked_payload_ptr = append_bytecode_aligned(string_builder, payload);
++    }
++    let mut static_heap_ptr = StringPointer::default();
++    if let Some(heap) = heap {
++        static_heap_ptr = append_static_heap_aligned(string_builder, &heap.image);
++        if string_builder.len > max_graph_bytes() {
++            return Err(crate::Error::ModuleGraphTooLarge);
++        }
++        if let Some((mut strings, mut payload)) = copies {
++            strings.offset += static_heap_ptr.offset;
++            payload.offset += static_heap_ptr.offset;
++            bytecode_string_table_ptr = strings;
++            linked_payload_ptr = payload;
++        }
++    }
++    Ok(SharedBytecode {
+         builtin_bytecode_table,
+         bytecode_string_table_ptr,
+         module_info_string_table_ptr,
+         prelinked_module_graph_ptr,
+-    )
++        linked_payload_ptr,
++        static_heap_ptr,
++    })
+ }
+
+ /// JSC reads cached bytecode in place and expects its start 128-byte aligned once mapped. The section data begins
+@@ -3600,22 +3624,57 @@ fn append_static_heap_aligned(string_builder: &mut bun_core::StringBuilder, imag
+ }
+
+ /// The static heap `bun build --compile --bytecode --bytecode-order` built while linking, with `BUN_STATIC_HEAP=1`.
+-fn take_built_static_heap() -> Option<Vec<u8>> {
++struct BuiltStaticHeap {
++    image: Vec<u8>,
++    /// Heap-relative descriptors for the exact graph string table and full linked payload.
++    copies: Option<(StringPointer, StringPointer)>,
++}
++
++fn take_built_static_heap(
++    strings: Option<&[u8]>,
++    payload: Option<&[u8]>,
++) -> Option<BuiltStaticHeap> {
+     unsafe extern "C" {
+-        fn Bun__StaticHeap__takeBuilt(data: *mut *mut u8, size: *mut usize) -> bool;
++        fn Bun__StaticHeap__takeBuilt(
++            data: *mut *mut u8,
++            size: *mut usize,
++            bytecode_ranges: *mut usize,
++        ) -> bool;
+         fn Bun__StaticHeap__freeBuilt(data: *mut u8);
+     }
+     let mut data: *mut u8 = core::ptr::null_mut();
+     let mut size: usize = 0;
++    let mut ranges = [0usize; 4];
+     // SAFETY: out-pointers to locals; on true, `data` is a malloc'd buffer of `size` bytes that we free below.
+-    if !unsafe { Bun__StaticHeap__takeBuilt(&mut data, &mut size) } {
++    if !unsafe { Bun__StaticHeap__takeBuilt(&mut data, &mut size, ranges.as_mut_ptr()) } {
+         return None;
+     }
+     // SAFETY: as above.
+     let image = unsafe { core::slice::from_raw_parts(data, size) }.to_vec();
+     // SAFETY: `data` came from Bun__StaticHeap__takeBuilt.
+     unsafe { Bun__StaticHeap__freeBuilt(data) };
+-    Some(image)
++    let descriptor = |offset: usize, length: usize, expected: &[u8]| {
++        if length == 0
++            || length != expected.len()
++            || !offset.is_multiple_of(128)
++            || image.get(offset..offset.checked_add(length)?)? != expected
++        {
++            return None;
++        }
++        Some(StringPointer {
++            offset: offset.try_into().ok()?,
++            length: length.try_into().ok()?,
++        })
++    };
++    let [string_at, string_len, payload_at, payload_len] = ranges;
++    let copies = strings.zip(payload).and_then(|(strings, payload)| {
++        let strings = descriptor(string_at, string_len, strings)?;
++        let payload = descriptor(payload_at, payload_len, payload)?;
++        // The VM reads the strings and may patch the bytecode. Their ranges must be disjoint.
++        (string_at + string_len <= payload_at || payload_at + payload_len <= string_at)
++            .then_some((strings, payload))
++    });
++    Some(BuiltStaticHeap { image, copies })
+ }
+
+ /// Allocates a StandaloneModuleGraph in the process-static `INSTANCE`,
+diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
+--- a/src/jsc/GarbageCollectionController.rs
++++ b/src/jsc/GarbageCollectionController.rs
+@@ -35,6 +35,8 @@
+     tick_min_bytes: Cell<usize>,
+     /// JSC's allocation-paced full-collection timer is to go when the timer is first armed (the JSC VM exists by then).
+     drop_full_timer: Cell<bool>,
++    /// The default JIT-off policy may skip the first idle full GC of a small, recently collected heap.
++    adaptive_first_idle: Cell<bool>,
+ }
+ 
+ bun_event_loop::impl_timer_owner!(
+@@ -58,6 +60,7 @@
+             armed_ms: Cell::new(0),
+             tick_min_bytes: Cell::new(0),
+             drop_full_timer: Cell::new(false),
++            adaptive_first_idle: Cell::new(false),
+         }
+     }
+ }
+@@ -126,7 +129,9 @@
+         } else {
+             b"10,110,480"
+         };
+-        let spec = env_var::BUN_IDLE_GC_SECONDS::get().unwrap_or(default_spec);
++        let configured = env_var::BUN_IDLE_GC_SECONDS::get();
++        self.adaptive_first_idle.set(configured.is_none() && Bun__AOTImage__executableRunsWithoutJIT());
++        let spec = configured.unwrap_or(default_spec);
+         let mut at = [0u32; 3];
+         let mut sum = 0u32;
+         for (slot, part) in at.iter_mut().zip(bun_core::strings::split(spec, b",")) {
+@@ -180,7 +185,19 @@
+         self.idle_quiet_ms.set(quiet);
+         let dues = dues.into_iter().filter(|&due| due != 0);
+         let crossed = |due: u32| before < due && quiet >= due;
+-        let full = dues.clone().any(crossed);
++        let mut full = dues.clone().any(crossed);
++        // A small heap that just survived collection can go quiet with only a few KB of new
++        // allocation. Walking the entire old generation again cost more CPU than the answer's
++        // first collection. Retain the final footprint trim and normal allocation-pressure GC.
++        if full && self.adaptive_first_idle.get() && crossed(self.idle_gc_at_ms.get()[0]) {
++            let heap = vm.jsc_vm();
++            let footprint = heap.block_bytes_allocated();
++            if footprint != 0 && footprint < 12 * 1024 * 1024
++                && heap.bytes_allocated_since_last_collection() < 1024 * 1024
++            {
++                full = false;
++            }
++        }
+         let next = dues.clone().find(|&due| quiet < due);
+         if full && next.is_none() && !vm.jsc_vm().shrink_footprint_now() {
+             self.idle_quiet_ms.set(before);

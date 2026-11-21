@@ -23,6 +23,7 @@ for t in "${tests[@]}"; do
 	name=${t%.mjs}
 	extra=(); own=""
 	[ "$name" = realms ] && extra=(realms-mod.mjs)
+	[ "$name" = workers ] && extra=(workers-entry.mjs)
 	"$STABLE" "$t" >"$OUT/$name.expected" 2>&1
 	# A plain bytecode build, run once, records the order functions are first called in: the AOT build lays code out by it.
 	"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" "$t" "${extra[@]}" --outfile "$OUT/$name-bytecode" >/dev/null 2>&1
@@ -71,6 +72,21 @@ for t in "${tests[@]}"; do
 			tail -8 "$OUT/$name-$mode.build" | cut -c1-300
 			tail -3 "$OUT/$name.$mode.err" | cut -c1-300
 			status=1
+		fi
+		if [ "$name" = workers ] && [ "$mode" = jit-off ]; then
+			if BUN_AOT=0 BUN_STATIC_HEAP_VERBOSE=1 "$OUT/$name-$mode" >"$OUT/$name.fallback" 2>"$OUT/$name.fallback.err" &&
+				cmp -s "$OUT/$name.expected" "$OUT/$name.fallback" && ! grep -q 'image registered: true' "$OUT/$name.fallback.err"; then
+				echo "PASS $name (bytecode fallback)"
+			else
+				echo "FAIL $name (bytecode fallback)"
+				cat "$OUT/$name.fallback.err"
+				status=1
+			fi
+			# CI can run this suite with an older released compiler. Its graph stores separate copies.
+			stamp="$(dirname "$BUN")/RUNTIME_STAMP"
+			if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" = "$("$PIBOLT_ROOT/scripts/runtime-stamp.sh" ${PIBOLT_LIBC:+"$PIBOLT_LIBC"})" ]; then
+				python3 check-shared-bytecode.py "$OUT/$name-$mode" || status=1
+			fi
 		fi
 	done
 done

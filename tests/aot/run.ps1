@@ -35,7 +35,7 @@ function Invoke-With([hashtable]$vars, [string]$exe, [string[]]$arguments, [stri
 		try { $p = Start-Process @startArgs } catch { Start-Sleep -Seconds 2; $p = Start-Process @startArgs }
 		return $p.ExitCode
 	} finally {
-		foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+		foreach ($k in $saved.Keys) { Set-Item -LiteralPath "Env:$k" -Value $saved[$k] }
 	}
 }
 # Windows keeps an executable's image section after its process exits, and charges the system's commit for its writable and
@@ -50,6 +50,7 @@ foreach ($t in $Tests) {
 	$name = [IO.Path]::GetFileNameWithoutExtension($t)
 	$extra = @(); $own = @{}
 	if ($name -eq 'realms') { $extra = @('realms-mod.mjs') }
+	if ($name -eq 'workers') { $extra = @('workers-entry.mjs') }
 	& $Stable $t *> "$Out\$name.expected"
 	# A plain bytecode build, run once, records the order functions are first called in: the AOT build lays code out by it.
 	Invoke-With @{} $Bun (@('build', '--compile', '--bytecode', '--format=esm', $Target, $t) + $extra + @('--outfile', "$Out\$name-bytecode.exe")) "$Out\$name.build.out" "$Out\$name.build.err" | Out-Null
@@ -85,7 +86,6 @@ foreach ($t in $Tests) {
 			continue
 		}
 		$code = Invoke-With @{ BUN_STATIC_HEAP_VERBOSE = '1' } "$Out\$name-$mode.exe" @() "$Out\$name.$mode" "$Out\$name.$mode.err"
-		Clear-CachedImage "$Out\$name-$mode.exe"
 		$used = @(Select-String -Path "$Out\$name.$mode.err" -Pattern 'image registered: true' -SimpleMatch -ErrorAction SilentlyContinue).Count
 		$expected = Read-Text "$Out\$name.expected"
 		$actual = Read-Text "$Out\$name.$mode"
@@ -101,6 +101,17 @@ foreach ($t in $Tests) {
 			Compare-Object ($expected -split "`n") ($actual -split "`n") | Select-Object -First 5 | ForEach-Object { "  $($_.SideIndicator) $($_.InputObject)" }
 			$status = 1
 		}
+		if ($name -eq 'workers' -and $mode -eq 'jit-off') {
+			$code = Invoke-With @{ BUN_AOT = '0'; BUN_STATIC_HEAP_VERBOSE = '1' } "$Out\$name-$mode.exe" @() "$Out\$name.fallback" "$Out\$name.fallback.err"
+			if ($code -eq 0 -and (Read-Text "$Out\$name.fallback") -ceq $expected -and (Read-Text "$Out\$name.fallback.err") -notmatch 'image registered: true') {
+				Write-Host "PASS $name (bytecode fallback)"
+			} else {
+				Write-Host "FAIL $name (bytecode fallback): exit $code"
+				Write-Host (Read-Text "$Out\$name.fallback.err")
+				$status = 1
+			}
+		}
+		Clear-CachedImage "$Out\$name-$mode.exe"
 	}
 }
 exit $status
