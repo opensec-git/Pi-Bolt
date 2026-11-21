@@ -13,6 +13,7 @@ import {
 	reportRenderChange,
 } from "../tui.ts";
 import {
+	type AnsiWrapCheckpoint,
 	applyBackgroundToLine,
 	cjkPunctuationRegex,
 	flattenLines,
@@ -25,6 +26,7 @@ import {
 	sanitizeTerminalTextFrom,
 	startsWithText,
 	visibleWidth,
+	wrapStreamingParagraph,
 	wrapTextWithAnsi,
 } from "../utils.ts";
 
@@ -56,7 +58,7 @@ const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\
 const SETEXT_UNDERLINE = / {0,3}(?:=+|-+) *(?:\n|$)/y;
 /** A line of whitespace ended by a line break: where marked's lheading rule stops looking (`\n(?!\s*?\n|...)`). */
 const BLANK_LINE = /[^\S\n]*\n/y;
-/** Lines looked at for an underline before leaving the answer to marked's own rule. */
+/** Lines checked individually for an underline or a blank line before scanning the remaining text for a possible underline. */
 const SETEXT_LOOKAHEAD_LINES = 64;
 let setextGuard = true;
 
@@ -65,13 +67,13 @@ let setextGuard = true;
  * time up to the first blank line, and marked tries it at the start of every block that is not a list, a fence, a heading
  * or a table: on a long transcript, about a tenth of the time Pi takes to lay it out. The rule needs a line of `=` or `-`
  * (up to 3 spaces before, spaces after) after one of the line breaks it reads, and it reads none past a line break that
- * begins a blank line. With no such line before that, it cannot match. The answer is the regular expression's when an
- * underline is found or the text goes on for more lines without a blank one.
+ * begins a blank line. For a long paragraph, check only for a possible underline prefix in the remaining text and let
+ * marked verify any candidate.
  */
 function mayStartSetextHeading(src: string): boolean {
 	let lineBreak = src.indexOf("\n");
 	for (let lines = 0; lineBreak !== -1; lines++) {
-		if (lines === SETEXT_LOOKAHEAD_LINES) return true;
+		if (lines === SETEXT_LOOKAHEAD_LINES) return /\n {0,3}[=-]/.test(src.slice(lineBreak));
 		SETEXT_UNDERLINE.lastIndex = lineBreak + 1;
 		if (SETEXT_UNDERLINE.test(src)) return true;
 		BLANK_LINE.lastIndex = lineBreak + 1;
@@ -274,6 +276,7 @@ function trimPartialClosingFences(tokens: readonly Token[]): void {
 
 	// Trim streamed partial closing fences so code blocks do not shrink/flicker
 	// when the final fence character arrives. See https://github.com/earendil-works/pi/issues/5825.
+	if (!token.raw.endsWith("`") && !token.raw.endsWith("~")) return;
 	const marker = /^(`{3,}|~{3,})/.exec(token.raw)?.[1];
 	// (The text after the last line break: the whole of a code block's raw text is not split into lines for it.)
 	const lastLine = token.raw.slice(token.raw.lastIndexOf("\n") + 1);
@@ -317,6 +320,56 @@ interface LexedInline {
 let lexedInlines = new Map<number, Map<string, LexedInline>>();
 let nextLexedInlines = new Map<number, Map<string, LexedInline>>();
 
+interface InlineCheckpoint {
+	source: string;
+	tokens: Token[];
+	count: number;
+	end: number;
+}
+
+// Retained for the same one lex as lexedInlines. A completed message drops both.
+let lastInlineCheckpoint: InlineCheckpoint | undefined;
+
+/**
+ * marked can restart after a closed inline span: its previous-character state resets after a non-text token.
+ * Only settle ordinary prose and simple, space-separated spans. An unmatched delimiter, a possible link or HTML,
+ * or a more complicated span can acquire a different meaning when later text arrives.
+ */
+function inlineCheckpoint(source: string, tokens: Token[], from?: InlineCheckpoint): InlineCheckpoint | undefined {
+	let count = from?.count ?? 0;
+	let end = from?.end ?? 0;
+	let position = end;
+	for (let i = count; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		const start = position;
+		position += token.raw.length;
+		if (token.type === "text") {
+			if (/[^a-zA-Z0-9 ,.!?:;-]/.test(token.raw)) break;
+			continue;
+		}
+		if (start > 0 && source[start - 1] !== " ") break;
+		if (source[position] !== " " && !(source[position + 1] === " " && /[.,!?:;]/.test(source.charAt(position))))
+			break;
+		const simple =
+			token.type === "codespan"
+				? /^`[a-zA-Z0-9_ ./-]+`$/.test(token.raw)
+				: (token.type === "em" || token.type === "strong") &&
+					/^(\*{1,2})[a-zA-Z0-9]+(?: [a-zA-Z0-9]+)*\1$/.test(token.raw);
+		if (!simple) break;
+		count = i + 1;
+		end = position;
+	}
+	return count > 0 ? { source, tokens, count, end } : undefined;
+}
+
+// Own the small suffix. Tokens may keep slices of it across redraws, and slices of the full
+// paragraph can otherwise keep every earlier version of the growing paragraph alive.
+function copyInlineTail(text: string): string {
+	if (typeof Buffer === "undefined") return text.split("").join("");
+	const encoding = /[^\u0000-\u00ff]/.test(text) ? "utf16le" : "latin1";
+	return Buffer.from(text, encoding).toString(encoding);
+}
+
 function inlineFlags(state: Lexer["state"]): number {
 	return (state.inLink ? 1 : 0) | (state.inRawBlock ? 2 : 0) | (state.linkEmitted ? 4 : 0);
 }
@@ -333,6 +386,7 @@ function inlineFlags(state: Lexer["state"]): number {
 function defineInlineMemoLexer(Base: typeof Lexer) {
 	return class InlineMemoLexer extends Base {
 		private inlineDepth = 0;
+		private checkpoint?: InlineCheckpoint;
 		/**
 		 * The texts inlineTokens() is lexing, the innermost last, each with where in it a "$", "\(" or "\[" begins (found when
 		 * first asked, latexStart()) and the index of the first of those at or after the position asked about last.
@@ -343,6 +397,7 @@ function defineInlineMemoLexer(Base: typeof Lexer) {
 			try {
 				return super.lex(src);
 			} finally {
+				lastInlineCheckpoint = this.checkpoint;
 				lexedInlines = nextLexedInlines;
 				nextLexedInlines = new Map();
 			}
@@ -374,27 +429,24 @@ function defineInlineMemoLexer(Base: typeof Lexer) {
 			return next < delimiters.length ? delimiters[next]! - offset : undefined;
 		}
 
-		override inlineTokens(src: string, tokens: Token[] = []): Token[] {
+		private lexInlineTokens(src: string, tokens: Token[]): Token[] {
+			this.inlineDepth++;
 			this.inlineSources.push({ src, next: 0 });
 			try {
-				return this.memoInlineTokens(src, tokens);
+				return super.inlineTokens(src, tokens);
 			} finally {
 				this.inlineSources.pop();
+				this.inlineDepth--;
 			}
 		}
 
-		private memoInlineTokens(src: string, tokens: Token[]): Token[] {
+		override inlineTokens(src: string, tokens: Token[] = []): Token[] {
 			if (
 				this.inlineDepth > 0 ||
 				tokens.length > 0 ||
 				(src.includes("[") && Object.keys(this.tokens.links ?? {}).length > 0)
 			) {
-				this.inlineDepth++;
-				try {
-					return super.inlineTokens(src, tokens);
-				} finally {
-					this.inlineDepth--;
-				}
+				return this.lexInlineTokens(src, tokens);
 			}
 			const state = this.state;
 			const flags = inlineFlags(state);
@@ -405,18 +457,24 @@ function defineInlineMemoLexer(Base: typeof Lexer) {
 			}
 			let lexed = next.get(src) ?? lexedInlines.get(flags)?.get(src);
 			if (lexed === undefined) {
-				this.inlineDepth++;
-				try {
-					super.inlineTokens(src, tokens);
-				} finally {
-					this.inlineDepth--;
+				const track = fastPaths && flags === 0 && src.length >= 512;
+				const last = track ? lastInlineCheckpoint : undefined;
+				// A large unresolved tail goes through the ordinary lexer without copying it.
+				const prefix =
+					last && src.length > last.source.length && src.length - last.end <= 4096 && src.startsWith(last.source)
+						? last
+						: undefined;
+				if (prefix) {
+					for (let i = 0; i < prefix.count; i++) tokens.push(prefix.tokens[i]!);
 				}
+				this.lexInlineTokens(prefix ? copyInlineTail(src.slice(prefix.end)) : src, tokens);
 				lexed = {
 					tokens: tokens.slice(),
 					inLink: state.inLink,
 					inRawBlock: state.inRawBlock,
 					linkEmitted: state.linkEmitted,
 				};
+				if (track && tokens.length > 1) this.checkpoint = inlineCheckpoint(src, lexed.tokens, prefix);
 			} else {
 				for (const token of lexed.tokens) tokens.push(token);
 				state.inLink = lexed.inLink;
@@ -776,6 +834,28 @@ function lexAddedToBlock(
 }
 
 /**
+ * Unindented open fences keep their body verbatim except for one trailing newline. A closed fence or
+ * a partial closer hidden by trimPartialClosingFences has a shorter text. A closer can only start
+ * at a line boundary. Also check the start of the chunk, which can complete a split closer.
+ */
+function extendOpenFence(block: Tokens.Code, added: string): Tokens.Code | undefined {
+	const raw = block.raw;
+	const marker = raw[0];
+	if ((marker !== "`" && marker !== "~") || added.includes("\r")) return undefined;
+	if (added.includes(marker) && (marker === "`" ? /(?:^|\n) {0,3}`/ : /(?:^|\n) {0,3}~/).test(added)) return undefined;
+	const newline = raw.indexOf("\n");
+	if (newline === -1) return undefined;
+	const bodyLength = raw.length - newline - 1;
+	const trailingNewline = bodyLength > 0 && raw.endsWith("\n");
+	if (block.text.length !== bodyLength - Number(trailingNewline)) return undefined;
+
+	// A delta may be a slice of the whole response. Keep only its bytes in the growing token.
+	const suffix = ownString(added);
+	const text = block.text + (trailingNewline ? "\n" : "") + suffix;
+	return { ...block, raw: raw + suffix, text: suffix.endsWith("\n") ? text.slice(0, -1) : text };
+}
+
+/**
  * The tokens of `source`, which is `previous.source` with text added at its end. Where a top-level block ends depends on the
  * line that follows it and on nothing after that line. The last block may still be on its first line ("2" turning into "2."
  * makes it an item of the list before it), so the block before it is not settled either: the blocks before those two are
@@ -795,6 +875,22 @@ function lexAddedMarkdown(previous: LexedMarkdown, source: string, added?: strin
 			last = lastBlock;
 		}
 		if (blocks === 0) lastBlock = last;
+	}
+	// Only replace the last token when the preceding blocks are already settled by the rule above.
+	if (fastPaths && lastBlock === previous.tokens.length - 1 && (last === lastBlock || lastBlock === 0)) {
+		const block = previous.tokens[lastBlock];
+		if (block?.type === "code") {
+			const suffix = added ?? source.slice(previous.source.length);
+			if (suffix.startsWith("\n") && previous.source.endsWith("\r")) return undefined;
+			const extended = extendOpenFence(block as Tokens.Code, suffix);
+			if (extended) {
+				const tokens = previous.tokens.slice(0, lastBlock);
+				tokens.push(extended);
+				lastEnd = { start: source.length - extended.raw.length, text: extended.raw };
+				lexedFrom.set(tokens, { tokens: new WeakRef(previous.tokens), shared: lastBlock });
+				return tokens;
+			}
+		}
 	}
 	if (last <= 0) {
 		return undefined;
@@ -909,6 +1005,7 @@ function lexMarkdown(source: string, complete = false, extended?: ExtendedSource
 		if (complete) {
 			// The text will not be lexed again: what its texts lexed to is not kept (up to ten times its size).
 			lexedInlines = new Map();
+			lastInlineCheckpoint = undefined;
 		}
 		let length = 0;
 		for (const token of tokens) {
@@ -1360,6 +1457,8 @@ export class Markdown implements Component {
 	 */
 	private wraps?: Map<number, Map<string, readonly string[]>>;
 	private nextWraps?: Map<number, Map<string, readonly string[]>>;
+	/** The stable rows of the last long paragraph while its source is growing. */
+	private paragraphWrap?: { checkpoint: AnsiWrapCheckpoint; settings: RenderSettings; drawn: string[] };
 	/**
 	 * What renderLive() holds: the lines, the text and width they are for, the tokens and settings their blocks were
 	 * rendered from and where each block's lines end (not counting the padding), and whether the lines are the empty line
@@ -1396,7 +1495,10 @@ export class Markdown implements Component {
 		shade: ((text: string) => string) | undefined;
 		indent: string;
 		code: readonly string[];
-		drawn: (readonly string[])[];
+		rows: readonly string[];
+		start: number;
+		/** Row boundaries relative to the code, excluding the header. Missing entries are one row per source line. */
+		ends?: number[];
 	};
 
 	constructor(
@@ -1422,6 +1524,7 @@ export class Markdown implements Component {
 		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized);
 		this.text = this.sanitized.text;
 		const added = this.sanitized.added;
+		if (added === undefined) this.paragraphWrap = undefined;
 		if (this.grown !== undefined) {
 			if (added === undefined) this.grown = undefined;
 			else this.grown.added += added;
@@ -1455,6 +1558,7 @@ export class Markdown implements Component {
 		// the default style's prefix and the highlighted code (RenderedBlock.highlightedCode is checked by generation).
 		invalidateRenderedMarkdown();
 		this.defaultStylePrefix = undefined;
+		this.paragraphWrap = undefined;
 		this.highlightedCode = undefined;
 		this.nextHighlightedCode = undefined;
 		reportRenderChange(this);
@@ -1566,6 +1670,20 @@ export class Markdown implements Component {
 			// (The lines before and of the code are flat: renderCodeBlock().)
 			const code = this.codeBlockParts(token as Tokens.Code, contentWidth, nextTokenType);
 			flatFrom = this.renderCodeBlock(code, settings, lines, addRendered);
+		} else if (nextTokenType === undefined && this.canResumeParagraph(token)) {
+			const paragraphText = this.renderInlineTokens(token.tokens || []);
+			const previous = this.paragraphWrap;
+			const checkpoint = previous && sameSettings(previous.settings, settings) ? previous.checkpoint : undefined;
+			if (isImageLine(paragraphText)) {
+				add(paragraphText);
+				this.paragraphWrap = undefined;
+			} else {
+				const wrapped = wrapStreamingParagraph(paragraphText, contentWidth, checkpoint);
+				flatFrom = wrapped.shared;
+				for (let i = 0; i < flatFrom; i++) lines.push(previous!.drawn[i]!);
+				for (const line of wrapped.lines) add(line);
+				this.paragraphWrap = wrapped.next ? { checkpoint: wrapped.next, settings, drawn: lines } : undefined;
+			}
 		} else if (parts === undefined) {
 			for (const line of this.renderToken(token, contentWidth, nextTokenType)) addRendered(line);
 		} else {
@@ -1587,7 +1705,7 @@ export class Markdown implements Component {
 		}
 		this.blockHighlightedCode = undefined;
 		this.knownHighlightedCode = undefined;
-		flattenLines(flatFrom === 0 ? lines : lines.slice(flatFrom));
+		flattenLines(lines, flatFrom);
 		if (markdownCaching) {
 			renderedBlocks.set(token, {
 				settings,
@@ -1599,6 +1717,12 @@ export class Markdown implements Component {
 			});
 		}
 		return lines;
+	}
+
+	private canResumeParagraph(token: Token | undefined): token is Tokens.Paragraph {
+		return (
+			token?.type === "paragraph" && token.raw.length >= 1024 && markdownCaching && memos && !this.options.complete
+		);
 	}
 
 	/**
@@ -1812,6 +1936,7 @@ export class Markdown implements Component {
 	 */
 	private dropMemos(): void {
 		this.wraps = undefined;
+		this.paragraphWrap = undefined;
 		this.highlightedCode = undefined;
 		this.drawnCode = undefined;
 		if (this.options.complete === true) {
@@ -1831,6 +1956,7 @@ export class Markdown implements Component {
 		const rendered = this.cachedText === this.text && this.cachedWidth === width;
 
 		const prepared = this.tokensFor(width);
+		if (this.paragraphWrap && !this.canResumeParagraph(prepared?.tokens.at(-1))) this.paragraphWrap = undefined;
 		if (!prepared) {
 			const result: string[] = [];
 			// Update cache
@@ -1893,6 +2019,7 @@ export class Markdown implements Component {
 		}
 
 		const prepared = this.tokensFor(width);
+		if (this.paragraphWrap && !this.canResumeParagraph(prepared?.tokens.at(-1))) this.paragraphWrap = undefined;
 		live.text = this.text;
 		live.width = width;
 		this.cachedText = this.text;
@@ -2044,22 +2171,35 @@ export class Markdown implements Component {
 			last.indent === code.indent &&
 			sameSettings(last.settings, settings);
 		const codeLines = code.code;
-		const drawn: (readonly string[])[] = new Array(codeLines.length);
-		for (let i = 0; i < codeLines.length; i++) {
-			const codeLine = codeLines[i]!;
-			let lineDrawn = reuse && last.code[i] === codeLine ? last.drawn[i] : undefined;
-			if (lineDrawn === undefined) {
-				const start = lines.length;
-				for (const line of code.draw(codeLine)) addRendered(line);
-				lineDrawn = lines.slice(start);
-				flattenLines(lineDrawn);
-			} else {
-				// (Indexed: this runs for every line of a long block each time it is drawn.)
-				for (let j = 0; j < lineDrawn.length; j++) lines.push(lineDrawn[j]!);
-			}
-			drawn[i] = lineDrawn;
+		const start = lines.length;
+		let ends: number[] | undefined;
+		let first = 0;
+		if (reuse) {
+			const limit = Math.min(last.code.length, codeLines.length);
+			while (first < limit && last.code[first] === codeLines[first]) first++;
+			// Most lines of a streaming block are unchanged. Copy their screen rows as one range.
+			const prefixRows = last.ends?.[first] ?? first;
+			for (let row = last.start; row < last.start + prefixRows; row++) lines.push(last.rows[row]!);
+			if (last.ends?.[first] !== undefined) ends = last.ends.slice(0, first + 1);
 		}
-		this.drawnCode = { settings, shade: code.shade, indent: code.indent, code: code.code, drawn };
+		for (let i = first; i < codeLines.length; i++) {
+			const codeLine = codeLines[i]!;
+			if (reuse && last.code[i] === codeLine) {
+				const from = last.start + (last.ends?.[i] ?? i);
+				const to = last.start + (last.ends?.[i + 1] ?? i + 1);
+				for (let row = from; row < to; row++) lines.push(last.rows[row]!);
+			} else {
+				const from = lines.length;
+				for (const line of code.draw(codeLine)) addRendered(line);
+				flattenLines(lines, from);
+			}
+			const end = lines.length - start;
+			if (ends || end !== i + 1) {
+				ends ??= new Array<number>(i + 1);
+				ends.push(end);
+			}
+		}
+		this.drawnCode = { settings, shade: code.shade, indent: code.indent, code: codeLines, rows: lines, start, ends };
 		const afterCode = lines.length;
 		for (const line of code.after) addRendered(line);
 		return afterCode;

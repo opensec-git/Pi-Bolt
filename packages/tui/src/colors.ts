@@ -188,7 +188,6 @@ const BASIC_COLORS: readonly RgbColor[] = [
 	{ r: 255, g: 255, b: 255 },
 ];
 const CUBE_VALUES = [0, 95, 135, 175, 215, 255] as const;
-const GRAY_VALUES = Array.from({ length: 24 }, (_, index) => 8 + index * 10);
 
 function indexedToRgb(index: number): RgbColor {
 	if (index < 16) return { ...BASIC_COLORS[index] };
@@ -278,17 +277,14 @@ export function mixColors(first: Color, second: Color, amount: number, space: Co
 	return oklchColor(a.l + (b.l - a.l) * amount, a.c + (b.c - a.c) * amount, firstHue + hueDelta * amount);
 }
 
-function findClosest(values: readonly number[], target: number): number {
-	let closestIndex = 0;
-	let closestDistance = Infinity;
-	for (let index = 0; index < values.length; index++) {
-		const distance = Math.abs(target - values[index]);
-		if (distance < closestDistance) {
-			closestIndex = index;
-			closestDistance = distance;
-		}
-	}
-	return closestIndex;
+function closestCubeIndex(channel: number): number {
+	// Midpoints of 0, 95, 135, 175, 215 and 255. An exact tie uses the lower palette index.
+	if (channel <= 47.5) return 0;
+	if (channel <= 115) return 1;
+	if (channel <= 155) return 2;
+	if (channel <= 195) return 3;
+	if (channel <= 235) return 4;
+	return 5;
 }
 
 function colorDistance(first: RgbColor, second: RgbColor): number {
@@ -299,20 +295,18 @@ function colorDistance(first: RgbColor, second: RgbColor): number {
 }
 
 function rgbToAnsi256(color: RgbColor): number {
-	const rIndex = findClosest(CUBE_VALUES, color.r);
-	const gIndex = findClosest(CUBE_VALUES, color.g);
-	const bIndex = findClosest(CUBE_VALUES, color.b);
-	const cubeColor = { r: CUBE_VALUES[rIndex], g: CUBE_VALUES[gIndex], b: CUBE_VALUES[bIndex] };
+	const rIndex = closestCubeIndex(color.r);
+	const gIndex = closestCubeIndex(color.g);
+	const bIndex = closestCubeIndex(color.b);
 	const cubeIndex = 16 + 36 * rIndex + 6 * gIndex + bIndex;
-
-	const gray = Math.round(0.299 * color.r + 0.587 * color.g + 0.114 * color.b);
-	const grayOffset = findClosest(GRAY_VALUES, gray);
-	const grayValue = GRAY_VALUES[grayOffset];
 	const spread = Math.max(color.r, color.g, color.b) - Math.min(color.r, color.g, color.b);
-	if (
-		spread < 10 &&
-		colorDistance(color, { r: grayValue, g: grayValue, b: grayValue }) < colorDistance(color, cubeColor)
-	) {
+	if (spread >= 10) return cubeIndex;
+	const gray = Math.round(0.299 * color.r + 0.587 * color.g + 0.114 * color.b);
+	// Gray levels are 8 + 10*i. The first midpoint is 13, and 14 chooses the second level.
+	const grayOffset = Math.max(0, Math.min(23, Math.floor((gray - 4) / 10)));
+	const grayValue = 8 + 10 * grayOffset;
+	const cubeColor = { r: CUBE_VALUES[rIndex], g: CUBE_VALUES[gIndex], b: CUBE_VALUES[bIndex] };
+	if (colorDistance(color, { r: grayValue, g: grayValue, b: grayValue }) < colorDistance(color, cubeColor)) {
 		return 232 + grayOffset;
 	}
 	return cubeIndex;

@@ -146,10 +146,11 @@ function layoutComponent(
 			const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
 			if (cursorLine >= allocatedHeight) lineOffset = cursorLine - allocatedHeight + 1;
 		}
+		const rect = { x, y, width: safeWidth, height: allocatedHeight };
 		return {
 			component,
-			rect: { x, y, width: safeWidth, height: allocatedHeight },
-			clip: intersect(clip, { x, y, width: safeWidth, height: allocatedHeight }),
+			rect,
+			clip: intersect(clip, rect),
 			children: [],
 			lines,
 			lineOffset,
@@ -172,7 +173,8 @@ function layoutComponent(
 		const contentHeight = childBox.rect.height;
 		const viewportHeight = height === undefined ? contentHeight : Math.max(0, Math.floor(height));
 		node.state.updateLayout(contentHeight, viewportHeight, context.requestRender);
-		translateBox(childBox, previousScrollTop - node.state.scrollTop);
+		const scrollDelta = previousScrollTop - node.state.scrollTop;
+		if (scrollDelta !== 0) translateBox(childBox, scrollDelta);
 		const scrollView = node.state as ScrollView;
 		if (node.state.primary || !context.primaryScrollView) context.primaryScrollView = scrollView;
 		const rect = { x, y, width: safeWidth, height: viewportHeight };
@@ -183,7 +185,7 @@ function layoutComponent(
 			clip: childClip,
 			children: [childBox],
 			scrollView,
-			scrollContentLines: renderCached(context, node.component, contentWidth),
+			scrollContentLines: childBox.lines ?? renderCached(context, node.component, contentWidth),
 			layer: 0,
 		};
 		childBox.parent = box;
@@ -192,7 +194,6 @@ function layoutComponent(
 	}
 
 	const entries = visibleStackEntries(node.entries, context.viewport);
-	const gapTotal = Math.max(0, entries.length - 1) * node.gap;
 	if (node.type === "vstack") {
 		// (Loops rather than map() and reduce() with closures: a frame lays out every stack.)
 		const intrinsicHeights: number[] = new Array(entries.length);
@@ -202,10 +203,13 @@ function layoutComponent(
 				typeof entry.basis === "number" ? entry.basis : measureHeight(context, entry.component, safeWidth);
 		}
 		const sizes = allocateStackSizes(entries, intrinsicHeights, height, node.gap);
-		let sizesTotal = 0;
-		for (let index = 0; index < sizes.length; index++) sizesTotal += sizes[index]!;
-		const naturalHeight = sizesTotal + gapTotal;
-		const allocatedHeight = height === undefined ? naturalHeight : Math.max(0, Math.floor(height));
+		let allocatedHeight = 0;
+		if (height === undefined) {
+			for (let index = 0; index < sizes.length; index++) allocatedHeight += sizes[index]!;
+			allocatedHeight += Math.max(0, entries.length - 1) * node.gap;
+		} else {
+			allocatedHeight = Math.max(0, Math.floor(height));
+		}
 		const rect = { x, y, width: safeWidth, height: allocatedHeight };
 		const box: LayoutBox = {
 			component,
@@ -310,7 +314,8 @@ function replaceScrollbarCell(
 export function getScrollbarGeometry(box: LayoutBox, includeHiddenAuto = false): ScrollbarGeometry | undefined {
 	if (!box.scrollView || box.rect.width <= 0 || box.rect.height <= 0) return undefined;
 
-	const contentHeight = box.children[0]?.rect.height ?? box.scrollContentLines?.length ?? 0;
+	const prefixHeight = box.scrollView.estimatedPrefixHeight?.() ?? 0;
+	const contentHeight = prefixHeight + (box.children[0]?.rect.height ?? box.scrollContentLines?.length ?? 0);
 	const trackHeight = box.rect.height;
 	const canRevealHiddenAuto = includeHiddenAuto && box.scrollView.scrollbar === "auto" && contentHeight > trackHeight;
 	if (!box.scrollView.isScrollbarVisible && !canRevealHiddenAuto) return undefined;
@@ -322,7 +327,8 @@ export function getScrollbarGeometry(box: LayoutBox, includeHiddenAuto = false):
 	);
 	const maxScrollTop = Math.max(0, contentHeight - trackHeight);
 	const maxThumbTop = trackHeight - thumbHeight;
-	const thumbOffset = maxScrollTop === 0 ? 0 : Math.round((box.scrollView.scrollTop / maxScrollTop) * maxThumbTop);
+	const top = prefixHeight + box.scrollView.scrollTop;
+	const thumbOffset = maxScrollTop === 0 ? 0 : Math.round((top / maxScrollTop) * maxThumbTop);
 	const column = box.rect.x + box.rect.width - 1;
 	if (column < box.clip.x || column >= box.clip.x + box.clip.width) return undefined;
 

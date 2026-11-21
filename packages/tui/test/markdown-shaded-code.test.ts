@@ -136,6 +136,26 @@ describe("Shaded code blocks", () => {
 		});
 	}
 
+	it("reuses rows after an earlier source line changes its wrap count or the language label changes height", () => {
+		const doc = new Markdown("", 1, 0, highlightingTheme);
+		for (const width of [24, 46, 24]) {
+			for (const label of ["ts", "ts with a long language label that wraps"]) {
+				for (const changed of ["x", "several words ".repeat(11), "", "x"]) {
+					const text = [
+						`\`\`\`${label}`,
+						"same first row",
+						changed,
+						"unchanged ".repeat(9),
+						"last row",
+						"```",
+					].join("\n");
+					doc.setText(text);
+					assert.deepStrictEqual(doc.render(width), fresh(text, width, highlightingTheme, false));
+				}
+			}
+		}
+	});
+
 	it("draws no fence lines and shades each line to the full width", () => {
 		Object.assign(palette, PALETTES[0]);
 		const source = "```ts\nconst a = 1;\n\n    nested();\n```\n\nafter";

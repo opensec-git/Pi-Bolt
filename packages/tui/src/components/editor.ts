@@ -501,6 +501,9 @@ export class Editor implements Component, Focusable {
 
 	// Border color (can be changed dynamically)
 	public borderColor: (str: string) => string;
+	/** The unstyled border shared by the top and bottom rows when there is no overflow. */
+	private plainBorderWidth?: number;
+	private plainBorder = "";
 
 	// Autocomplete support
 	private autocompleteProvider?: AutocompleteProvider;
@@ -769,13 +772,21 @@ export class Editor implements Component, Focusable {
 	}
 
 	protected renderTopBorder(width: number, hiddenLineCount: number): string {
-		const border = hiddenLineCount > 0 ? createScrollBorder("↑", hiddenLineCount, width) : "─".repeat(width);
+		const border = hiddenLineCount > 0 ? createScrollBorder("↑", hiddenLineCount, width) : this.plainBorderFor(width);
 		return this.borderColor(border);
 	}
 
 	protected renderBottomBorder(width: number, hiddenLineCount: number): string {
-		const border = hiddenLineCount > 0 ? createScrollBorder("↓", hiddenLineCount, width) : "─".repeat(width);
+		const border = hiddenLineCount > 0 ? createScrollBorder("↓", hiddenLineCount, width) : this.plainBorderFor(width);
 		return this.borderColor(border);
+	}
+
+	private plainBorderFor(width: number): string {
+		if (this.plainBorderWidth !== width) {
+			this.plainBorder = "─".repeat(width);
+			this.plainBorderWidth = width;
+		}
+		return this.plainBorder;
 	}
 
 	/**
@@ -786,6 +797,7 @@ export class Editor implements Component, Focusable {
 	 */
 	private renderedText?: {
 		width: number;
+		layoutWidth: number;
 		paddingX: number;
 		terminalRows: number;
 		focused: boolean;
@@ -830,23 +842,13 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
-		const paddingX = Math.min(this.paddingX, maxPadding);
-		const contentWidth = Math.max(1, width - paddingX * 2);
-
-		// Layout width: with padding the cursor can overflow into it,
-		// without padding we reserve 1 column for the cursor.
-		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
-
-		// Store for cursor navigation (must match wrapping width)
-		this.lastWidth = layoutWidth;
-
 		const terminalRows = this.tui.terminal.rows;
 		const showAutocomplete = Boolean(this.autocompleteState && this.autocompleteList);
 		const known = this.renderedText;
 		if (!showAutocomplete && known !== undefined) {
 			const pasteIds = this.pastes.size === 0 ? "" : [...this.pastes.keys()].join(",");
 			if (this.isRenderedText(known, width, terminalRows, pasteIds)) {
+				this.lastWidth = known.layoutWidth;
 				this.renderedVisibleLineCount = known.visibleLineCount;
 				this.renderedAutocompleteHeight = 0;
 				const top = this.renderTopBorder(width, this.scrollOffset);
@@ -861,6 +863,15 @@ export class Editor implements Component, Focusable {
 			}
 		}
 		this.renderedText = undefined;
+
+		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
+		const paddingX = Math.min(this.paddingX, maxPadding);
+		const contentWidth = Math.max(1, width - paddingX * 2);
+
+		// Layout width: with padding the cursor can overflow into it,
+		// without padding we reserve 1 column for the cursor.
+		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
+		this.lastWidth = layoutWidth;
 
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
@@ -948,6 +959,7 @@ export class Editor implements Component, Focusable {
 		if (!showAutocomplete) {
 			this.renderedText = {
 				width,
+				layoutWidth,
 				paddingX: this.paddingX,
 				terminalRows,
 				focused: this.focused,

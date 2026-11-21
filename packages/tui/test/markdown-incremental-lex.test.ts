@@ -113,6 +113,45 @@ After the definitions: [ref][one] again.
 	htmlInline: "a <b>bold</b> <!-- comment --> b\n\n<details>\n<summary>s</summary>\n\nbody\n\n</details>\n\nafter",
 };
 
+it("grows literal fence bodies and re-lexes closures and split line endings", () => {
+	for (const marker of ["```", "~~~~"]) {
+		for (const indent of ["", "  "]) {
+			let text = "";
+			const chunks = [
+				indent + marker + "ts",
+				"\n",
+				"let x",
+				" = '😀';",
+				" // internal " + marker + " stays in code",
+				"\nconst value = `inline`;",
+				"\n\n",
+				"  x",
+				"\r",
+				"\n",
+				"last line",
+				"\n",
+				marker.slice(0, -1),
+				"x",
+				"\n",
+				marker,
+				" ",
+				"\n",
+				"after",
+			];
+			for (const chunk of chunks) {
+				text += chunk;
+				const actual = JSON.stringify(lexMarkdownForTest(text));
+				setMarkdownCachingForTest(false);
+				try {
+					assert.strictEqual(actual, JSON.stringify(lexMarkdownForTest(text)), JSON.stringify(text));
+				} finally {
+					setMarkdownCachingForTest(true);
+				}
+			}
+		}
+	}
+});
+
 function random(seed: number): () => number {
 	let state = seed >>> 0 || 1;
 	return () => {
@@ -339,6 +378,34 @@ describe("Markdown lexing of a growing source", () => {
 				new Markdown(document, 1, 0, defaultMarkdownTheme, undefined, { complete: true }).render(72),
 				renderedFresh,
 			);
+		}
+	});
+
+	it("reuses closed spans in a growing paragraph and lets marked resolve its unfinished suffix", () => {
+		const prefix = "A sentence with `code.value` and **two words**. ".repeat(15);
+		const texts = [
+			prefix + "The result is *pending",
+			prefix + "The result is *pending* and [docs][id]",
+			prefix + "The result is *pending* and [docs][id]\n\n[id]: /doc",
+			prefix.replace("A sentence", "An edit") + "An unmatched ` and *tail*",
+			prefix + "A tail with café, 世界, 😄, a lone \ud800, and \u0000.",
+			prefix + "A tail with café, 世界, 😄, a lone \ud800, and \u0000. " + "x".repeat(5000),
+		];
+		const streamed = texts.map((text) => lexMarkdownForTest(text));
+		const first = streamed[0]![0]!;
+		const next = streamed[1]![0]!;
+		assert.ok(first.type === "paragraph" && next.type === "paragraph");
+		assert.ok(first.tokens && next.tokens);
+		assert.equal(first.tokens[1]!.type, "codespan");
+		assert.strictEqual(first.tokens[1], next.tokens[1]);
+
+		setMarkdownCachingForTest(false);
+		try {
+			for (const [i, text] of texts.entries()) {
+				assert.deepStrictEqual(streamed[i], lexMarkdownForTest(text));
+			}
+		} finally {
+			setMarkdownCachingForTest(true);
 		}
 	});
 

@@ -92,9 +92,10 @@ export function visibleStackEntries(
 	return visible;
 }
 
-function clampSize(size: number, entry: StackLayoutEntry): number {
+export function resolveStackSize(entry: StackLayoutEntry, intrinsicSize: number): number {
 	const min = Math.max(0, Math.floor(entry.minSize ?? 0));
 	const max = Math.max(min, Math.floor(entry.maxSize ?? Number.MAX_SAFE_INTEGER));
+	const size = typeof entry.basis === "number" ? entry.basis : intrinsicSize;
 	return Math.max(min, Math.min(max, Math.max(0, Math.floor(size))));
 }
 
@@ -155,11 +156,7 @@ export function allocateStackSizes(
 ): number[] {
 	const sizes: number[] = new Array(entries.length);
 	for (let index = 0; index < entries.length; index++) {
-		const entry = entries[index]!;
-		sizes[index] = clampSize(
-			entry.basis === undefined || entry.basis === "auto" ? (intrinsicSizes[index] ?? 0) : entry.basis,
-			entry,
-		);
+		sizes[index] = resolveStackSize(entries[index]!, intrinsicSizes[index] ?? 0);
 	}
 	if (availableSize === undefined) return sizes;
 

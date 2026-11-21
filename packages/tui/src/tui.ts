@@ -457,6 +457,11 @@ export class LiveLineArray implements LiveLines {
 	/** Drops the lines from `start` on, for the owner to add the new ones (push()), and records the change. */
 	edit(start: number): void {
 		this.lines.length = Math.min(this.lines.length, start);
+		this.markEdited(start);
+	}
+
+	/** Records an in-place update without discarding the unchanged lines that follow it. */
+	markEdited(start: number): void {
 		this.revision++;
 		this.starts.push(start);
 		if (this.starts.length > LIVE_LINE_EDITS_KEPT) this.starts.shift();
@@ -713,6 +718,8 @@ function notifyOwner(owner: Component, child: Component): void {
 interface ContainerLines {
 	width: number;
 	children: Component[];
+	/** Positions in completed blocks of the last rendered child list. The tail can grow and shrink independently. */
+	positions?: { end: number; byChild: Map<Component, number | number[]> };
 	/** The lines each child rendered to; for a child that renders live lines, those and the revision they were at (else -1). */
 	arrays: (readonly string[])[];
 	lives: (LiveLines | undefined)[];
@@ -743,6 +750,44 @@ function emptyContainerLines(width: number): ContainerLines {
 		unreported: [],
 		live: new LiveLineArray(),
 	};
+}
+
+/** Keep a small tail unindexed: appending and replacing the current response usually touches only these rows. */
+const CHILD_INDEX_BLOCK = 128;
+
+/** List each old occurrence before the structural change. Return false when the child no longer belonged to the layout. */
+function listChangedChild(before: ContainerLines, child: Component, tail: number, again: number[]): boolean {
+	const children = before.children;
+	// Index only when a child actually reports a change, and leave at least the final row outside the index.
+	const end = Math.floor((children.length - 1) / CHILD_INDEX_BLOCK) * CHILD_INDEX_BLOCK;
+	if (end > 0) {
+		before.positions ??= { end: 0, byChild: new Map() };
+		const index = before.positions;
+		while (index.end < end) {
+			const i = index.end++;
+			const item = children[i]!;
+			const existing = index.byChild.get(item);
+			if (existing === undefined) index.byChild.set(item, i);
+			else if (typeof existing === "number") index.byChild.set(item, [existing, i]);
+			else existing.push(i);
+		}
+	}
+	const indexed = before.positions?.byChild.get(child);
+	if (typeof indexed === "number") {
+		if (indexed < tail) again.push(indexed);
+	} else if (indexed) {
+		for (const i of indexed) {
+			if (i >= tail) break;
+			again.push(i);
+		}
+	}
+	let i = children.indexOf(child, before.positions?.end ?? 0);
+	const found = indexed !== undefined || i !== -1;
+	while (i !== -1 && i < tail) {
+		again.push(i);
+		i = children.indexOf(child, i + 1);
+	}
+	return found;
 }
 
 /** Whether `lines` are the `count` lines of `joined` from `offset` on. */
@@ -811,6 +856,8 @@ export class Container implements Component {
 	private changesUnlisted = false;
 	/** `children` was used, by which the array may have been changed: it is compared with the children rendered. */
 	private childrenUsed = false;
+	/** A caller can still edit this array through a reference obtained on an earlier frame. */
+	private childrenExposed = false;
 	/** This container's owners were told of a change since its last render. */
 	private changeReported = false;
 
@@ -819,12 +866,26 @@ export class Container implements Component {
 	 * to the containers it is in (markReportsChanges()).
 	 */
 	get children(): Component[] {
+		this.childrenExposed = true;
 		this.noteChildrenUsed();
 		return this.childList;
 	}
 
 	set children(children: Component[]) {
 		this.childList = children;
+		this.childrenExposed = true;
+		this.noteChildrenUsed();
+	}
+
+	/** Adopt a newly constructed list that no caller can still mutate. */
+	protected adoptChildren(children: Component[]): void {
+		this.childList = children;
+		this.childrenExposed = false;
+		this.noteChildrenUsed();
+	}
+
+	protected spliceChildren(index: number, count: number, ...insert: Component[]): void {
+		this.ownChildren().splice(index, count, ...insert);
 		this.noteChildrenUsed();
 	}
 
@@ -836,7 +897,17 @@ export class Container implements Component {
 		return Object.hasOwn(this, "children") ? (this as { children: Component[] }).children : this.childList;
 	}
 
-	private noteChildrenUsed(): void {
+	/** Inspect the current children without handing out a mutable list or invalidating the rendered layout. */
+	protected get childView(): readonly Component[] {
+		return this.ownChildren();
+	}
+
+	protected replaceChildAt(index: number, component: Component): void {
+		this.ownChildren()[index] = component;
+		this.noteChildrenUsed();
+	}
+
+	protected noteChildrenUsed(): void {
 		this.childrenUsed = true;
 		this.reportChange();
 	}
@@ -882,7 +953,8 @@ export class Container implements Component {
 
 	addChild(component: Component): void {
 		this.ownChildren().push(component);
-		this.noteChildrenUsed();
+		if (this.childrenExposed) this.noteChildrenUsed();
+		else this.reportChange();
 	}
 
 	removeChild(component: Component): void {
@@ -897,6 +969,7 @@ export class Container implements Component {
 	clear(): void {
 		if (Object.hasOwn(this, "children")) (this as { children: Component[] }).children = [];
 		else this.childList = [];
+		this.childrenExposed = false;
 		this.noteChildrenUsed();
 	}
 
@@ -910,6 +983,15 @@ export class Container implements Component {
 		}
 		this.reportChange();
 	}
+
+	/** Height from the most recent layout, when this child still occupies the same index at this width. */
+	protected renderedChildHeight(child: Component, index: number, width: number): number | undefined {
+		const rendered = this.rendered;
+		return rendered?.width === width && rendered.children[index] === child ? rendered.heights[index] : undefined;
+	}
+
+	/** Called when a child (or one of its descendants) handles a mouse event. */
+	protected onChildMouseHandled?(child: Component): void;
 
 	handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
 		if (event.y < 0 || event.y >= event.height) return undefined;
@@ -926,6 +1008,7 @@ export class Container implements Component {
 					y: event.y - childY,
 					height: childHeight,
 				});
+				if (result) this.onChildMouseHandled?.(child);
 				if (result?.focus && (this as Component).handleInput) return { ...result, focusTarget: this };
 				return result;
 			}
@@ -964,12 +1047,15 @@ export class Container implements Component {
 
 		// From `tail` on, the children may not be those rendered at the same places.
 		let tail = count;
-		if (this.childrenUsed || renderAll || beforeCount !== count) {
+		if (this.childrenUsed || renderAll || this.childrenExposed) {
 			this.childrenUsed = false;
 			const common = Math.min(count, beforeCount);
 			let index = 0;
 			while (index < common && children[index] === before.children[index]) index++;
 			if (index < common || count !== beforeCount) tail = index;
+		} else if (count > beforeCount) {
+			// Only addChild() can extend the private list without flagging an arbitrary edit.
+			tail = beforeCount;
 		}
 
 		// The children before `tail` to render again: those reported, and those that do not report their changes.
@@ -983,9 +1069,7 @@ export class Container implements Component {
 			// every frame.)
 			for (let i = 0; i < changed.length; i++) {
 				const child = changed[i]!;
-				const index = before.children.lastIndexOf(child);
-				if (index === -1) dropRenderOwner(child, this);
-				else if (index < tail) again.push(index);
+				if (!listChangedChild(before, child, tail, again)) dropRenderOwner(child, this);
 			}
 			const unreported = before.unreported;
 			for (let i = 0; i < unreported.length; i++) {
@@ -1000,16 +1084,22 @@ export class Container implements Component {
 		}
 
 		let changeAt = Number.POSITIVE_INFINITY;
+		let replacements: { index: number; from: number }[] | undefined;
 		/** The first child whose recorded lines or height may differ from those of the render before. */
 		let firstChanged = tail;
-		let reportsChanged = false;
+		let reportsChangedFrom = Number.POSITIVE_INFINITY;
 		for (let i = 0; i < again.length; i++) {
 			const index = again[i]!;
 			const child = children[index]!;
 			const rendered = renderChildForContainer(this, child, width);
 			const changedFrom = childChangedFrom(before, index, child, rendered, joined, before.offsets[index]!);
 			if (changedFrom !== Number.POSITIVE_INFINITY) {
-				changeAt = Math.min(changeAt, before.offsets[index]! + changedFrom);
+				if (index < firstChanged && index + 1 < count && rendered.lines.length === before.heights[index]) {
+					replacements ??= [];
+					replacements.push({ index, from: changedFrom });
+				} else {
+					changeAt = Math.min(changeAt, before.offsets[index]! + changedFrom);
+				}
 			}
 			if (rendered.lines.length !== before.heights[index]) firstChanged = Math.min(firstChanged, index);
 			before.arrays[index] = rendered.lines;
@@ -1019,7 +1109,7 @@ export class Container implements Component {
 			const reports = reportsChanges(child);
 			if (reports !== before.reports[index]) {
 				before.reports[index] = reports;
-				reportsChanged = true;
+				reportsChangedFrom = Math.min(reportsChangedFrom, index);
 			}
 		}
 
@@ -1069,6 +1159,7 @@ export class Container implements Component {
 				offset += rendered.lines.length;
 			}
 			if (changeAt === Number.POSITIVE_INFINITY && count !== beforeCount) changeAt = offset;
+			if (before.positions && tail < before.positions.end) before.positions = undefined;
 			before.children.length = tail;
 			before.arrays.length = tail;
 			before.lives.length = tail;
@@ -1086,9 +1177,26 @@ export class Container implements Component {
 				before.offsets.push(0);
 				before.reports.push(tailReports[i]!);
 			}
-			reportsChanged = true;
+			reportsChangedFrom = Math.min(reportsChangedFrom, tail);
 		}
 
+		let firstReplacement = Number.POSITIVE_INFINITY;
+		if (replacements) {
+			// Render siblings before writing, so comparisons above always see the previous frame.
+			for (const { index, from } of replacements) {
+				const offset = before.offsets[index]!;
+				const live = before.lives[index];
+				if (live && live.revision !== before.revisions[index]) {
+					// Another owner rendered the same live child. Restore its width and offsets in the suffix pass.
+					changeAt = Math.min(changeAt, offset);
+					firstChanged = Math.min(firstChanged, index);
+					break;
+				}
+				const lines = before.arrays[index]!;
+				for (let j = from; j < lines.length; j++) joined[offset + j] = lines[j]!;
+				firstReplacement = Math.min(firstReplacement, offset + from);
+			}
+		}
 		if (changeAt !== Number.POSITIVE_INFINITY) {
 			// The first child whose lines are joined again: the one changeAt is in (or the first after it).
 			let first = Math.min(firstChanged, count);
@@ -1115,9 +1223,10 @@ export class Container implements Component {
 				offset += before.heights[i]!;
 			}
 		}
+		const firstEdit = Math.min(firstReplacement, changeAt);
+		if (firstEdit !== Number.POSITIVE_INFINITY) before.live.markEdited(firstEdit);
 		if (changeAt !== Number.POSITIVE_INFINITY) {
-			const live = before.live;
-			live.edit(changeAt);
+			joined.length = Math.min(joined.length, changeAt);
 			for (let i = firstChanged; i < count; i++) {
 				const end = before.offsets[i]! + before.heights[i]!;
 				if (end <= changeAt) continue;
@@ -1125,11 +1234,13 @@ export class Container implements Component {
 				for (let j = Math.max(0, changeAt - before.offsets[i]!); j < lines.length; j++) joined.push(lines[j]!);
 			}
 		}
-		if (reportsChanged) {
-			before.unreported.length = 0;
-			for (let i = 0; i < count; i++) if (!before.reports[i]) before.unreported.push(i);
+		if (reportsChangedFrom !== Number.POSITIVE_INFINITY) {
+			// The indexes are sorted. Appending a row preserves every earlier reporting decision.
+			const unreported = before.unreported;
+			while (unreported.length && unreported[unreported.length - 1]! >= reportsChangedFrom) unreported.pop();
+			for (let i = reportsChangedFrom; i < count; i++) if (!before.reports[i]) unreported.push(i);
 		}
-		setSubtreeReportsChanges(this, !shadowed && before.unreported.length === 0);
+		setSubtreeReportsChanges(this, !this.childrenExposed && !shadowed && before.unreported.length === 0);
 		return before.live;
 	}
 
@@ -2210,12 +2321,12 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
-	protected compositeOverlays(lines: string[], termWidth: number, termHeight: number): string[] {
+	protected compositeOverlays(lines: string[], termWidth: number, termHeight: number, inPlace = false): string[] {
 		if (this.overlayStack.length === 0) {
 			this.renderedOverlayLayouts = [];
 			return lines;
 		}
-		const result = [...lines];
+		const result = inPlace ? lines : [...lines];
 
 		for (const entry of this.overlayStack) entry.bounds = undefined;
 
@@ -2288,7 +2399,11 @@ export abstract class TuiBase extends Container implements TUI {
 		const reset = SEGMENT_RESET;
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
-			if (!isImageLine(line)) {
+			if (!line) {
+				lines[i] = reset;
+			} else if (!line.includes("\x1b")) {
+				lines[i] = normalizeTerminalOutput(line) + reset;
+			} else if (!isImageLine(line)) {
 				// Cursor markers are internal render metadata and must never reach terminal output.
 				lines[i] = normalizeTerminalOutput(line.replaceAll(CURSOR_MARKER, "")) + reset;
 			}
@@ -2341,11 +2456,13 @@ export abstract class TuiBase extends Container implements TUI {
 	 * of components without focus have no CURSOR_MARKER and stay visible.
 	 */
 	protected resolveFakeCursors(lines: string[]): string[] {
-		return lines.map((line) => {
-			if (!line.includes(FAKE_CURSOR_START)) return line;
-			const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
-			return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
-		});
+		return lines.map((line) => this.resolveFakeCursorLine(line));
+	}
+
+	protected resolveFakeCursorLine(line: string): string {
+		if (!line.includes(FAKE_CURSOR_START)) return line;
+		const resolved = this.showHardwareCursor ? line.replace(FOCUSED_FAKE_CURSOR, "$1$2") : line;
+		return resolved.replaceAll(FAKE_CURSOR_START, "\x1b[7m").replaceAll(FAKE_CURSOR_END, "\x1b[27m");
 	}
 
 	/**

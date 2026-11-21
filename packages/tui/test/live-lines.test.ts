@@ -4,7 +4,14 @@ import { Markdown, setMarkdownCachingForTest } from "../src/components/markdown.
 import { MouseRegion } from "../src/components/mouse-region.ts";
 import { Spacer } from "../src/components/spacer.ts";
 import { Text } from "../src/components/text.ts";
-import { type Component, Container, LiveLineArray, type LiveLines, renderLiveLines } from "../src/tui.ts";
+import {
+	type Component,
+	Container,
+	LiveLineArray,
+	type LiveLines,
+	markLiveRender,
+	renderLiveLines,
+} from "../src/tui.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 
 // Containers and Markdown change their lines in place (LiveLines) for readers that read them again from the line
@@ -239,4 +246,68 @@ describe("live lines", () => {
 			}
 		});
 	}
+});
+
+describe("in-place transcript updates", () => {
+	it("reports a single revision for fixed-height edits combined with growth, shrinkage and append", () => {
+		const container = new Container();
+		const head = ["a", "b"];
+		const middle = ["c"];
+		const tail = ["d", "e"];
+		for (const lines of [head, middle, tail]) container.addChild({ render: () => lines, invalidate() {} });
+		const live = renderLiveLines(container, 40)!;
+		const snapshot = container.renderShared(40);
+		const follower = new Follower();
+		follower.read(live);
+		const check = (want: string[]) => {
+			const revision = live.revision;
+			assert.strictEqual(renderLiveLines(container, 40), live);
+			assert.strictEqual(live.revision, revision + 1);
+			assert.deepStrictEqual(follower.read(live), want);
+			assert.deepStrictEqual(live.lines, want);
+		};
+		head[1] = "B";
+		middle.push("C");
+		tail[1] = "E";
+		container.addChild(new Spacer(1));
+		check(["a", "B", "c", "C", "d", "E", ""]);
+		head[0] = "A";
+		middle.length = 0;
+		check(["A", "B", "d", "E", ""]);
+		tail[0] = "D";
+		check(["A", "B", "D", "E", ""]);
+		assert.deepStrictEqual(snapshot, ["a", "b", "c", "d", "e"]);
+	});
+	it("restores a shared live row at the container width when a later sibling renders it elsewhere", () => {
+		let value = "first";
+		class SharedRow {
+			readonly output = new LiveLineArray();
+			render(width: number): string[] {
+				this.output.edit(0);
+				this.output.lines.push(value);
+				if (width === 40) this.output.lines.push("wide");
+				return this.output.lines;
+			}
+			invalidate() {}
+		}
+		markLiveRender(SharedRow.prototype.render, function (width) {
+			assert.ok(this instanceof SharedRow);
+			this.render(width);
+			return this.output;
+		});
+		const row = new SharedRow();
+		const root = new Container();
+		root.addChild(row);
+		root.addChild({
+			render() {
+				renderLiveLines(row, 20);
+				return ["sibling"];
+			},
+			invalidate() {},
+		});
+		const frame = renderLiveLines(root, 40)!;
+		assert.deepStrictEqual(frame.lines, ["first", "wide", "sibling"]);
+		value = "second";
+		assert.deepStrictEqual(renderLiveLines(root, 40)!.lines, ["second", "wide", "sibling"]);
+	});
 });

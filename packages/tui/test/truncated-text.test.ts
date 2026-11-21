@@ -2,12 +2,25 @@ import assert from "node:assert";
 import { describe, it } from "node:test";
 import { Chalk } from "chalk";
 import { TruncatedText } from "../src/components/truncated-text.ts";
+import { Container } from "../src/tui.ts";
 import { visibleWidth } from "../src/utils.ts";
 
 // Force full color in CI so ANSI assertions are deterministic
 const chalk = new Chalk({ level: 3 });
 
 describe("TruncatedText component", () => {
+	it("updates an attached row without changing a previously rendered frame", () => {
+		const parent = new Container();
+		const row = new TruncatedText("first");
+		parent.addChild(row);
+		const before = parent.render(5);
+		row.setText("second");
+		assert.deepStrictEqual(parent.render(5), new TruncatedText("second").render(5));
+		assert.deepStrictEqual(before, ["first"]);
+		row.setText("second");
+		assert.deepStrictEqual(parent.render(8), ["second  "]);
+	});
+
 	it("pads output lines to exactly match width", () => {
 		const text = new TruncatedText("Hello world", 1, 0);
 		const lines = text.render(50);

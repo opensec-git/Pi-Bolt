@@ -1,4 +1,4 @@
-import type { Component } from "../tui.ts";
+import { type Component, markReportsChanges, reportRenderChange } from "../tui.ts";
 import { truncateToWidth, visibleWidth } from "../utils.ts";
 
 /**
@@ -15,8 +15,14 @@ export class TruncatedText implements Component {
 		this.paddingY = paddingY;
 	}
 
+	setText(text: string): void {
+		if (text === this.text) return;
+		this.text = text;
+		reportRenderChange(this);
+	}
+
 	invalidate(): void {
-		// No cached state to invalidate currently
+		reportRenderChange(this);
 	}
 
 	render(width: number): string[] {
@@ -63,3 +69,5 @@ export class TruncatedText implements Component {
 		return result;
 	}
 }
+
+markReportsChanges(TruncatedText);

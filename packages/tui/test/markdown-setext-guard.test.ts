@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { lexMarkdownForTest, setMarkdownCachingForTest, setSetextGuardForTest } from "../src/components/markdown.ts";
+import {
+	lexMarkdownForTest,
+	Markdown,
+	setMarkdownCachingForTest,
+	setSetextGuardForTest,
+} from "../src/components/markdown.ts";
+import { defaultMarkdownTheme } from "./test-themes.ts";
 
 // marked's lheading rule is skipped where it cannot match (mayStartSetextHeading()). The tokens must be the same as with the
 // rule tried at every block.
@@ -106,13 +112,50 @@ describe("markdown setext guard", () => {
 
 	it("an underline far below the start, past the lines the guard reads", () => {
 		for (const at of [1, 30, 63, 64, 65, 100]) {
-			for (const kind of ["===", "---", "   ---", "    ---"]) {
+			for (const kind of ["===", "---", " =", "  --", "   ===  ", "   ---", "    ---", "===x", "hyphen-here"]) {
 				const lines = Array.from({ length: 120 }, (_, i) => `line ${i} of a paragraph`);
 				lines[at] = kind;
 				const source = lines.join("\n");
 				const { guarded, plain } = lexBoth(source);
 				assert.strictEqual(guarded, plain, `${kind} at ${at}`);
 			}
+		}
+	});
+
+	it("renders each prefix and edit of a late underline like a fresh unguarded parse", () => {
+		const paragraph = "a mid-line hyphen and x=y\n".repeat(80);
+		const tails = [
+			"",
+			" ",
+			"  ",
+			"   ",
+			"   =",
+			"   ==",
+			"   ===  ",
+			"   ===  \n",
+			"   ===x",
+			"    ===",
+			"  ---",
+			"\n---",
+			"end",
+		];
+		const component = new Markdown("", 0, 0, defaultMarkdownTheme);
+		try {
+			for (const tail of tails) {
+				const source = paragraph + tail;
+				setSetextGuardForTest(true);
+				setMarkdownCachingForTest(true);
+				component.setText(source);
+				const actual = component.render(60);
+
+				setSetextGuardForTest(false);
+				setMarkdownCachingForTest(false);
+				const expected = new Markdown(source, 0, 0, defaultMarkdownTheme).render(60);
+				assert.deepStrictEqual(actual, expected, JSON.stringify(tail));
+			}
+		} finally {
+			setSetextGuardForTest(true);
+			setMarkdownCachingForTest(true);
 		}
 	});
 

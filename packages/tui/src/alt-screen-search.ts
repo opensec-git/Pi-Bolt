@@ -6,7 +6,6 @@ import { getGraphemeSegmenter, stripTerminalSequences, truncateToWidth, visibleW
 interface SearchSourceSpan {
 	textStart: number;
 	textEnd: number;
-	row: number;
 	startCol: number;
 	endCol: number;
 	linearColumns: boolean;
@@ -14,7 +13,10 @@ interface SearchSourceSpan {
 
 interface SearchCorpus {
 	text: string;
-	spans: SearchSourceSpan[];
+	/** End of normalized text through each row, including preceding separators. */
+	rowEnds: number[];
+	/** True where a normalized UTF-16 offset is already a terminal column. */
+	directColumns: boolean[];
 }
 
 export interface AltScreenSearchSegment {
@@ -29,78 +31,62 @@ export interface AltScreenSearchMatch {
 
 const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 
-function buildSearchCorpus(lines: readonly string[]): SearchCorpus {
-	const chunks: string[] = [];
-	const spans: SearchSourceSpan[] = [];
-	let textLength = 0;
-	let pendingSeparator = false;
+/** Normalize one row. Column mappings are needed only while emitting a match on this row. */
+function normalizeRow(plain: string, offset: number, spans?: SearchSourceSpan[]): string {
+	if (!spans && PRINTABLE_ASCII.test(plain)) return plain.trim().replace(/ {2,}/g, " ");
 
-	const appendSeparator = (): void => {
-		if (!pendingSeparator) return;
-		chunks.push(" ");
-		textLength += 1;
-		pendingSeparator = false;
-	};
-
-	for (let row = 0; row < lines.length; row++) {
-		const line = stripTerminalSequences(lines[row] ?? "");
-		let column = 0;
-
-		// Rendered transcripts are overwhelmingly ASCII. Index complete non-space
-		// runs at once instead of segmenting and allocating one mapping per cell.
-		if (PRINTABLE_ASCII.test(line)) {
-			let index = 0;
-			while (index < line.length) {
-				if (line.charCodeAt(index) === 0x20) {
-					if (textLength > 0) pendingSeparator = true;
-					column += 1;
-					index += 1;
-					continue;
-				}
-				let end = index + 1;
-				while (end < line.length && line.charCodeAt(end) !== 0x20) end += 1;
-				appendSeparator();
-				const text = line.slice(index, end);
-				chunks.push(text);
-				spans.push({
-					textStart: textLength,
-					textEnd: textLength + text.length,
-					row,
-					startCol: column,
-					endCol: column + text.length,
-					linearColumns: true,
-				});
-				textLength += text.length;
-				column += text.length;
-				index = end;
-			}
+	let result = "";
+	let separator = false;
+	let column = 0;
+	const ascii = PRINTABLE_ASCII.test(plain);
+	const append = (text: string, width: number, space: boolean): void => {
+		if (space) {
+			separator = result.length > 0;
 		} else {
-			for (const grapheme of getGraphemeSegmenter().segment(line)) {
-				const text = grapheme.segment;
-				const width = visibleWidth(text);
-				if (/^\s+$/u.test(text)) {
-					if (textLength > 0) pendingSeparator = true;
-					column += width;
-					continue;
-				}
-				appendSeparator();
-				chunks.push(text);
-				spans.push({
-					textStart: textLength,
-					textEnd: textLength + text.length,
-					row,
-					startCol: column,
-					endCol: column + width,
-					linearColumns: false,
-				});
-				textLength += text.length;
-				column += width;
-			}
+			if (separator) result += " ";
+			const start = offset + result.length;
+			result += text;
+			spans?.push({
+				textStart: start,
+				textEnd: offset + result.length,
+				startCol: column,
+				endCol: column + width,
+				linearColumns: ascii,
+			});
+			separator = false;
 		}
-		if (textLength > 0) pendingSeparator = true;
+		column += width;
+	};
+	if (ascii) {
+		for (const run of plain.matchAll(/ +|[^ ]+/g)) append(run[0], run[0].length, run[0][0] === " ");
+	} else {
+		for (const { segment } of getGraphemeSegmenter().segment(plain)) {
+			append(segment, spans ? visibleWidth(segment) : 0, /^\s+$/u.test(segment));
+		}
 	}
+	return result;
+}
 
-	return { text: chunks.join(""), spans };
+function buildSearchCorpus(lines: readonly string[], from = 0, previous?: SearchCorpus): SearchCorpus {
+	const rowEnds = previous?.rowEnds ?? [];
+	const directColumns = previous?.directColumns ?? [];
+	let length = from > 0 ? rowEnds[from - 1]! : 0;
+	const chunks = length > 0 ? [previous!.text.slice(0, length)] : [];
+	for (let row = from; row < lines.length; row++) {
+		const plain = stripTerminalSequences(lines[row] ?? "");
+		const direct = PRINTABLE_ASCII.test(plain) && !plain.startsWith(" ") && !plain.includes("  ");
+		directColumns[row] = direct;
+		const text = direct ? plain.trimEnd() : normalizeRow(plain, 0);
+		if (text) {
+			if (length > 0) length++;
+			length += text.length;
+			chunks.push(text);
+		}
+		rowEnds[row] = length;
+	}
+	rowEnds.length = lines.length;
+	directColumns.length = lines.length;
+	return { text: chunks.join(" "), rowEnds, directColumns };
 }
 
 function normalizeQuery(query: string): string {
@@ -111,35 +97,87 @@ function escapeRegExp(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findSearchCorpusMatches(corpus: SearchCorpus, normalizedQuery: string): AltScreenSearchMatch[] {
-	if (!normalizedQuery) return [];
-	const expression = new RegExp(escapeRegExp(normalizedQuery), "giu");
-	const matches: AltScreenSearchMatch[] = [];
-	let spanIndex = 0;
+/** The first offset strictly beyond the unchanged prefix. */
+function firstEndAfter(ends: readonly number[], offset: number): number {
+	let low = 0;
+	let high = ends.length;
+	while (low < high) {
+		const mid = low + Math.floor((high - low) / 2);
+		if (ends[mid]! <= offset) low = mid + 1;
+		else high = mid;
+	}
+	return low;
+}
 
+function findSearchCorpusMatches(
+	corpus: SearchCorpus,
+	lines: readonly string[],
+	normalizedQuery: string,
+	matches: AltScreenSearchMatch[] = [],
+	matchEnds?: number[],
+	unchangedLength = 0,
+): AltScreenSearchMatch[] {
+	if (!normalizedQuery) return matches;
+	const expression = new RegExp(escapeRegExp(normalizedQuery), "giu");
+	// Matches entirely inside the prefix were already found. Resume far enough back
+	// for a match crossing the edit. Unicode simple case folding matches one code
+	// point per literal, and a code point occupies at most two UTF-16 units.
+	const lastEnd = matchEnds?.[matchEnds.length - 1] ?? 0;
+	expression.lastIndex = Math.max(lastEnd, unchangedLength - 2 * normalizedQuery.length);
+	let row = firstEndAfter(corpus.rowEnds, expression.lastIndex);
+	let mappedRow = -1;
+	let spans: SearchSourceSpan[] = [];
+	let spanIndex = 0;
+	let directColumns = false;
 	for (const match of corpus.text.matchAll(expression)) {
 		const start = match.index;
 		const end = start + match[0].length;
-		while (spanIndex < corpus.spans.length && corpus.spans[spanIndex]!.textEnd <= start) spanIndex += 1;
-
+		while (corpus.rowEnds[row]! <= start) row++;
 		const segments: AltScreenSearchSegment[] = [];
-		for (let index = spanIndex; index < corpus.spans.length; index++) {
-			const span = corpus.spans[index]!;
-			if (span.textStart >= end) break;
-			if (span.textEnd <= start) continue;
-			const startCol = span.linearColumns
-				? span.startCol + Math.max(start, span.textStart) - span.textStart
-				: span.startCol;
-			const endCol = span.linearColumns ? span.startCol + Math.min(end, span.textEnd) - span.textStart : span.endCol;
-			const previous = segments[segments.length - 1];
-			if (previous && previous.row === span.row && startCol <= previous.endCol) {
-				previous.endCol = Math.max(previous.endCol, endCol);
-			} else {
-				segments.push({ row: span.row, startCol, endCol });
+		for (; row < lines.length; row++) {
+			const previousEnd = row === 0 ? 0 : corpus.rowEnds[row - 1]!;
+			const rowStart = previousEnd === 0 ? 0 : previousEnd + 1;
+			if (rowStart >= end) break;
+			if (corpus.rowEnds[row]! <= rowStart) continue; // blank row
+			if (mappedRow !== row) {
+				mappedRow = row;
+				directColumns = corpus.directColumns[row]!;
+				if (!directColumns) {
+					spans = [];
+					normalizeRow(stripTerminalSequences(lines[row] ?? ""), rowStart, spans);
+					spanIndex = 0;
+				}
 			}
+			if (directColumns) {
+				const stop = Math.min(end, corpus.rowEnds[row]!);
+				let pos = Math.max(start, rowStart);
+				while (pos < stop) {
+					const space = match[0].indexOf(" ", pos - start);
+					const wordEnd = space === -1 ? stop : Math.min(stop, start + space);
+					if (pos < wordEnd) segments.push({ row, startCol: pos - rowStart, endCol: wordEnd - rowStart });
+					pos = wordEnd + 1;
+				}
+			} else {
+				while (spanIndex < spans.length && spans[spanIndex]!.textEnd <= start) spanIndex++;
+				for (let i = spanIndex; i < spans.length; i++) {
+					const span = spans[i]!;
+					if (span.textStart >= end) break;
+					const startCol = span.linearColumns
+						? span.startCol + Math.max(0, start - span.textStart)
+						: span.startCol;
+					const endCol = span.linearColumns ? span.endCol - Math.max(0, span.textEnd - end) : span.endCol;
+					const prior = segments[segments.length - 1];
+					if (prior && prior.row === row && startCol <= prior.endCol)
+						prior.endCol = Math.max(prior.endCol, endCol);
+					else segments.push({ row, startCol, endCol });
+				}
+			}
+			if (corpus.rowEnds[row]! >= end) break;
 		}
-		while (spanIndex < corpus.spans.length && corpus.spans[spanIndex]!.textEnd <= end) spanIndex += 1;
-		if (segments.length > 0) matches.push({ segments });
+		if (segments.length > 0) {
+			matches.push({ segments });
+			matchEnds?.push(end);
+		}
 	}
 
 	return matches;
@@ -156,26 +194,44 @@ export class AltScreenSearchIndex {
 	private corpus: SearchCorpus | undefined;
 	private normalizedQuery: string | undefined;
 	private matches: AltScreenSearchMatch[] = [];
+	private readonly matchEnds: number[] = [];
 
 	search(lines: readonly string[], query: string): AltScreenSearchResult {
-		let sourceChanged = this.sourceLines?.length !== lines.length;
-		if (!sourceChanged && this.sourceLines) {
-			for (let index = 0; index < lines.length; index++) {
-				if (this.sourceLines[index] === lines[index]) continue;
-				sourceChanged = true;
-				break;
-			}
+		const before = this.sourceLines;
+		let from = 0;
+		if (before) {
+			const common = Math.min(before.length, lines.length);
+			while (from < common && before[from] === lines[from]) from++;
 		}
-		if (sourceChanged || !this.corpus) {
-			this.sourceLines = Array.from(lines);
-			this.corpus = buildSearchCorpus(lines);
+		const sourceChanged = !before || from !== before.length || from !== lines.length;
+		const prefixLength = from > 0 ? this.corpus!.rowEnds[from - 1]! : 0;
+		if (sourceChanged) {
+			const snapshot = before ?? [];
+			snapshot.length = lines.length;
+			for (let i = from; i < lines.length; i++) snapshot[i] = lines[i]!;
+			this.sourceLines = snapshot;
+			// A substring can retain the entire previous transcript. Rebuild the smaller
+			// corpus when truncation discards most of the normalized text.
+			const old = this.corpus;
+			const rebuild = old && prefixLength < old.text.length / 2;
+			this.corpus = buildSearchCorpus(lines, rebuild ? 0 : from, old);
 		}
 
 		const normalizedQuery = normalizeQuery(query);
 		const changed = sourceChanged || normalizedQuery !== this.normalizedQuery;
 		if (changed) {
+			const searchablePrefix = normalizedQuery === this.normalizedQuery ? prefixLength : 0;
+			const keep = firstEndAfter(this.matchEnds, searchablePrefix);
+			this.matchEnds.length = keep;
 			this.normalizedQuery = normalizedQuery;
-			this.matches = findSearchCorpusMatches(this.corpus, normalizedQuery);
+			this.matches = findSearchCorpusMatches(
+				this.corpus!,
+				lines,
+				normalizedQuery,
+				this.matches.slice(0, keep),
+				this.matchEnds,
+				searchablePrefix,
+			);
 		}
 		return { matches: this.matches, changed };
 	}
@@ -183,7 +239,7 @@ export class AltScreenSearchIndex {
 
 export function findAltScreenSearchMatches(lines: readonly string[], query: string): AltScreenSearchMatch[] {
 	const normalizedQuery = normalizeQuery(query);
-	return normalizedQuery ? findSearchCorpusMatches(buildSearchCorpus(lines), normalizedQuery) : [];
+	return normalizedQuery ? findSearchCorpusMatches(buildSearchCorpus(lines), lines, normalizedQuery) : [];
 }
 
 export function getAltScreenSearchMatchKey(match: AltScreenSearchMatch): string {

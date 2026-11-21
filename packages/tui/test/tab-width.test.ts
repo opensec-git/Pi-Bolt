@@ -85,6 +85,16 @@ describe("tab width accounting", () => {
 		}
 	});
 
+	it("expands only visible tabs among adjacent controls and incomplete escapes", () => {
+		const control = "\x1b]8;;a\tb\tc\x07";
+		assert.strictEqual(normalizeTerminalOutput(control + control), control + control);
+		assert.strictEqual(
+			normalizeTerminalOutput(`\t${control}\t\t${control}\x1b]unfinished\t`),
+			`   ${control}      ${control}\x1b]unfinished   `,
+		);
+		assert.strictEqual(normalizeTerminalOutput("\tA\t\t"), "   A      ");
+	});
+
 	it("keeps tab-containing overlays on one physical terminal row", async () => {
 		const terminal = new CapturingVirtualTerminal(16, 3);
 		const tui: TUI = new TuiMainScreen(terminal);
