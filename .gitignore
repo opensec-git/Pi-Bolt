@@ -81,3 +81,4 @@ __pycache__/
 
 # Copied from install.sh when the npm package is packed
 npm/install.sh
+packages/out/rapid-pi.exe
