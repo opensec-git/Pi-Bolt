@@ -1682,7 +1682,7 @@ export class Markdown implements Component {
 			const previous = this.paragraphWrap;
 			const checkpoint = previous && sameSettings(previous.settings, settings) ? previous.checkpoint : undefined;
 			if (isImageLine(paragraphText)) {
-				add(paragraphText);
+				addRendered(paragraphText);
 				this.paragraphWrap = undefined;
 			} else {
 				const wrapped = wrapStreamingParagraph(paragraphText, contentWidth, checkpoint);
