@@ -291,7 +291,13 @@ def main():
             print(f"{name}: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
 
         # The TUI session once untraced first: a session that fails on its own is the build's fault, not the tracer's.
-        check = Tty([exe, "--no-session", *MODEL_ARGS], env, cwd)
+        # (Started as an ordinary process: without the debugger flag set above, which no debugger would answer here.)
+        traced_flags = winproc.CREATE_SUSPENDED
+        winproc.CREATE_SUSPENDED = traced_flags & ~DEBUG_ONLY_THIS_PROCESS
+        try:
+            check = Tty([exe, "--no-session", *MODEL_ARGS], env, cwd)
+        finally:
+            winproc.CREATE_SUSPENDED = traced_flags
         check_deadline = time.perf_counter() + 300
         check_ok = check.wait_for("fake-model", 0, check_deadline)
         if check_ok:
