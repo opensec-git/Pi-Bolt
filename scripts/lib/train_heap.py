@@ -217,6 +217,7 @@ def trace(start, region_rva, ranges):
             elif exception != STATUS_BREAKPOINT:
                 status = DBG_EXCEPTION_NOT_HANDLED
         elif code == EXIT_PROCESS_DEBUG_EVENT:
+            trace.exit_code = struct.unpack_from("<I", u, 0)[0]
             k32.ContinueDebugEvent(event.dwProcessId, event.dwThreadId, DBG_CONTINUE)
             return order
         k32.ContinueDebugEvent(event.dwProcessId, event.dwThreadId, status)
@@ -344,14 +345,19 @@ def main():
         driver.start()
         touched.append(trace(start, strings.region_rva, ranges))
         driver.join(30)
+        tty = box.get("tty")
         if not box.get("ok"):
-            tty = box.get("tty")
-            if tty is not None:
-                # What the screen showed last, without escape sequences, to tell a hang from a changed screen.
-                screen = ANSI.sub(b"", tty.buf[-4000:]).decode("utf-8", "replace")
-                print(f"TUI: waiting for {box.get('step')}; ended: {tty.eof}; the output's last part:\n{screen}", flush=True)
-            sys.exit("TUI: the session did not complete")
-        box["tty"].console.close()
+            # The same session completed untraced above, so this is the tracer's: a guarded page that the kernel reads
+            # (a write straight from the heap) fails the call instead of trapping. What the run touched until then (its
+            # start and first frame) is kept, and the order is still this build's.
+            screen = ANSI.sub(b"", tty.buf[-4000:]).decode("utf-8", "replace") if tty is not None else ""
+            code = getattr(trace, "exit_code", None)
+            exit_text = "running" if code is None else f"exit code {code:#x}"
+            print(f"::warning::TUI traced: no {box.get('step')} ({exit_text}); the order keeps what it touched until then",
+                  flush=True)
+            print(f"TUI traced: the output's last part:\n{screen}", flush=True)
+        if tty is not None:
+            tty.console.close()
         print(f"TUI: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
     # --version's first (every run starts with what it touches), then the TUI's, then the headless run's.
     first_strings, seen_strings = [], set()
