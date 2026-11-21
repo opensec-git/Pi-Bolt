@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as fs from "fs";
@@ -126,5 +126,22 @@ describe("bulk session forks", () => {
 		const stored = readFileSync(fork.getSessionFile()!, "utf8").split("\n");
 		expect(stored.slice(1)).toEqual([...records, JSON.stringify(JSON.parse(number)), ""]);
 		expect(fork.getEntries()).toEqual(SessionManager.open(fork.getSessionFile()!).getEntries());
+	});
+
+	it("removes fork files left by a killed process, and keeps recent ones", () => {
+		const source = SessionManager.create(dir, dir);
+		source.appendMessage({ role: "user", content: "A", timestamp: 1 });
+		source.appendMessage({ role: "assistant", content: [{ type: "text", text: "B" }], timestamp: 2 } as never);
+		const target = join(dir, "target");
+		fs.mkdirSync(target);
+		const stale = join(target, ".fork-stale.tmp");
+		const recent = join(target, ".fork-recent.tmp");
+		writeFileSync(stale, "partial");
+		writeFileSync(recent, "partial");
+		const old = new Date(Date.now() - 60 * 60 * 1000);
+		utimesSync(stale, old, old);
+		SessionManager.forkFrom(source.getSessionFile()!, dir, target);
+		expect(existsSync(stale)).toBe(false);
+		expect(existsSync(recent)).toBe(true);
 	});
 });

@@ -659,6 +659,28 @@ function openSessionFile(path: string, flags: "w" | "wx" | "a"): number {
 	return fd;
 }
 
+/** A fork's temporary file older than this was left by a process that was killed while writing it. */
+const STALE_FORK_FILE_MS = 10 * 60 * 1000;
+
+function removeStaleForkFiles(dir: string): void {
+	let names: string[];
+	try {
+		names = readdirSync(dir);
+	} catch {
+		return;
+	}
+	const before = Date.now() - STALE_FORK_FILE_MS;
+	for (const name of names) {
+		if (!name.startsWith(".fork-") || !name.endsWith(".tmp")) continue;
+		try {
+			const path = join(dir, name);
+			if (statSync(path).mtimeMs < before) unlinkSync(path);
+		} catch {
+			// Removed meanwhile, or not ours to remove.
+		}
+	}
+}
+
 /** Write complete JSONL records in batches. A single record can exceed the batch size. */
 class SessionBatchWriter {
 	private batch = "";
@@ -2519,6 +2541,7 @@ export class SessionManager {
 		// The picker only discovers .jsonl files. Publish the complete fork exclusively after
 		// reading, canonicalizing and closing it. A malformed source cannot expose a partial branch.
 		const tempPath = join(dir, `.fork-${createSessionId()}.tmp`);
+		removeStaleForkFiles(dir);
 		const output: { writer?: SessionBatchWriter; path?: string } = {};
 		try {
 			try {
