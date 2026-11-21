@@ -11,6 +11,8 @@ isolated from the user's Pi configuration and from each other.
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import errno
 import json
 import os
 import re
@@ -86,6 +88,13 @@ def warm_page_cache(builds: list[Build]) -> None:
     for build in builds:
         # (A macOS build's pi is a launcher: the executable is pi-bin beside it.)
         paths = [*build.argv, *(os.path.join(os.path.dirname(p), "pi-bin") for p in build.argv if "/" in p)]
+        # Linux pi-start execs the pi beside the resolved launcher. Warm that inode
+        # too, including through PATH aliases: dirty build output skews Private_Dirty.
+        if sys.platform.startswith("linux"):
+            for arg in build.argv:
+                launcher = os.path.realpath(shutil.which(arg) or arg)
+                if os.path.basename(launcher) == "pi-start":
+                    paths.append(os.path.join(os.path.dirname(launcher), "pi"))
         for path in paths:
             if ("/" in path or os.sep in path) and os.path.isfile(path):
                 with open(path, "rb") as f:
@@ -266,8 +275,8 @@ def alive(pid: int) -> bool:
     return True
 
 
-def _rusage_macos(pid: int):
-    """proc_pid_rusage(RUSAGE_INFO_V4) as a list of its 64-bit fields after the UUID, or None if the process is gone."""
+def _rusage_macos(pid: int, flavor: int = 4):
+    """proc_pid_rusage as a list of its 64-bit fields after the UUID, or None if unavailable."""
     import ctypes
     global _libproc, _ticks_ns
     if "_libproc" not in globals():
@@ -277,7 +286,7 @@ def _rusage_macos(pid: int):
         libc.mach_timebase_info(timebase)
         _ticks_ns = timebase[0] / timebase[1]  # ri_*_time are in Mach absolute time units (24 MHz ticks on Apple silicon)
     buf = (ctypes.c_uint64 * 64)()
-    if _libproc.proc_pid_rusage(pid, 4, buf) != 0:
+    if _libproc.proc_pid_rusage(pid, flavor, buf) != 0:
         return None
     return list(buf)[2:]
 
@@ -351,26 +360,42 @@ class PeakOwnSampler:
         return self.peak_mb
 
 
+_TERMINAL_REPLIES = {
+    b"\x1b[c": b"\x1b[?62;22c",
+    b"\x1b]11;?": b"\x1b]11;rgb:0000/0000/0000\x1b\\",
+    b"\x1b[6n": b"\x1b[1;1R",
+}
+_TERMINAL_QUERIES = re.compile(b"|".join(map(re.escape, _TERMINAL_REPLIES)))
+_QUERY_OVERLAP = max(map(len, _TERMINAL_REPLIES)) - 1
+
+
+def _query_replies(buf: bytes, previous_length: int, *, cursor: bool = False):
+    # One read can contain several device queries or the tail of a split query.
+    # The keyboard and color probes each expect their own DA1 reply, in order.
+    for match in _TERMINAL_QUERIES.finditer(buf, max(0, previous_length - _QUERY_OVERLAP)):
+        if match.end() > previous_length and (cursor or match[0] != b"\x1b[6n"):
+            yield _TERMINAL_REPLIES[match[0]]
+
+
 class WinTty:
     """Tty's counterpart on Windows: Pi in a ConPTY, in a Job object. quit() returns (status, winproc.Usage)."""
 
     def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
         self.console = winproc.ConPty(argv, env, cwd, cols, rows, stderr=stderr)
         self.pid = self.console.proc.pid
+        self.eof = False
         self.buf = b""
 
     def pump(self, timeout):
         data = self.console.read(timeout)
         if not data:
+            self.eof = self.console.proc.poll() is not None
             return False
-        self.buf += data
         # (ConPTY answers most queries itself; these it passes on to the terminal, which is us.)
-        if b"\x1b[c" in data:
-            self.console.write(b"\x1b[?62;22c")
-        if b"\x1b]11;?" in data:
-            self.console.write(b"\x1b]11;rgb:0000/0000/0000\x1b\\")
-        if b"\x1b[6n" in data:
-            self.console.write(b"\x1b[1;1R")
+        previous_length = len(self.buf)
+        self.buf += data
+        for reply in _query_replies(self.buf, previous_length, cursor=True):
+            self.console.write(reply)
         return True
 
     def send(self, data: bytes):
@@ -384,7 +409,8 @@ class WinTty:
     screen_text = lambda self, *a: Tty.screen_text(self, *a)  # noqa: E731
 
     def quit(self, timeout=10):
-        self.send(b"/quit\r")
+        if not self.eof:
+            self.send(b"/quit\r")
         end = time.perf_counter() + timeout
         status = None
         while time.perf_counter() < end:
@@ -416,6 +442,7 @@ class Tty:
                 os.dup2(os.open(stderr, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)
             os.execvpe(argv[0], argv, env)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        self.eof = False
         self.buf = b""
 
     def pump(self, timeout):
@@ -424,13 +451,17 @@ class Tty:
             return False
         try:
             data = os.read(self.fd, 1 << 16)
-        except OSError:
+        except OSError as exc:
+            if exc.errno == errno.EIO:  # Linux PTY with its last slave closed.
+                self.eof = True
             return False
+        if not data:
+            self.eof = True
+            return False
+        previous_length = len(self.buf)
         self.buf += data
-        if b"\x1b[c" in data:
-            os.write(self.fd, b"\x1b[?62;22c")
-        if b"\x1b]11;?" in data:
-            os.write(self.fd, b"\x1b]11;rgb:0000/0000/0000\x1b\\")
+        for reply in _query_replies(self.buf, previous_length):
+            os.write(self.fd, reply)
         return True
 
     def send(self, data: bytes):
@@ -450,6 +481,8 @@ class Tty:
             self.pump(0.01)
             if needle in ANSI.sub(b"", self.buf[scan:]):
                 return True
+            if self.eof:
+                return False
             now = time.perf_counter()
             if STARTUP_IN_PROGRESS in ANSI.sub(b"", self.buf[startup_scan:]):
                 startup_scan = len(self.buf)
@@ -473,20 +506,22 @@ class Tty:
     def screen_text(self, since=0):
         return re.sub(r"\s+", " ", ANSI.sub(b" ", self.buf[since:]).decode("utf-8", "replace"))
 
-    def quit(self, timeout=10):
+    def quit(self, timeout=10, keep_tail=None):
         """Sends /quit; returns the exit status, or None if it had to be killed."""
-        if self.slow_quit:
+        if self.slow_quit and not self.eof:
             # (OpenCode opens its command menu on "/": Enter is sent once it is open.)
             self.send(b"/quit")
             end = time.perf_counter() + 0.3
             while time.perf_counter() < end:
                 self.pump(0.02)
             self.send(b"\r")
-        else:
+        elif not self.eof:
             self.send(b"/quit\r")
         end = time.perf_counter() + timeout
         while time.perf_counter() < end:
             self.pump(0.02)
+            if keep_tail is not None:
+                self.buf = self.buf[-keep_tail:]
             if MACOS:
                 # (Before it is reaped, if it has exited. If that cannot be told, wait4 below still can.)
                 self.peak_footprint_mb = peak_footprint_mb(self.pid, block=False) or None
@@ -502,19 +537,24 @@ class Tty:
         return None, ru
 
 
+if not (MACOS or WINDOWS):
+    _process_clock_id = ctypes.CDLL(None).clock_getcpuclockid
+    _process_clock_id.argtypes = (ctypes.c_int, ctypes.POINTER(ctypes.c_int))
+    _process_clock_id.restype = ctypes.c_int
+
+
 def cpu_ms(pid: int) -> float:
-    """CPU time of every thread of a live process: from schedstat (nanoseconds), on macOS from proc_pid_rusage, on Windows
-    from its cycles."""
+    """Cumulative CPU time of a live process, including work by threads that already exited."""
     if WINDOWS:
         return winproc.cpu_ms(pid)
     if MACOS:
         ri = _rusage_macos(pid)
         return (ri[0] + ri[1]) * _ticks_ns / 1e6 if ri else 0.0
-    total = 0
-    for tid in os.listdir(f"/proc/{pid}/task"):
-        with contextlib.suppress(OSError):
-            total += int(open(f"/proc/{pid}/task/{tid}/schedstat").read().split()[0])
-    return total / 1e6
+    clock_id = ctypes.c_int()
+    err = _process_clock_id(pid, ctypes.byref(clock_id))
+    if err:
+        raise OSError(err, os.strerror(err))
+    return time.clock_gettime_ns(clock_id.value) / 1e6
 
 
 def memory_mb(pid: int) -> dict:

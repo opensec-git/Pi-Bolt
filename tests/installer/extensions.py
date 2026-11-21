@@ -4,10 +4,13 @@
 Run with: python3 tests/installer/extensions.py
 """
 
+import hashlib
+import json
 import os
 from pathlib import Path
 import select
 import subprocess
+import tarfile
 import tempfile
 import time
 import unittest
@@ -58,6 +61,135 @@ class ExtensionInstallTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX executable permissions")
     def test_installer_is_executable(self):
         self.assertTrue(os.access(ROOT / "install.sh", os.X_OK))
+
+    @unittest.skipIf(os.name == "nt", "POSIX installer")
+    def test_standalone_jit_command_alongside_default(self):
+        with tempfile.TemporaryDirectory(prefix="installer-jit-") as directory:
+            root = Path(directory).resolve()
+            runner = root / "install.sh"
+            functions = (ROOT / "install.sh").read_text().rsplit('main "$@"', 1)[0]
+            runner.write_text(functions + '\nuname() { case "$1" in -s) echo Darwin ;; -m) echo arm64 ;; esac; }\n'
+                              'sw_vers() { echo 13; }\nmain "$@"\n')
+            env = {k: v for k, v in os.environ.items() if not k.startswith("PIBOLT_")}
+            env.update(HOME=str(root), PIBOLT_EXTENSIONS="no", PIBOLT_NO_START="1", PIBOLT_YES="1")
+            primary = root / ".local/bin/pi-bolt"
+            jit = root / ".pi-bolt/pi-bolt-jit"
+
+            # Standalone installers can test local fixtures from before signing with a pinned checksum list.
+            def release(version):
+                mirror = root / version
+                mirror.mkdir()
+                sums = f"# pi-bolt {version}\n"
+                for variant in ("arm64", "arm64-jit"):
+                    name = f"pi-bolt-darwin-{variant}"
+                    build = mirror / name
+                    build.mkdir()
+                    binary = build / "pi"
+                    binary.write_text('#!/bin/sh\ncase "$1" in list|service) echo "$PWD|$0|$*" >>"$HOME/commands";; esac\n'
+                                      'if [ "$1" = service ]; then exit 7; fi\n'
+                                      f'echo "{version} {variant}"\n')
+                    binary.chmod(0o755)
+                    (build / "pi-bolt.txt").write_text(f"Pi-Bolt {version} fixture\n")
+                    archive = mirror / f"{name}.tar.gz"
+                    with tarfile.open(archive, "w:gz") as tar:
+                        tar.add(build, arcname=name)
+                    sums += f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n"
+                (mirror / "SHA256SUMS").write_text(sums)
+                env.update(PIBOLT_VERSION=f"bolt-v{version}", PIBOLT_DOWNLOAD_BASE=mirror.as_uri(),
+                           PIBOLT_UNVERIFIED=hashlib.sha256(sums.encode()).hexdigest())
+
+            def install(build, restart=True, **options):
+                log = root / "commands"
+                log.write_text("")
+                result = subprocess.run(["sh", str(runner)], env={**env, **options}, text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True)
+                prefix = f"{root}/.pi-bolt|{root}/.pi-bolt/pi-bolt-darwin-{build}/pi|"
+                commands = ["list", "service restart"] if restart else ["list"]
+                self.assertEqual(log.read_text().splitlines(), [prefix + command for command in commands])
+                return result.stdout
+
+            release("0.5.90")
+            install("arm64")
+            original = primary.resolve(strict=True)
+            self.assertEqual(original.parent.name, "pi-bolt-darwin-arm64")
+            self.assertFalse(jit.exists())
+            jit.write_text("existing file")
+            self.assertIn("Use the JIT executable directly.",
+                          install("arm64-jit", restart=False, PIBOLT_VARIANT="jit", PIBOLT_NO_PATH="1"))
+            self.assertEqual(jit.read_text(), "existing file")
+            jit.unlink()
+            for version, variant in [("0.5.90", "jit"), ("0.5.91", "arm64-jit")]:  # Updater passes the concrete variant.
+                if version == "0.5.91":
+                    release(version)
+                output = install("arm64-jit", restart=False, PIBOLT_VARIANT=variant, PIBOLT_NO_PATH="1")
+                self.assertIn("Run it with: ~/.pi-bolt/pi-bolt-jit", output)
+                self.assertEqual(primary.resolve(strict=True), original)
+                self.assertEqual(jit.resolve(strict=True).parent.name, "pi-bolt-darwin-arm64-jit")
+                self.assertEqual(subprocess.check_output([jit, "--version"], text=True).strip(), f"{version} arm64-jit")
+            previous = jit.resolve().parent.with_suffix(".previous") / "pi"
+            self.assertEqual(subprocess.check_output([previous, "--version"], text=True).strip(), "0.5.90 arm64-jit")
+            install("arm64", PIBOLT_VARIANT="arm64", PIBOLT_NO_PATH="1")  # Updating the primary restarts it.
+            install("arm64-jit", PIBOLT_VARIANT="jit")
+            self.assertEqual(primary.resolve(strict=True), jit.resolve(strict=True))
+            install("arm64-jit", PIBOLT_VARIANT="arm64-jit", PIBOLT_NO_PATH="1")  # JIT is now the primary.
+            output = run_in_terminal(["/bin/sh", str(runner)], root, {**env, "PIBOLT_YES": "0", "PIBOLT_VARIANT": "jit"},
+                                     [("Choose an action", "u")])
+            self.assertIn("Pi-Bolt was uninstalled.", output)
+            self.assertFalse(jit.is_symlink())
+            self.assertFalse(primary.is_symlink())
+            self.assertFalse(previous.exists())
+
+    @unittest.skipIf(os.name == "nt", "POSIX installer")
+    def test_linux_path_command_follows_the_active_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            install = root / "install's $(echo injected)"
+            package = install / "pi-bolt-linux-x64"
+            package.mkdir(parents=True)
+            (package / "pi-bolt.txt").write_text("Pi-Bolt 1.3.0 test\n")
+            binary = package / "pi"
+            binary.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
+                              'print(json.dumps([sys.argv, os.getcwd(), os.getpid(), os.environ.get("MARKER")]))\n')
+            binary.chmod(0o755)
+            runner = root / "installer"
+            source = (ROOT / "install.sh").read_text().rsplit('main "$@"', 1)[0]
+            # Supply an already extracted local package. Exercise the normal post-install and menu paths.
+            runner.write_text(source + '\nuname() { case "$1" in -s) echo Linux;; -m) echo x86_64;; esac; }\n'
+                              'is_musl() { return 1; }\npreflight() { :; }\ninstall_release() { :; }\nmain "$@"\n')
+            env = {"HOME": str(root), "PATH": os.environ["PATH"], "MARKER": "passed through",
+                   "PIBOLT_INSTALL": str(install), "PIBOLT_VERSION": "bolt-v1.3.0", "PIBOLT_VARIANT": "x64",
+                   "PIBOLT_YES": "1", "PIBOLT_NO_START": "1", "PIBOLT_EXTENSIONS": "no"}
+            public = root / ".local/bin/pi-bolt"
+            def reinstall(**extra):
+                subprocess.run(["sh", runner], cwd=root, env={**env, **extra}, check=True, stdout=subprocess.PIPE)
+            def check_run(expected):
+                args = ["", "two words", "π"]
+                with subprocess.Popen([public, *args], cwd=root, env=env, stdout=subprocess.PIPE) as proc:
+                    output, _ = proc.communicate(timeout=5)
+                    self.assertEqual(proc.returncode, 0)
+                    self.assertEqual(json.loads(output), [[str(expected), *args], str(root), proc.pid, env["MARKER"]])
+            reinstall()
+            self.assertEqual(public.resolve(), binary)
+            launcher = package / "pi-start"
+            launcher.write_bytes(binary.read_bytes())
+            launcher.chmod(0o755)
+            reinstall(PIBOLT_NO_PATH="1")
+            self.assertEqual(public.resolve(), binary)
+            reinstall()
+            entry = public.resolve()
+            check_run(launcher)
+            launcher.unlink()
+            check_run(binary)
+            reinstall(PIBOLT_NO_PATH="1")
+            self.assertEqual(public.resolve(), entry)
+            launcher.write_bytes(binary.read_bytes())
+            launcher.chmod(0o755)
+            check_run(launcher)
+            output = run_in_terminal(["/bin/sh", str(runner)], root, {**env, "PIBOLT_YES": "0"},
+                                     [("Choose an action", "u")])
+            self.assertIn("Pi-Bolt was uninstalled.", output)
+            self.assertFalse(entry.exists())
+            self.assertFalse(public.is_symlink())
 
     def run_offer(self, integrity="same", install_status=0, choice="yes", typed=None):
         with tempfile.TemporaryDirectory(prefix="installer-extensions-") as directory:

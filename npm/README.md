@@ -122,7 +122,7 @@ OpenSec maintains three for Pi-Bolt, prebuilt for Bun so that they load without 
 | Variable | Default | Effect |
 |---|---|---|
 | `PIBOLT_HOME` | `~/.pi-bolt` | Where downloaded executables are kept (Linux and macOS; on Windows they are in the package) |
-| `PIBOLT_VARIANT` | the standard build for your CPU | `x64-baseline` for an x86-64 CPU without AVX2 (picked automatically). Advanced: `x64-jit` or `arm64-jit` also JIT-compile plugins loaded at run time. On Windows it is read when the package is installed |
+| `PIBOLT_VARIANT` | the standard build for your CPU | `jit` selects the JIT build for CPU-heavy runtime extensions. On macOS, Linux and Termux, run `PIBOLT_VARIANT=jit pi-bolt --extension ./word-count.ts` for one session. On Windows, set `$env:PIBOLT_VARIANT = "jit"` before installing the package. Concrete build names such as `x64-baseline` are also supported. |
 
 ## Update and uninstall
 

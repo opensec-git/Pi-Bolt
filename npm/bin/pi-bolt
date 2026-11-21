@@ -4,21 +4,24 @@
 # replaces this script with the native executable (exec), so the launcher costs only its shell's start.
 set -eu
 
-VERSION=1.2.1
+VERSION=1.3.0
 HOME_DIR="${PIBOLT_HOME:-$HOME/.pi-bolt}"
 
 # macOS has this folder, Linux (Android too) does not: a test the shell makes itself, so no uname starts at every run.
 if [ -d /System/Library/CoreServices ]; then PLATFORM=darwin; else PLATFORM=linux; fi
 VARIANT="${PIBOLT_VARIANT:-}"
-if [ -z "$VARIANT" ]; then
-	if [ "$PLATFORM" = darwin ]; then VARIANT=arm64
+if [ -z "$VARIANT" ] || [ "$VARIANT" = jit ]; then
+	jit=""
+	if [ "$VARIANT" = jit ]; then jit=-jit; fi
+	if [ "$PLATFORM" = darwin ]; then VARIANT=arm64$jit
 	else
 		case "$(uname -m)" in
-		aarch64 | arm64) VARIANT=arm64 ;;
+		aarch64 | arm64) VARIANT=arm64$jit ;;
 		*)
 			# "-musl" on a musl-based Linux such as Alpine (its own builds, as install.sh names them).
 			musl=""; case "$(ldd --version 2>&1 || true)" in *musl*) musl=-musl ;; esac
-			if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$musl; else VARIANT=x64$musl-baseline; fi ;;
+			if [ -n "$jit" ]; then VARIANT=x64$musl-jit
+			elif grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$musl; else VARIANT=x64$musl-baseline; fi ;;
 		esac
 	fi
 fi
@@ -44,4 +47,5 @@ if [ ! -x "$DIR/pi" ]; then
 fi
 # (So that `pi-bolt update` knows to say: update the package. In Termux, through the launcher install.sh wrote beside pi.)
 if [ -x "$DIR/pi-termux" ]; then PIBOLT_NPM=1 exec "$DIR/pi-termux" "$@"; fi
+if [ "$PLATFORM" = linux ] && [ -x "$DIR/pi-start" ]; then PIBOLT_NPM=1 exec "$DIR/pi-start" "$@"; fi
 PIBOLT_NPM=1 exec "$DIR/pi" "$@"

@@ -42,3 +42,16 @@ const parallel = await Promise.all([1, 2, 3, 4].map(run));
 for (const r of parallel) { const e = work(r.seed); if (JSON.stringify({ ...r.out, nav: undefined, hw: undefined }) !== JSON.stringify({ ...e, nav: undefined, hw: undefined })) throw new Error("mismatch " + JSON.stringify([r, e])); }
 for (let seed = 5; seed < 13; seed++) { const r = await run(seed); const e = work(seed); if (r.out.acc !== e.acc || r.out.len !== e.len) throw new Error("mismatch seq " + seed); }
 console.log("workers ok", parallel.map((r) => r.out.acc).join(","), parallel[0].out.nav, parallel[0].out.hw);
+
+// A separately compiled entry reads the shared bytecode and string table on the worker's VM.
+const entry = import.meta.url.endsWith(".mjs") ? "./workers-entry.mjs" : "./workers-entry.js";
+const embedded = new Worker(new URL(entry, import.meta.url).href);
+try {
+  const result = await new Promise((resolve, reject) => {
+    embedded.onmessage = (event) => resolve(event.data);
+    embedded.onerror = (event) => reject(new Error(event.message));
+  });
+  console.log("embedded worker", result);
+} finally {
+  embedded.terminate();
+}
