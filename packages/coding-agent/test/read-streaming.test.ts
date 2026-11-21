@@ -30,11 +30,20 @@ vi.mock("util", async (importOriginal) => {
 
 // Runs when a file is opened, so a test can abort while the read tool opens the file.
 const openHook = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
+// Runs after each read() of an opened file (Pi-Bolt reads large local files in chunks with it, not through a stream).
+const readHook = vi.hoisted(() => ({ run: undefined as (() => void) | undefined }));
 vi.mock("fs/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof fsPromises>();
-	const open: typeof actual.open = (...args) => {
+	const open: typeof actual.open = async (...args) => {
 		openHook.run?.();
-		return actual.open(...args);
+		const handle = await actual.open(...args);
+		const read = handle.read.bind(handle) as (...readArgs: unknown[]) => ReturnType<typeof handle.read>;
+		(handle as { read: unknown }).read = async (...readArgs: unknown[]) => {
+			const result = await read(...readArgs);
+			readHook.run?.();
+			return result;
+		};
+		return handle;
 	};
 	return { ...actual, open };
 });
@@ -284,12 +293,12 @@ describe("read tool streaming", () => {
 
 	it("stops reading a local file when aborted mid-read", async () => {
 		const path = join(tempDir, "abort-mid-read.txt");
-		// Many 64 KB stream chunks, so the abort lands with most of the file unread.
-		writeFileSync(path, "x".repeat(1024 * 1024));
+		// Pi-Bolt reads a local file of 1 MB or more in 1 MB chunks: four, so the abort lands with most of the file unread.
+		writeFileSync(path, "x".repeat(4 * 1024 * 1024));
 		const controller = new AbortController();
-		let decodedChunks = 0;
-		decodeHook.run = () => {
-			decodedChunks++;
+		let reads = 0;
+		readHook.run = () => {
+			reads++;
 			controller.abort();
 		};
 		try {
@@ -299,9 +308,9 @@ describe("read tool streaming", () => {
 			);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		} finally {
-			decodeHook.run = undefined;
+			readHook.run = undefined;
 		}
-		expect(decodedChunks).toBe(1);
+		expect(reads).toBe(1);
 	});
 
 	it("reads a 200 MB line with a 64 MB heap", () => {

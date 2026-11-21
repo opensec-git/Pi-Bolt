@@ -1,6 +1,7 @@
 // Writes runtime diagnostics to stderr for the CLI and the non-interactive modes.
-import chalk from "chalk";
+
 import type { AgentSessionRuntimeDiagnostic } from "../core/agent-session-services.ts";
+import { chalk } from "../utils/lazy-packages.ts";
 
 /** Print each diagnostic to stderr as `Error: ...` (red), `Warning: ...` (yellow) or a dim info line. */
 export function writeDiagnosticsToStderr(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {

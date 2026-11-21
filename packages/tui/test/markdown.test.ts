@@ -129,7 +129,10 @@ describe("Markdown component", () => {
 		it("keeps hard breaks after an inline image as separate rows", () => {
 			setCapabilities({ images: "kitty", trueColor: false, hyperlinks: false });
 			const image = "\x1b_Ga=T,f=100,q=2,c=20,r=3,C=1;AAAA\x1b\\";
-			const markdown = new Markdown(`\`${image}\`  \n\` \`  \n\` \`\n\n- one`, 0, 0, defaultMarkdownTheme);
+			// (Pi-Bolt removes escape sequences from the text given to setText(): an image comes in through a transform, as an
+			// extension's Markdown transformer adds it.)
+			const source = `\`${image}\`  \n\` \`  \n\` \`\n\n- one`;
+			const markdown = new Markdown("image", 0, 0, defaultMarkdownTheme, undefined, { transform: () => source });
 			const lines = markdown.render(80);
 			assert.ok(lines.every((line) => !line.includes("\n")));
 			assert.ok(lines[0].includes(image));

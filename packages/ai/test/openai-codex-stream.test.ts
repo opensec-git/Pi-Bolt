@@ -3530,8 +3530,9 @@ describe("openai-codex request reuse", () => {
 		},
 		{
 			name: "an earlier item changed",
+			// (The first item is the system prompt, sent as a developer item since Pi 1.6.0.)
 			edit: (item: Record<string, unknown>) => {
-				item.role = "developer";
+				item.role = "user";
 			},
 			delta: false,
 		},
@@ -3569,7 +3570,8 @@ describe("openai-codex request reuse", () => {
 			expect(sent[2].input).toHaveLength(5);
 		} else {
 			expect(sent[2].previous_response_id).toBeUndefined();
-			expect(sent[2].input).toHaveLength(15);
+			// The system prompt's developer item and the three turns' five items each.
+			expect(sent[2].input).toHaveLength(16);
 		}
 		if (edit === undefined) expect(requestCacheStats().units - before.units).toBeGreaterThan(0);
 	});

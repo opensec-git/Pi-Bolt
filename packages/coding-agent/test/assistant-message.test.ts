@@ -85,7 +85,9 @@ describe("AssistantMessageComponent", () => {
 		const first = component.render(40);
 		const second = component.render(40);
 
-		expect(second).toBe(first);
+		// (Pi-Bolt: render() returns a copy; renderShared() keeps the same marked lines.)
+		expect(second).toEqual(first);
+		expect(component.renderShared(40)).toBe(component.renderShared(40));
 		expect(second[0]!.split(OSC133_ZONE_START)).toHaveLength(2);
 		expect(second[second.length - 1]!.split(OSC133_ZONE_END)).toHaveLength(2);
 	});

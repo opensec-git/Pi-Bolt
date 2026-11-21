@@ -32,11 +32,12 @@ describe("container output reuse", () => {
 		const outer = new Container();
 		outer.addChild(inner);
 
-		const first = outer.render(20);
-		assert.strictEqual(outer.render(20), first);
+		// (Pi-Bolt: render() returns a copy the caller may change; renderShared() is the kept array.)
+		const first = outer.renderShared(20);
+		assert.strictEqual(outer.renderShared(20), first);
 
 		text.setText("changed");
-		const changed = outer.render(20);
+		const changed = outer.renderShared(20);
 		assert.notStrictEqual(changed, first);
 		assert.deepStrictEqual(
 			changed.map((line) => line.trimEnd()),
