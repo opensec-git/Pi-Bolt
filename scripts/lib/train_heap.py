@@ -37,7 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "bench"))
 import winproc  # noqa: E402
-from harness import DONE, MODEL_ARGS, PROMPT, Tty, done, fake_model, pi_env, pi_home, workdir  # noqa: E402
+from harness import ANSI, DONE, MODEL_ARGS, PROMPT, Tty, done, fake_model, pi_env, pi_home, workdir  # noqa: E402
 
 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
 k32.VirtualProtectEx.argtypes = [w.HANDLE, ctypes.c_void_p, ctypes.c_size_t, w.DWORD, ctypes.POINTER(w.DWORD)]
@@ -306,11 +306,13 @@ def main():
             tty = box["tty"]
             deadline = time.perf_counter() + 1800
             box["ok"] = tty.wait_for("fake-model", 0, deadline)
+            box["step"] = "the first frame (fake-model on the screen)"
             if box["ok"]:
                 tty.settle(0.2, deadline)
                 since = len(tty.buf)
                 tty.send(PROMPT.encode() + b"\r")
                 box["ok"] = tty.wait_for(done(1), since, deadline)
+                box["step"] = f"the answer ({done(1)!r} on the screen)"
                 tty.settle(0.2, deadline)
             tty.send(b"/quit\r")
 
@@ -319,6 +321,11 @@ def main():
         touched.append(trace(start, strings.region_rva, ranges))
         driver.join(30)
         if not box.get("ok"):
+            tty = box.get("tty")
+            if tty is not None:
+                # What the screen showed last, without escape sequences, to tell a hang from a changed screen.
+                screen = ANSI.sub(b"", tty.buf[-4000:]).decode("utf-8", "replace")
+                print(f"TUI: waiting for {box.get('step')}; ended: {tty.eof}; the output's last part:\n{screen}", flush=True)
             sys.exit("TUI: the session did not complete")
         box["tty"].console.close()
         print(f"TUI: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
