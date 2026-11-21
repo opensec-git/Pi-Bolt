@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateProjectedContextTokens,
+	estimateSessionContextUsage,
 	prepareCompaction,
 } from "../src/core/compaction/index.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -34,6 +35,72 @@ function text(message: { content: string | Array<{ type: string; text?: string }
 }
 
 describe("session context edits", () => {
+	it("tracks visible edits across appends, compaction, tree navigation and session reset", () => {
+		const session = SessionManager.inMemory();
+		const original = session.appendMessage(assistant("original"));
+		expect(session.hasProjectedContextEdits()).toBe(false);
+		const edit = session.appendContextEdit(original, null);
+		expect(session.hasProjectedContextEdits()).toBe(true);
+		session.appendMessage(assistant("next"));
+		expect(session.hasProjectedContextEdits()).toBe(true);
+		session.appendCompaction("keeps the edit", original, 10);
+		expect(session.hasProjectedContextEdits()).toBe(true);
+		session.appendCompaction("starts fresh", null, 10);
+		expect(session.hasProjectedContextEdits()).toBe(false);
+		session.branch(edit);
+		expect(session.hasProjectedContextEdits()).toBe(true);
+		session.branch(original);
+		expect(session.hasProjectedContextEdits()).toBe(false);
+		session.newSession();
+		expect(session.hasProjectedContextEdits()).toBe(false);
+	});
+
+	it("matches the branch-based estimate as edits, checkpoints and usable responses change", () => {
+		const session = SessionManager.inMemory();
+		function check(knownAfterCompaction: boolean) {
+			const projection = session.buildSessionProjection();
+			const expected = estimateProjectedContextTokens(projection, session.getBranch());
+			expect(estimateSessionContextUsage(projection.messages, session.getProjectionUsageBoundaries())).toEqual({
+				tokens: expected.tokens,
+				knownAfterCompaction,
+			});
+		}
+		check(true);
+		session.appendMessage({ role: "system", content: "old instructions", timestamp: 1 });
+		session.appendMessage({ role: "system", content: "current instructions", timestamp: 2 });
+		check(true);
+		const kept = session.appendMessage(assistant("old response"));
+		check(true);
+		session.appendContextEdit(kept, { content: "shortened" });
+		check(true);
+		const checkpoint = session.appendCompaction("checkpoint with system message", kept, 100);
+		check(false);
+		session.appendModelChange("faux", "faux");
+		session.appendMessage({ ...assistant("interrupted"), stopReason: "aborted" });
+		session.appendMessage({ ...assistant("failed"), stopReason: "error" });
+		const zero = assistant("zero usage");
+		zero.usage = { ...zero.usage, input: 0, output: 0, totalTokens: 0 };
+		session.appendMessage(zero);
+		check(false);
+		const fresh = session.appendMessage(assistant("new response"));
+		session.appendMessage({ role: "user", content: "next question", timestamp: 3 });
+		check(true);
+		session.appendContextEdit(kept, null);
+		check(true);
+		session.appendContextEdit(fresh, null);
+		check(false);
+		session.appendCompaction("retains an earlier checkpoint", kept, 90);
+		check(false);
+		session.appendMessage(assistant("new branch tip"));
+		check(true);
+		session.branch(checkpoint);
+		check(false);
+		session.branch(kept);
+		check(true);
+		session.newSession();
+		check(true);
+	});
+
 	it("omits a target only from model projection", () => {
 		const session = SessionManager.inMemory();
 		session.appendMessage({ role: "user", content: "request", timestamp: Date.now() });

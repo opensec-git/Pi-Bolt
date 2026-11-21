@@ -351,19 +351,25 @@ const FOREGROUND_TOKENS: ThemeColor[] = ["text", "userMessageText", "toolTitle"]
 /** WCAG 2 contrast ratio that body text must reach on the surfaces it is drawn on. */
 const TEXT_MINIMUM_WCAG_CONTRAST = 4.5;
 
-/** Tokens in dependency order: every surface before the tokens drawn on it. */
-const SOLVE_ORDER: ThemeToken[] = (() => {
-	const order: ThemeToken[] = [];
+/** Group the contrast rules by token in dependency order, so each surface already has its final color when read. */
+const SOLVE_ORDER = (() => {
+	const byToken = new Map<ThemeToken, Rule[]>();
+	for (const rule of RULES) {
+		const group = byToken.get(rule.token);
+		if (group) group.push(rule);
+		else byToken.set(rule.token, [rule]);
+	}
+	const ordered = new Map<ThemeToken, Rule[]>();
 	const visit = (token: ThemeToken): void => {
-		if (order.includes(token)) return;
-		for (const rule of RULES) {
-			if (rule.token !== token) continue;
+		if (ordered.has(token)) return;
+		const rules = byToken.get(token)!;
+		for (const rule of rules) {
 			for (const surface of rule.on) if (surface !== "background") visit(surface);
 		}
-		order.push(token);
+		ordered.set(token, rules);
 	};
-	for (const rule of RULES) visit(rule.token);
-	return order;
+	for (const token of byToken.keys()) visit(token);
+	return ordered;
 })();
 
 // ============================================================================
@@ -523,17 +529,25 @@ export function generateSystemThemeColors(input: SystemThemeInput): SystemThemeC
 
 	const solve = (t: number): Map<Surface | ThemeToken, RgbColor> | undefined => {
 		const colors = new Map<Surface | ThemeToken, RgbColor>([["background", background]]);
-		for (const token of SOLVE_ORDER) {
-			const targets: number[] = [];
-			for (const rule of RULES) {
-				if (rule.token !== token) continue;
+		// Many tokens request the same level on the same surface. A new relaxation can move the
+		// panels, so their lightness and targets belong to this attempt only.
+		const surfaces = new Map<Surface, { lightness: number; targets: Partial<Record<Level, number>> }>();
+		for (const [token, rules] of SOLVE_ORDER) {
+			let l = lighter ? -Infinity : Infinity;
+			for (const rule of rules) {
 				for (const surface of rule.on) {
-					const value = target(rule.level, oklabLightness(colors.get(surface) ?? background), t);
+					let cached = surfaces.get(surface);
+					if (!cached) {
+						const lightness = surface === "background" ? backgroundL : oklabLightness(colors.get(surface)!);
+						cached = { lightness, targets: {} };
+						surfaces.set(surface, cached);
+					}
+					const value = cached.targets[rule.level] ?? target(rule.level, cached.lightness, t);
 					if (value === undefined || value < 0 || value > 1) return undefined;
-					targets.push(value);
+					cached.targets[rule.level] = value;
+					l = lighter ? Math.max(l, value) : Math.min(l, value);
 				}
 			}
-			const l = lighter ? Math.max(...targets) : Math.min(...targets);
 			colors.set(token, PANELS.includes(token as ThemeBg) ? limitPanel(token, l) : paint(token, l));
 		}
 		return colors;
@@ -555,9 +569,7 @@ export function generateSystemThemeColors(input: SystemThemeInput): SystemThemeC
 	}
 	const solved = colors ?? new Map<Surface | ThemeToken, RgbColor>();
 	const surfacesOf = (token: ThemeToken) =>
-		RULES.filter((rule) => rule.token === token).flatMap((rule) =>
-			rule.on.map((surface) => solved.get(surface) ?? background),
-		);
+		SOLVE_ORDER.get(token)!.flatMap((rule) => rule.on.map((surface) => solved.get(surface) ?? background));
 
 	const result = {} as Record<ThemeToken, string | number>;
 	for (const token of Object.keys(TOKEN_FAMILIES) as ThemeToken[]) {

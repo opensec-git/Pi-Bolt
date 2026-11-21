@@ -13,7 +13,7 @@ import {
 import { isPreferredProvider } from "../../../core/preferred-providers.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
-import { getProviderBrandStyle, type ProviderBrandStyle, startBrandAnimation } from "./provider-brand.ts";
+import { BrandAnimation, getProviderBrandStyle, type ProviderBrandStyle } from "./provider-brand.ts";
 
 export type AuthSelectorProvider = {
 	id: string;
@@ -77,6 +77,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 	}
 
 	private listContainer: Container;
+	private readonly rows: TruncatedText[] = [];
 	private allProviders: AuthSelectorProvider[];
 	private filteredProviders: AuthSelectorProvider[];
 	private selectedIndex: number = 0;
@@ -85,7 +86,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 	private onCancelCallback: () => void;
 	private showAuthTypeLabels: boolean;
 	private readonly animationStart = performance.now();
-	private stopAnimation: (() => void) | undefined;
+	private animation?: BrandAnimation;
 
 	constructor(
 		mode: "login" | "logout",
@@ -136,21 +137,20 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 		this.addChild(new DynamicBorder());
 
 		// Initial render
+		this.animation = tui ? new BrandAnimation(tui) : undefined;
 		this.filterProviders(initialSearchInput ?? "");
-
-		if (tui) this.stopAnimation = startBrandAnimation(tui, () => this.getSelectedBrandStyle() !== undefined);
 	}
 
 	override render(width: number): string[] {
 		// The list is built from styled text, so an animated row needs a rebuild for each frame.
-		if (this.stopAnimation && this.getSelectedBrandStyle()) this.updateList();
+		if (this.animation && this.getSelectedBrandStyle()) this.updateList();
 		return super.render(width);
 	}
 
 	/** Stops the brand animation. */
 	dispose(): void {
-		this.stopAnimation?.();
-		this.stopAnimation = undefined;
+		this.animation?.setActive(false);
+		this.animation = undefined;
 	}
 
 	private getSelectedBrandStyle(): ProviderBrandStyle | undefined {
@@ -171,7 +171,18 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 	}
 
 	private updateList(): void {
-		this.listContainer.clear();
+		this.animation?.setActive(this.getSelectedBrandStyle() !== undefined);
+		let count = 0;
+		const setRow = (text: string) => {
+			const existing = this.rows[count++];
+			if (existing) {
+				existing.setText(text);
+			} else {
+				const row = new TruncatedText(text, 1, 0);
+				this.rows.push(row);
+				this.listContainer.addChild(row);
+			}
+		};
 
 		const startIndex = Math.max(
 			0,
@@ -194,7 +205,7 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 			let line = "";
 			if (isSelected) {
 				const prefix = theme.fg("accent", "→ ");
-				const brandStyle = this.stopAnimation && getProviderBrandStyle(provider.id);
+				const brandStyle = this.animation && getProviderBrandStyle(provider.id);
 				const text = brandStyle
 					? brandStyle(provider.name, performance.now() - this.animationStart)
 					: theme.fg("accent", provider.name);
@@ -204,12 +215,12 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 				line = text + partnerMarker + authTypeLabel + statusIndicator;
 			}
 
-			this.listContainer.addChild(new TruncatedText(line, 1, 0));
+			setRow(line);
 		}
 
 		if (startIndex > 0 || endIndex < this.filteredProviders.length) {
 			const scrollInfo = theme.fg("muted", `  (${this.selectedIndex + 1}/${this.filteredProviders.length})`);
-			this.listContainer.addChild(new TruncatedText(scrollInfo, 1, 0));
+			setRow(scrollInfo);
 		}
 
 		// Show "no providers" if empty
@@ -220,8 +231,9 @@ export class OAuthSelectorComponent extends Container implements Focusable {
 						? "No providers available"
 						: "No providers logged in. Use /login first."
 					: "No matching providers";
-			this.listContainer.addChild(new TruncatedText(theme.fg("muted", `  ${message}`), 1, 0));
+			setRow(theme.fg("muted", `  ${message}`));
 		}
+		while (this.rows.length > count) this.listContainer.removeChild(this.rows.pop()!);
 	}
 
 	handleInput(keyData: string): void {

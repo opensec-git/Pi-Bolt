@@ -4,7 +4,7 @@
 // - src/core/tools/tool-schemas.generated.ts: the built-in tools' schemas (tool-schemas.ts) as the objects TypeBox builds,
 //   keywords and then TypeBox's markers as non-enumerable properties (src/core/typebox-shaped.ts);
 // - src/core/config-checks.generated.ts: TypeBox's compiled checks (the code Compile() generates and evaluates) of the
-//   models.json schema and of a keybindings.json value. They need only TypeBox's small `typebox/guard` module.
+//   models.json schema, a keybindings.json value, and a theme document. They need only TypeBox's small `typebox/guard` module.
 // Run it after changing a source; `npm run check` and the build run it with --check, which fails on a stale file.
 //   npm run generate:start-schemas [-- --check]
 
@@ -17,6 +17,7 @@ import { Build } from "typebox/schema";
 import { KeybindingValueSchema } from "../src/core/key-id-schema.ts";
 import { modelsConfigSchema } from "../src/core/model-config-schema.generated.ts";
 import * as ToolSchemas from "../src/core/tools/tool-schemas.ts";
+import { getThemeSchemas } from "../src/modes/interactive/theme/theme-schema-definition.ts";
 
 const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
 const toolSchemasModule = "src/core/tools/tool-schemas.generated.ts";
@@ -110,6 +111,11 @@ const configChecks: readonly ConfigCheck[] = [
 		name: "checkKeybindingValue",
 		doc: "Whether a keybindings.json value is a key or a list of keys: TypeBox's Value.Check(KeybindingValueSchema, value).",
 		schema: KeybindingValueSchema,
+	},
+	{
+		name: "checkThemeDocument",
+		doc: "Whether a theme document matches ThemeJsonSchema.",
+		schema: getThemeSchemas().ThemeJsonSchema,
 	},
 ];
 

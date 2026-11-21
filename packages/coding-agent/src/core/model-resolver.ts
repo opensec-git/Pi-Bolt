@@ -3,14 +3,8 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import {
-	type Api,
-	type AuthOperationOptions,
-	type KnownProvider,
-	type Model,
-	modelsAreEqual,
-} from "@earendil-works/pi-ai";
-import { minimatch } from "minimatch";
+import type { Api, AuthOperationOptions, KnownProvider, Model } from "@earendil-works/pi-ai";
+import { Minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
 import { chalk } from "../utils/lazy-packages.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
@@ -130,6 +124,7 @@ function splitProviderPrefix(
 	models: readonly Model<Api>[],
 ): { provider: string; modelText: string } | undefined {
 	// Provider ids may contain "/" themselves (e.g. URL-derived ids), so match known ids, longest first
+	if (!text.includes("/")) return undefined;
 	const lowerText = text.toLowerCase();
 	let best: { provider: string; modelText: string } | undefined;
 	for (const { provider } of models) {
@@ -160,6 +155,7 @@ export function resolveModelReference(
 	if (result.status !== "not-found") return result;
 
 	const split = splitProviderPrefix(text, pool);
+	if (!constraint && !split) return result;
 	const anchor = constraint ? pool[0] : pool.find((model) => model.provider === split?.provider);
 	if (!anchor) return result;
 	const modelText = split?.modelText ?? text;
@@ -242,15 +238,22 @@ function selectReference(
 	const lowerText = text.toLowerCase();
 	const raw = pool.filter((model) => model.id.toLowerCase() === lowerText);
 	const split = splitProviderPrefix(text, pool);
+	if (!split && raw.length === 0) return undefined;
 	let named: Model<Api> | undefined;
 	if (split) {
-		const providerModels = pool.filter((model) => model.provider === split.provider);
 		const lowerModelText = split.modelText.toLowerCase();
 		// The provider's own literal id (OpenRouter's `openrouter/free`) beats its fuzzy matches
 		named =
-			providerModels.find((model) => model.id.toLowerCase() === lowerModelText) ??
-			raw.find((model) => model.provider === split.provider) ??
-			(fuzzy ? bestFuzzyMatch(fuzzyMatches(split.modelText, providerModels)) : undefined);
+			pool.find((model) => model.provider === split.provider && model.id.toLowerCase() === lowerModelText) ??
+			raw.find((model) => model.provider === split.provider);
+		if (!named && fuzzy) {
+			named = bestFuzzyMatch(
+				fuzzyMatches(
+					split.modelText,
+					pool.filter((model) => model.provider === split.provider),
+				),
+			);
+		}
 	}
 
 	const others = raw.filter((model) => model !== named);
@@ -274,11 +277,13 @@ function fuzzyMatches(text: string, models: readonly Model<Api>[]): Model<Api>[]
 
 function selectFuzzy(matches: Model<Api>[], usable: (provider: string) => boolean): ResolvedOrAmbiguous | undefined {
 	if (matches.length === 0) return undefined;
-	const multipleProviders = new Set(matches.map((model) => model.provider)).size > 1;
+	const firstProvider = matches[0].provider;
+	const multipleProviders = matches.some((model) => model.provider !== firstProvider);
 	const usableMatches = multipleProviders ? matches.filter((model) => usable(model.provider)) : [];
 	const pool = usableMatches.length > 0 ? usableMatches : matches;
 	const best = bestFuzzyMatch(pool);
 	if (!best) return undefined;
+	if (!multipleProviders) return { status: "resolved", model: best };
 	// The same id on several providers would otherwise be decided by catalog order
 	const tied = pool.filter((model) => model.id === best.id);
 	if (new Set(tied.map((model) => model.provider)).size === 1) return { status: "resolved", model: best };
@@ -291,22 +296,34 @@ function selectFuzzy(matches: Model<Api>[], usable: (provider: string) => boolea
 
 /** Prefer aliases (`claude-sonnet-4-5`) over dated versions (`claude-sonnet-4-5-20250929`), then the latest. */
 function bestFuzzyMatch(matches: readonly Model<Api>[]): Model<Api> | undefined {
-	const aliases = matches.filter((model) => isAlias(model.id));
-	return [...(aliases.length > 0 ? aliases : matches)].sort((a, b) => b.id.localeCompare(a.id))[0];
+	let best: Model<Api> | undefined;
+	let bestIsAlias = false;
+	for (const model of matches) {
+		const alias = isAlias(model.id);
+		if (!best || (alias && !bestIsAlias) || (alias === bestIsAlias && model.id.localeCompare(best.id) > 0)) {
+			best = model;
+			bestIsAlias = alias;
+		}
+	}
+	return best;
 }
 
 function isAlias(id: string): boolean {
 	return id.endsWith("-latest") || !/-\d{8}$/.test(id);
 }
 
-function buildFallbackModel(providerModels: [Model<Api>, ...Model<Api>[]], modelId: string): Model<Api> {
+function buildFallbackModel(
+	providerModels: [Model<Api>, ...Model<Api>[]],
+	modelId: string,
+	materialize: (choice: Model<Api>) => Model<Api>,
+): Model<Api> {
 	const defaultId = defaultModelPerProvider[providerModels[0].provider as KnownProvider];
 	const baseModel = defaultId
 		? (providerModels.find((m) => m.id === defaultId) ?? providerModels[0])
 		: providerModels[0];
 
 	return {
-		...baseModel,
+		...materialize(baseModel),
 		id: modelId,
 		name: modelId,
 	};
@@ -336,10 +353,16 @@ export function resolveModelScopeFromModels(
 ): ResolveModelScopeResult {
 	const scopedModels: ScopedModel[] = [];
 	const diagnostics: ModelScopeDiagnostic[] = [];
+	const idsByProvider = new Map<string, Set<string>>();
 	const add = (model: Model<Api>, thinkingLevel: ThinkingLevel | undefined) => {
-		if (!scopedModels.some((scoped) => modelsAreEqual(scoped.model, model))) {
-			scopedModels.push({ model, thinkingLevel });
+		let ids = idsByProvider.get(model.provider);
+		if (!ids) {
+			ids = new Set();
+			idsByProvider.set(model.provider, ids);
 		}
+		if (ids.has(model.id)) return;
+		ids.add(model.id);
+		scopedModels.push({ model, thinkingLevel });
 	};
 	const noMatch = (pattern: string) =>
 		diagnostics.push({ type: "warning", code: "no-match", message: `No models match pattern "${pattern}"`, pattern });
@@ -372,14 +395,11 @@ export function resolveModelScopeFromModels(
 			else if (exact.status === "ambiguous") {
 				matches = exact.candidates;
 				ambiguous(pattern, matches);
-			} else {
+			} else if (models.length > 0) {
 				// Match against "provider/modelId" format OR just model ID
 				// This allows "*sonnet*" to match without requiring "anthropic/*sonnet*"
-				matches = models.filter(
-					(m) =>
-						minimatch(`${m.provider}/${m.id}`, globPattern, { nocase: true }) ||
-						minimatch(m.id, globPattern, { nocase: true }),
-				);
+				const matcher = new Minimatch(globPattern, { nocase: true });
+				matches = models.filter((m) => matcher.match(`${m.provider}/${m.id}`) || matcher.match(m.id));
 			}
 			if (matches.length === 0) noMatch(pattern);
 			for (const model of matches) add(model, thinkingLevel);
@@ -466,7 +486,7 @@ export function resolveCliModel(options: {
 	// This allows "--api-key" to be used for first-time setup.
 	// (Catalogs not built yet take part by provider, id and name; only the chosen model's provider is built.)
 	const choices = modelRuntime.getModelChoices();
-	const models = [...choices.models];
+	const models = choices.models;
 	if (models.length === 0) {
 		return {
 			model: undefined,
@@ -531,8 +551,7 @@ export function resolveCliModel(options: {
 	// e.g. "zai-org/GLM-5.1-FP8:high" → modelId="zai-org/GLM-5.1-FP8", fallbackThinking="high"
 	const modelId = cliThinking ? target.modelText : target.modelId;
 	const fallbackThinking = cliThinking ? undefined : target.thinkingLevel;
-	const [first, ...rest] = target.providerModels;
-	const fallbackModel = buildFallbackModel([choices.model(first), ...rest.map(choices.model)], modelId);
+	const fallbackModel = buildFallbackModel(target.providerModels, modelId, choices.model);
 	const requestedThinking = cliThinking ?? fallbackThinking;
 	return {
 		model: requestedThinking && requestedThinking !== "off" ? { ...fallbackModel, reasoning: true } : fallbackModel,

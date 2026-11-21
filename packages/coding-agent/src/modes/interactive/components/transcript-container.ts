@@ -4,40 +4,120 @@ import {
 	type LiveLineArray,
 	renderLiveLines,
 	renderSharedLines,
+	Spacer,
 } from "@earendil-works/pi-tui";
 
-/** How long one backfill slice renders before it yields to input and timers. */
-const BACKFILL_SLICE_MS = 4;
+type RowFactory = () => Component;
+
+interface MeasuredRow {
+	create: RowFactory;
+	height: number;
+}
+
+/** A run outside the viewport. It retains measured heights and the session projection, without any rendered text. */
+class MeasuredRows extends Spacer {
+	readonly rows: MeasuredRow[];
+	readonly height: number;
+
+	constructor(rows: MeasuredRow[], height: number) {
+		super(height);
+		this.rows = rows;
+		this.height = height;
+	}
+}
+
+const MAX_MEASURED_RUN = 128;
 
 /**
- * The transcript. One invalidation of everything can leave out the entries that do not need it (invalidateOnly()):
- * in a long session they are most of the screen, and each one invalidated is rendered again from nothing.
- *
- * A resumed session can be drawn from its end first (renderEndFirst()): the next render renders entries from the last one
- * up until they make `linesNeeded()` lines, and holds back the entries above them, which that frame cannot show (the
- * viewport follows the end and its lines are the last lines of the transcript, whose entries render independently of each
- * other). backfill() then renders the held entries in slices that yield to input, and puts them back when all are rendered.
- * Anything that reads the transcript in whole puts them back at once (completeNow(), or any use of `children`), as does a
- * render at another width or one whose lines fall short of `linesNeeded()`.
+ * Fullscreen mounts the visible history and a scroll margin. Unvisited rows stay in chronological order in the
+ * prefix. Visited rows outside the window retain their factories and measured heights, so scrolling preserves
+ * its position while releasing their components and formatted lines. Whole-document operations use completeNow().
  */
 export class TranscriptContainer extends Container {
 	private invalidateFilter?: (child: Component) => boolean;
-	/** The entries held back, in order: they come before the children. */
-	private held: Component[] = [];
-	/** The width the held entries are rendered at by backfill(). */
-	private heldWidth = 0;
-	/** renderEndFirst()'s lines: the next render decides what to hold back. */
-	private endFirst: (() => number) | undefined;
-	/** The lines a render must have while entries are held back. */
-	private linesNeeded: () => number = () => 0;
-	/** The held entry backfill() renders next (from the last one up); -1 when all are rendered. */
-	private nextBackfilled = -1;
-	private backfillTimer: ReturnType<typeof setImmediate> | undefined;
-	private onBackfilled: (() => void) | undefined;
-	/** Held entries were put back outside a render: the transcript was not laid out since. */
-	private putBackUnrendered = false;
+	private prefix: (Component | RowFactory)[] = [];
+	/** A materialized historical row can be released on follow-end until the user changes its local UI state. */
+	private readonly factories = new WeakMap<Component, RowFactory>();
+	private linesNeeded?: () => number;
+	private following = true;
+	private trim = true;
+	private width?: number;
+	private sampledRows = 0;
+	private sampledHeight = 0;
+	private expandedSinceLayout = false;
+	private pinned = false;
+	private measuredCount = 0;
+	private measuredRuns = 0;
+	private window?: { total: number; start: number; end: number };
 
-	/** Runs `invalidate`, during which this invalidates only the entries `filter` accepts. */
+	/** Estimated unvisited terminal lines for painting the scrollbar. Absolute navigation measures the full document. */
+	get estimatedPrefixHeight(): number {
+		return this.sampledRows
+			? Math.round((this.prefix.length * this.sampledHeight) / this.sampledRows)
+			: this.prefix.length;
+	}
+
+	get childCount(): number {
+		return this.prefix.length + this.childView.length + this.measuredCount;
+	}
+
+	get residentChildren(): Iterable<Component> {
+		return this.residents();
+	}
+
+	private *residents(): IterableIterator<Component> {
+		for (const row of this.prefix) {
+			if (typeof row !== "function") yield row;
+		}
+		for (const row of this.childView) if (!(row instanceof MeasuredRows)) yield row;
+	}
+
+	/** An identity check at the tail must not construct a historical component. Zero means the last entry. */
+	childFromEnd(offset: number): Component | undefined {
+		const mounted = this.childView;
+		for (let i = mounted.length - 1; i >= 0; i--) {
+			const row = mounted[i]!;
+			const count = row instanceof MeasuredRows ? row.rows.length : 1;
+			if (offset < count) return row instanceof MeasuredRows ? undefined : row;
+			offset -= count;
+		}
+		const row = this.prefix[this.prefix.length - 1 - offset];
+		return typeof row === "function" ? undefined : row;
+	}
+
+	hasChild(component: Component): boolean {
+		return this.childView.includes(component) || this.prefix.includes(component);
+	}
+
+	insertBeforeChild(before: Component, component: Component): boolean {
+		const index = this.childView.indexOf(before);
+		if (index >= 0) {
+			this.spliceChildren(index, 0, component);
+			this.trim = true;
+			this.window = undefined;
+			return true;
+		}
+		const hidden = this.prefix.indexOf(before);
+		if (hidden < 0) return false;
+		this.prefix.splice(hidden, 0, component);
+		return true;
+	}
+
+	/** Only the mounted rows can benefit from compacting rendered output when idle. */
+	get mountedChildren(): Component[] {
+		return super.children;
+	}
+
+	get mountedRows(): readonly Component[] {
+		return this.childView;
+	}
+
+	replaceMountedChild(index: number, replacement: Component): void {
+		const factory = this.factories.get(this.childView[index]!);
+		if (factory) this.factories.set(replacement, factory);
+		this.replaceChildAt(index, replacement);
+	}
+
 	invalidateOnly(filter: (child: Component) => boolean, invalidate: () => void): void {
 		this.invalidateFilter = filter;
 		try {
@@ -49,151 +129,290 @@ export class TranscriptContainer extends Container {
 
 	override invalidate(): void {
 		const filter = this.invalidateFilter;
-		let heldInvalidated = false;
-		for (const child of this.held) {
-			if (filter === undefined || filter(child)) {
-				child.invalidate();
-				heldInvalidated = true;
-			}
+		for (const row of this.prefix) {
+			if (typeof row !== "function" && (!filter || filter(row))) row.invalidate();
 		}
-		// (What was rendered of the held entries is gone: backfill() renders them again.)
-		if (heldInvalidated && this.backfillTimer !== undefined) this.nextBackfilled = this.held.length - 1;
-		if (filter === undefined) {
-			super.invalidate();
-			return;
-		}
-		for (const child of super.children) {
-			if (filter(child)) child.invalidate();
-		}
+		if (!filter) super.invalidate();
+		else for (const row of this.childView) if (filter(row)) row.invalidate();
 	}
 
-	/** All the entries, held ones included: reading them puts the held entries back. */
+	/** The public, mutable child list always represents the whole document. */
 	override get children(): Component[] {
 		this.completeNow();
 		return super.children;
 	}
 
 	override set children(children: Component[]) {
-		this.completeNow();
+		this.prefix = [];
+		this.measuredCount = 0;
+		this.measuredRuns = 0;
+		this.window = undefined;
 		super.children = children;
+		this.trim = true;
+	}
+
+	override addChild(component: Component): void {
+		super.addChild(component);
+		this.window = undefined;
+		this.trim = true;
+	}
+
+	addDeferredChild(create: RowFactory): void {
+		if (this.pinned) {
+			this.addChild(this.materialize(create));
+			return;
+		}
+		// The existing suffix precedes this new row. During restore this usually just moves interleaved eager rows.
+		const children = this.childView;
+		for (const row of children) this.hold(row);
+		if (children.length) super.clear();
+		this.measuredCount = 0;
+		this.measuredRuns = 0;
+		this.window = undefined;
+		this.prefix.push(create);
+		this.trim = true;
 	}
 
 	override removeChild(component: Component): void {
-		if (this.held.includes(component)) this.completeNow();
-		super.removeChild(component);
+		this.window = undefined;
+		const index = this.prefix.indexOf(component);
+		if (index >= 0) this.prefix.splice(index, 1);
+		else super.removeChild(component);
 	}
 
-	/** Removes every entry, held ones included; a backfill() under way ends, and its callback is called. */
 	override clear(): void {
-		const onBackfilled = this.onBackfilled;
-		this.stopBackfill();
-		this.held = [];
-		this.endFirst = undefined;
+		this.sampledRows = 0;
+		this.sampledHeight = 0;
+		this.pinned = false;
+		this.window = undefined;
+		this.measuredCount = 0;
+		this.measuredRuns = 0;
+		this.prefix = [];
+		this.following = true;
+		this.trim = true;
+		this.expandedSinceLayout = false;
 		super.clear();
-		onBackfilled?.();
 	}
 
-	/** Whether entries are held back (renderEndFirst()). */
 	get isHoldingBack(): boolean {
-		return this.held.length > 0;
+		return this.prefix.length > 0 || this.measuredRuns > 0;
 	}
 
-	/**
-	 * Has the next render render the entries from the last one up until they make `linesNeeded()` lines and hold back the
-	 * entries above them. `linesNeeded()` is asked again at every render while entries are held back.
-	 */
 	renderEndFirst(linesNeeded: () => number): void {
-		this.endFirst = linesNeeded;
 		this.linesNeeded = linesNeeded;
+		this.followEnd();
 	}
 
-	/**
-	 * Renders the held entries in slices that yield to input, puts them back when all are rendered, and then calls
-	 * `onBackfilled` (also when they are put back before that). False, and `onBackfilled` is not called, when no entry is
-	 * held back.
-	 */
-	backfill(onBackfilled: () => void): boolean {
-		this.endFirst = undefined;
-		if (this.held.length === 0) return false;
-		this.onBackfilled = onBackfilled;
-		this.nextBackfilled = this.held.length - 1;
-		this.backfillTimer ??= setImmediate(() => this.backfillSlice());
-		return true;
-	}
-
-	/** Stops backfill() without putting the held entries back or calling its callback (the TUI stops for good). */
-	stopBackfill(): void {
-		if (this.backfillTimer !== undefined) clearImmediate(this.backfillTimer);
-		this.backfillTimer = undefined;
-		this.onBackfilled = undefined;
-	}
-
-	/**
-	 * Puts the held entries back. True when the transcript changed since it was last rendered (entries put back now or since
-	 * the last render): it must be laid out again before its lines or its height are read.
-	 */
-	completeNow(): boolean {
-		if (this.held.length > 0) {
-			this.putBack();
-			this.putBackUnrendered = true;
-		}
-		return this.putBackUnrendered;
-	}
-
-	protected override renderLiveChildren(width: number): LiveLineArray {
-		this.putBackUnrendered = false;
-		const linesNeeded = this.endFirst;
-		if (linesNeeded !== undefined) {
-			this.endFirst = undefined;
-			this.holdBack(width, linesNeeded());
-		} else if (this.held.length > 0 && width !== this.heldWidth) {
-			this.putBack();
-		}
-		const live = super.renderLiveChildren(width);
-		if (this.held.length === 0 || live.lines.length >= this.linesNeeded()) return live;
-		this.putBack();
-		return super.renderLiveChildren(width);
-	}
-
-	/** Holds back the entries above the last ones that make `lines` lines at `width` (rendering those). */
-	private holdBack(width: number, lines: number): void {
-		const children = super.children;
-		let first = children.length;
-		let height = 0;
-		while (first > 0 && height < lines) {
-			first--;
-			height += renderEntry(children[first]!, width);
-		}
-		if (first === 0) return;
-		this.held = children.splice(0, first);
-		this.heldWidth = width;
-	}
-
-	private backfillSlice(): void {
-		this.backfillTimer = undefined;
-		const deadline = performance.now() + BACKFILL_SLICE_MS;
-		while (this.nextBackfilled >= 0) {
-			renderEntry(this.held[this.nextBackfilled--]!, this.heldWidth);
-			if (performance.now() >= deadline) break;
-		}
-		if (this.nextBackfilled >= 0) {
-			this.backfillTimer = setImmediate(() => this.backfillSlice());
-			return;
-		}
+	renderWholeDocument(): void {
+		this.linesNeeded = undefined;
 		this.completeNow();
 	}
 
-	private putBack(): void {
-		const held = this.held;
-		this.held = [];
-		const onBackfilled = this.onBackfilled;
-		this.stopBackfill();
-		super.children = held.concat(super.children);
-		onBackfilled?.();
+	/** Resume bounded tail rendering once there are no outstanding selection or search coordinates. */
+	followEnd(): void {
+		if (this.measuredRuns) {
+			for (const row of this.childView) this.hold(row);
+			super.clear();
+			this.measuredCount = 0;
+			this.measuredRuns = 0;
+		}
+		this.window = undefined;
+		this.pinned = false;
+		this.following = true;
+		this.trim = true;
+		// Mark the subtree dirty even if no component's contents changed.
+		this.noteChildrenUsed();
+	}
+
+	/** Move a measured window to the requested interval. Return the shift of the viewport's old coordinates. */
+	ensureRowsFromEnd(rows: number, viewportHeight = this.linesNeeded?.() ?? 0): number | undefined {
+		if (this.pinned || this.width === undefined || !this.linesNeeded) return undefined;
+		this.following = false;
+		const width = this.width;
+		const before = super.renderLiveChildren(width).lines.length;
+		const top = before - rows;
+		const bottom = top + viewportHeight;
+		const previous = this.window;
+		if (previous?.total === before && top >= previous.start && bottom <= previous.end) return undefined;
+
+		const margin = Math.max(1, Math.min(this.linesNeeded(), viewportHeight));
+		const prepended = top < margin ? this.prepend(width, margin - top) : 0;
+		const total = before + prepended;
+		const start = Math.max(0, top + prepended - margin);
+		const end = Math.min(total, bottom + prepended + margin);
+		const mounted = this.childView;
+		const next: Component[] = [];
+		let measured: MeasuredRow[] = [];
+		let measuredHeight = 0;
+		let shifted = prepended;
+		let extraEntries = 0;
+		let runs = 0;
+		let changed = prepended > 0;
+		const flush = () => {
+			if (!measured.length) return;
+			next.push(new MeasuredRows(measured, measuredHeight));
+			extraEntries += measured.length - 1;
+			runs++;
+			measured = [];
+			measuredHeight = 0;
+		};
+		const hold = (row: MeasuredRow) => {
+			measured.push(row);
+			measuredHeight += row.height;
+			if (measured.length === MAX_MEASURED_RUN) flush();
+		};
+		let y = 0;
+		for (let index = 0; index < mounted.length; index++) {
+			const child = mounted[index]!;
+			const height =
+				child instanceof MeasuredRows
+					? child.height
+					: (this.renderedChildHeight(child, index, width) ?? renderEntry(child, width));
+			if (child instanceof MeasuredRows) {
+				if (y + height <= start || y >= end) {
+					// Reuse intact runs once they reach a page, so deeper scrolling only copies a bounded fringe.
+					if (child.rows.length === MAX_MEASURED_RUN) {
+						flush();
+						next.push(child);
+						extraEntries += child.rows.length - 1;
+						runs++;
+					} else for (const row of child.rows) hold(row);
+				} else {
+					let rowTop = y;
+					for (const row of child.rows) {
+						if (
+							(rowTop + row.height > start && rowTop < end) ||
+							(row.height === 0 && rowTop >= start && rowTop < end)
+						) {
+							flush();
+							const active = this.materialize(row.create);
+							next.push(active);
+							const newHeight = renderEntry(active, width);
+							if (rowTop + row.height <= top + prepended) shifted += newHeight - row.height;
+							changed = true;
+						} else hold(row);
+						rowTop += row.height;
+					}
+				}
+			} else {
+				const create = this.factories.get(child);
+				if (create && (y + height <= start || y >= end)) {
+					hold({ create, height });
+					changed = true;
+				} else {
+					flush();
+					next.push(child);
+				}
+			}
+			y += height;
+		}
+		flush();
+		this.window = { total, start, end };
+		if (!changed) return undefined;
+		this.measuredCount = extraEntries;
+		this.measuredRuns = runs;
+		this.adoptChildren(next);
+		return shifted;
+	}
+
+	/** Pin the complete transcript until followed again. A true return requires a new layout before using its height. */
+	completeNow(): boolean {
+		this.following = false;
+		this.pinned = true;
+		if (this.isHoldingBack) {
+			const rows = this.prefix.map((row) => this.materialize(row));
+			for (const child of this.childView) {
+				if (child instanceof MeasuredRows) {
+					for (const row of child.rows) rows.push(this.materialize(row.create));
+				} else rows.push(child);
+			}
+			this.adoptChildren(rows);
+			this.prefix = [];
+			this.window = undefined;
+			this.measuredCount = 0;
+			this.measuredRuns = 0;
+			this.expandedSinceLayout = true;
+		}
+		return this.expandedSinceLayout;
+	}
+
+	protected override onChildMouseHandled(child: Component): void {
+		// E.g. a click expanded one historical tool independently of the global expansion setting.
+		this.factories.delete(child);
+	}
+
+	protected override renderLiveChildren(width: number): LiveLineArray {
+		const widthChanged = width !== this.width;
+		if (widthChanged) {
+			this.sampledRows = 0;
+			this.sampledHeight = 0;
+		}
+		this.width = width;
+		this.expandedSinceLayout = false;
+		if (!this.linesNeeded) {
+			if (this.prefix.length) this.completeNow();
+			this.expandedSinceLayout = false;
+			return super.renderLiveChildren(width);
+		}
+		const needed = this.linesNeeded();
+		if (this.following && (this.trim || widthChanged)) {
+			this.trim = false;
+			const mounted = this.childView;
+			let first = mounted.length;
+			let height = 0;
+			while (first > 0 && height < needed) height += renderEntry(mounted[--first]!, width);
+			if (!this.sampledRows && mounted.length > first) {
+				this.sampledRows = mounted.length - first;
+				this.sampledHeight = height;
+			}
+			if (first > 0) {
+				for (let i = 0; i < first; i++) {
+					const row = mounted[i]!;
+					this.hold(row);
+				}
+				this.spliceChildren(0, first);
+			}
+			if (height < needed) this.prepend(width, needed - height);
+		}
+		const live = super.renderLiveChildren(width);
+		// A setting, terminal height, or shrinking live message may expose older entries without a scroll event.
+		if (this.following && this.prefix.length && live.lines.length < needed) {
+			this.prepend(width, needed - live.lines.length);
+			return super.renderLiveChildren(width);
+		}
+		return live;
+	}
+
+	private prepend(width: number, needed: number): number {
+		let height = 0;
+		const rows: Component[] = [];
+		while (this.prefix.length && height < needed) {
+			const row = this.materialize(this.prefix.pop()!);
+			rows.push(row);
+			height += renderEntry(row, width);
+		}
+		if (rows.length) {
+			this.sampledRows += rows.length;
+			this.sampledHeight += height;
+			this.adoptChildren(rows.reverse().concat(this.childView));
+		}
+		return height;
+	}
+
+	private hold(row: Component): void {
+		if (row instanceof MeasuredRows) {
+			for (const entry of row.rows) this.prefix.push(entry.create);
+		} else this.prefix.push(this.factories.get(row) ?? row);
+	}
+
+	private materialize(row: Component | RowFactory): Component {
+		if (typeof row !== "function") return row;
+		const component = row();
+		this.factories.set(component, row);
+		return component;
 	}
 }
 
-/** Renders `entry` at `width` as a Container renders a child, and returns its height. */
 function renderEntry(entry: Component, width: number): number {
 	return (renderLiveLines(entry, width)?.lines ?? renderSharedLines(entry, width)).length;
 }

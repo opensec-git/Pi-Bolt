@@ -1,9 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+	type Api,
 	type AssistantMessage,
 	getCurrentSystemMessage,
 	type ImageContent,
 	type Message,
+	type Model,
 	type SystemMessage,
 	type TextContent,
 	type ToolResultMessage,
@@ -14,15 +16,19 @@ import {
 import {
 	appendFileSync,
 	closeSync,
+	copyFileSync,
 	existsSync,
 	fchmodSync,
+	constants as fsConstants,
 	fstatSync,
+	linkSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
 	readSync,
 	type Stats,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 	writeSync,
 } from "fs";
@@ -31,6 +37,7 @@ import { basename, join, resolve } from "path";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
+import { type CacheMiss, type CacheRequestCursor, detectCacheMiss, type ModelPriceSource } from "./cache-stats.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -38,6 +45,9 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+import { accumulateSessionStats, type SessionEntryStats } from "./usage-totals.ts";
+import { BranchSelection } from "./virtual-models.ts";
+
 export const CURRENT_SESSION_VERSION = 3;
 
 export interface SessionHeader {
@@ -220,6 +230,39 @@ export interface SessionProjection {
 	model: { provider: string; modelId: string } | null;
 }
 
+/** Message offsets in a canonical projection, stable until an edit, compaction or branch change. @internal */
+export interface ProjectionUsageBoundaries {
+	readonly afterCompaction: number | null;
+	readonly afterInvalidation: number;
+	readonly hasContextEdits: boolean;
+}
+
+interface CachedSessionProjection {
+	leafId: string | null;
+	projection: SessionProjection;
+	revision: number;
+	usageBoundaries: ProjectionUsageBoundaries;
+}
+
+function projectionUsageBoundaries(projection: SessionProjection): ProjectionUsageBoundaries {
+	const first = projection.entries[0]?.sourceEntry;
+	const checkpoint = first?.type === "compaction" ? first : undefined;
+	let afterCompaction = checkpoint ? projection.messages.length : null;
+	let afterEdit: number | undefined;
+	let offset = 0;
+	for (const { sourceEntry, messages } of projection.entries) {
+		// The checkpoint and its retained history precede the first raw child of the checkpoint.
+		if (checkpoint && sourceEntry.parentId === checkpoint.id) afterCompaction = offset;
+		offset += messages.length;
+		if (sourceEntry.type === "context_edit") afterEdit = offset;
+	}
+	return {
+		afterCompaction,
+		afterInvalidation: Math.max(afterCompaction ?? 0, afterEdit ?? 0),
+		hasContextEdits: afterEdit !== undefined,
+	};
+}
+
 export interface SessionContext {
 	messages: AgentMessage[];
 	thinkingLevel: string;
@@ -295,6 +338,7 @@ function migrateV1ToV2(entries: FileEntry[]): void {
 		}
 
 		entry.id = generateId(ids);
+		ids.add(entry.id);
 		entry.parentId = prevId;
 		prevId = entry.id;
 
@@ -549,8 +593,10 @@ export function buildSessionProjection(
 
 /** The projection of a root-to-leaf path. Does not keep or return `path`. */
 function projectSessionPath(path: SessionEntry[]): SessionProjection {
-	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const contextEntries = contextEntriesOfPath(path);
+	return { ...projectContextEntries(contextEntriesOfPath(path)), ...getSessionContextSettings(path) };
+}
+
+function projectContextEntries(contextEntries: SessionEntry[]): Pick<SessionProjection, "entries" | "messages"> {
 	const edits = new Map<string, ContextEditEntry>();
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
@@ -570,8 +616,6 @@ function projectSessionPath(path: SessionEntry[]): SessionProjection {
 	return {
 		entries: projectedEntries,
 		messages: projectedEntries.flatMap((entry) => entry.messages),
-		thinkingLevel,
-		model,
 	};
 }
 
@@ -613,6 +657,32 @@ function openSessionFile(path: string, flags: "w" | "wx" | "a"): number {
 		}
 	}
 	return fd;
+}
+
+/** Write complete JSONL records in batches. A single record can exceed the batch size. */
+class SessionBatchWriter {
+	private batch = "";
+	readonly fd: number;
+
+	constructor(fd: number) {
+		this.fd = fd;
+	}
+
+	write(line: string): void {
+		this.batch += `${line}\n`;
+		if (this.batch.length >= 64 * 1024) this.flush();
+	}
+
+	flush(): void {
+		if (this.batch) writeFileSync(this.fd, this.batch);
+		this.batch = "";
+	}
+}
+
+function writeSessionEntries(fd: number, entries: readonly FileEntry[]): void {
+	const writer = new SessionBatchWriter(fd);
+	for (const entry of entries) writer.write(JSON.stringify(entry));
+	writer.flush();
 }
 
 /**
@@ -658,48 +728,58 @@ function parseSessionEntryLine(line: string): FileEntry | null {
 
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
-	const resolvedFilePath = normalizePath(filePath);
-	if (!existsSync(resolvedFilePath)) return [];
-
 	const entries: FileEntry[] = [];
-	let pending = "";
+	visitSessionEntries(filePath, (entry) => entries.push(entry));
+	return entries;
+}
+
+/** Visit records from a valid session, with their original JSON text available until the callback returns. */
+function visitSessionEntries(filePath: string, visit: (entry: FileEntry, line: string) => void): void {
+	const resolvedFilePath = normalizePath(filePath);
+	if (!existsSync(resolvedFilePath)) return;
+
+	let validHeader: boolean | undefined;
+	const consume = (line: string): void => {
+		const entry = parseSessionEntryLine(line);
+		if (!entry) return;
+		validHeader ??= entry.type === "session" && typeof entry.id === "string";
+		if (validHeader) visit(entry, line);
+	};
+	let finalLine = "";
 	const fd = openSync(resolvedFilePath, "r");
 	try {
 		const decoder = new StringDecoder("utf8");
 		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
-
+		// A stored image can span dozens of reads. Scan each chunk once and assemble the line only at its end.
+		const fragments: string[] = [];
 		while (true) {
 			const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
 			if (bytesRead === 0) break;
-
-			pending += decoder.write(buffer.subarray(0, bytesRead));
-			let lineStart = 0;
-			let newlineIndex = pending.indexOf("\n", lineStart);
-			while (newlineIndex !== -1) {
-				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
-				if (entry) entries.push(entry);
-				lineStart = newlineIndex + 1;
-				newlineIndex = pending.indexOf("\n", lineStart);
+			const chunk = decoder.write(buffer.subarray(0, bytesRead));
+			let start = 0;
+			let newline = chunk.indexOf("\n");
+			while (newline !== -1) {
+				let line = chunk.slice(start, newline);
+				if (fragments.length > 0) {
+					fragments.push(line);
+					line = fragments.join("");
+					fragments.length = 0;
+				}
+				consume(line);
+				start = newline + 1;
+				newline = chunk.indexOf("\n", start);
 			}
-			pending = pending.slice(lineStart);
+			if (start < chunk.length) fragments.push(chunk.slice(start));
 		}
 
-		pending += decoder.end();
-		const finalEntry = parseSessionEntryLine(pending);
-		if (finalEntry) entries.push(finalEntry);
+		fragments.push(decoder.end());
+		finalLine = fragments.join("");
+		consume(finalLine);
 	} finally {
 		closeSync(fd);
 	}
 
-	// Validate session header before repairing the file.
-	if (entries.length === 0) return entries;
-	const header = entries[0];
-	if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-		return [];
-	}
-
-	if (pending) appendFileSync(resolvedFilePath, "\n");
-	return entries;
+	if (validHeader && finalLine) appendFileSync(resolvedFilePath, "\n");
 }
 
 /**
@@ -865,11 +945,12 @@ function classifySessionLine(buffer: Buffer, start: number, end: number): "skip"
 async function forEachLineOfFile(
 	filePath: string,
 	signal: AbortSignal | undefined,
+	firstReadSize: number,
 	onLine: (buffer: Buffer, start: number, end: number) => boolean,
 ): Promise<number> {
 	const file = await open(filePath, "r");
 	try {
-		const chunk = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
+		let chunk = Buffer.allocUnsafe(firstReadSize);
 		// The start of a line that continues in the next chunk, copied out of the reused chunk buffer.
 		let carry: Buffer[] = [];
 		// The previous chunk ended with "\r": a "\n" that starts this chunk belongs to the same line break.
@@ -914,6 +995,7 @@ async function forEachLineOfFile(
 				}
 			}
 			if (pos < bytesRead) carry.push(Buffer.from(buffer.subarray(pos)));
+			if (chunk.length !== SESSION_READ_BUFFER_SIZE) chunk = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
 		}
 		if (carry.length > 0) {
 			const line = Buffer.concat(carry);
@@ -934,6 +1016,7 @@ async function scanSessionInfo(
 	filePath: string,
 	stats: Stats,
 	signal?: AbortSignal,
+	idPrefix?: string,
 ): Promise<{ info: SessionInfo | null; cacheable: boolean }> {
 	let header: SessionHeader | null = null;
 	let notASession = false;
@@ -943,7 +1026,8 @@ async function scanSessionInfo(
 	let name: string | undefined;
 	let lastActivityTime: number | undefined;
 
-	const bytesRead = await forEachLineOfFile(filePath, signal, (buffer, start, end) => {
+	const firstReadSize = idPrefix === undefined ? SESSION_READ_BUFFER_SIZE : SESSION_HEADER_READ_BUFFER_SIZE;
+	const bytesRead = await forEachLineOfFile(filePath, signal, firstReadSize, (buffer, start, end) => {
 		if (header) {
 			const kind = classifySessionLine(buffer, start, end);
 			if (kind === "skip") return true;
@@ -960,6 +1044,7 @@ async function scanSessionInfo(
 				notASession = true;
 				return false;
 			}
+			if (idPrefix !== undefined && (typeof entry.id !== "string" || !entry.id.startsWith(idPrefix))) return false;
 			header = entry;
 			return true;
 		}
@@ -1028,13 +1113,15 @@ async function buildSessionInfo(
 	signal?: AbortSignal,
 	fileStats?: Stats,
 	index?: SessionInfoIndex,
+	idPrefix?: string,
 ): Promise<SessionInfo | null> {
 	try {
 		const stats = fileStats ?? (await stat(filePath));
 		const cached = index?.get(filePath, stats);
-		if (cached !== undefined) return cached;
-		const { info, cacheable } = await scanSessionInfo(filePath, stats, signal);
-		if (cacheable) index?.set(filePath, stats, info);
+		if (cached !== undefined)
+			return cached && idPrefix !== undefined && !cached.id.startsWith(idPrefix) ? null : cached;
+		const { info, cacheable } = await scanSessionInfo(filePath, stats, signal, idPrefix);
+		if (cacheable && idPrefix === undefined) index?.set(filePath, stats, info);
 		return info;
 	} catch {
 		signal?.throwIfAborted();
@@ -1074,6 +1161,7 @@ function isIndexedSessionInfo(value: unknown): value is IndexedSessionInfo {
 	if (typeof value !== "object" || value === null) return false;
 	const info = value as Record<string, unknown>;
 	return (
+		typeof info.id === "string" &&
 		typeof info.cwd === "string" &&
 		(info.name === undefined || typeof info.name === "string") &&
 		(info.created === null || typeof info.created === "number") &&
@@ -1112,10 +1200,11 @@ class SessionInfoIndex {
 		this.previous = previous;
 	}
 
-	static async load(dir: string): Promise<SessionInfoIndex> {
+	static async load(dir: string, maxBytes?: number): Promise<SessionInfoIndex> {
 		const path = join(dir, SESSION_INDEX_FILE);
 		const previous = new Map<string, SessionIndexEntry>();
 		try {
+			if (maxBytes !== undefined && (await stat(path)).size > maxBytes) return new SessionInfoIndex(path, previous);
 			const parsed = JSON.parse(await readFile(path, "utf8")) as { version?: unknown; sessions?: unknown };
 			if (parsed.version === SESSION_INDEX_VERSION && typeof parsed.sessions === "object" && parsed.sessions) {
 				for (const [file, entry] of Object.entries(parsed.sessions)) {
@@ -1233,13 +1322,20 @@ async function buildSessionInfosWithConcurrency(
 	files: SessionFileCandidate[],
 	onLoaded: (info: SessionInfo | null, index: number) => void,
 	signal?: AbortSignal,
+	idPrefix?: string,
 ): Promise<(SessionInfo | null)[]> {
-	const sessionIndex = await SessionInfoIndex.load(indexDir);
+	// A compact picker index can avoid scanning large matching transcripts. For an ID lookup, read at most
+	// the usual header budget for this directory, capped at one full listing chunk.
+	const indexBudget =
+		idPrefix === undefined
+			? undefined
+			: Math.min(SESSION_READ_BUFFER_SIZE, files.length * SESSION_HEADER_READ_BUFFER_SIZE);
+	const sessionIndex = await SessionInfoIndex.load(indexDir, indexBudget);
 	const results = await mapWithConcurrency(
 		files,
 		MAX_CONCURRENT_SESSION_INFO_LOADS,
 		async (file, index) => {
-			const info = await buildSessionInfo(file.path, signal, file.stats, sessionIndex);
+			const info = await buildSessionInfo(file.path, signal, file.stats, sessionIndex, idPrefix);
 			onLoaded(info, index);
 			return info;
 		},
@@ -1249,7 +1345,7 @@ async function buildSessionInfosWithConcurrency(
 	signal?.throwIfAborted();
 	// The index is written in the background when the listing is cancelled meanwhile: it holds what was read, and a
 	// cancelled listing must reject without waiting for the write.
-	await untilAborted(sessionIndex.save(), signal);
+	if (idPrefix === undefined) await untilAborted(sessionIndex.save(), signal);
 	signal?.throwIfAborted();
 	return results;
 }
@@ -1274,6 +1370,7 @@ async function listSessionsFromDir(
 	dir: string,
 	onProgress?: SessionListProgress,
 	signal?: AbortSignal,
+	idPrefix?: string,
 ): Promise<SessionInfo[]> {
 	signal?.throwIfAborted();
 	if (!existsSync(dir)) return [];
@@ -1298,6 +1395,7 @@ async function listSessionsFromDir(
 				onProgress?.(loaded, total, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
 			},
 			signal,
+			idPrefix,
 		);
 		return results.filter((info): info is SessionInfo => info !== null);
 	} catch {
@@ -1403,6 +1501,8 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
+	private cacheRequestCursor?: CacheRequestCursor;
+	private entryStats?: { end: number; totals: SessionEntryStats };
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
@@ -1411,14 +1511,14 @@ export class SessionManager {
 	 * The root-to-leaf path of `leafId`, kept between calls: an append extends it by one entry, so
 	 * the per-request projection does not walk the whole history. Never handed out; callers get copies.
 	 */
-	private leafPath: { leafId: string; path: SessionEntry[] } | undefined;
+	private leafPath: { leafId: string; path: SessionEntry[]; selection?: BranchSelection } | undefined;
 	/**
 	 * The projection of `leafId`'s path, kept between calls like `leafPath`: the agent, the compaction check and the
 	 * footer each ask for it several times per turn, and an append only adds one entry's messages. Rebuilt when the
 	 * leaf moves elsewhere, the session is replaced, or an appended entry changes earlier projected entries (compaction,
 	 * context edit). Never handed out: callers get copies of its arrays.
 	 */
-	private projection: { leafId: string | null; projection: SessionProjection; revision: number } | undefined;
+	private projection: CachedSessionProjection | undefined;
 	private projectionRevision = 0;
 	/** The latest session_info entry in file order (what getSessionName() reports). */
 	private latestSessionInfo: SessionInfoEntry | undefined;
@@ -1502,6 +1602,8 @@ export class SessionManager {
 		this.leafPath = undefined;
 		this.projection = undefined;
 		this.latestSessionInfo = undefined;
+		this.entryStats = undefined;
+		this.cacheRequestCursor = undefined;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1537,6 +1639,8 @@ export class SessionManager {
 		this.leafPath = undefined;
 		this.projection = undefined;
 		this.latestSessionInfo = undefined;
+		this.entryStats = undefined;
+		this.cacheRequestCursor = undefined;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1562,9 +1666,7 @@ export class SessionManager {
 		if (!this.persist || !this.sessionFile) return;
 		const fd = openSessionFile(this.sessionFile, "w");
 		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
-			}
+			writeSessionEntries(fd, this.fileEntries);
 		} finally {
 			closeSync(fd);
 		}
@@ -1613,9 +1715,7 @@ export class SessionManager {
 			if (!this._hasConversation()) return;
 			const fd = openSessionFile(this.sessionFile, "wx");
 			try {
-				for (const e of this.fileEntries) {
-					writeFileSync(fd, `${JSON.stringify(e)}\n`);
-				}
+				writeSessionEntries(fd, this.fileEntries);
 			} finally {
 				closeSync(fd);
 			}
@@ -1661,6 +1761,8 @@ export class SessionManager {
 			// Keep memory in line with the file: an entry that was not written must not become the
 			// parent of later entries, or the file would hold entries pointing to a missing parent.
 			this.fileEntries.pop();
+			this.entryStats = undefined;
+			this.cacheRequestCursor = undefined;
 			this.byId.delete(entry.id);
 			this.leafId = previousLeafId;
 			this.latestSessionInfo = previousSessionInfo;
@@ -1834,7 +1936,9 @@ export class SessionManager {
 		}
 		const target = this.byId.get(targetId);
 		if (!target) throw new Error(`Entry ${targetId} not found`);
-		if (!this.getBranch().some((entry) => entry.id === targetId)) {
+		const path = this._leafPath();
+		// A path covering the entire index contains every target. On a branch, check the indexed entry by identity.
+		if (path.length !== this.byId.size && !path.includes(target)) {
 			throw new Error(`Entry ${targetId} is not on the active branch`);
 		}
 		const editable =
@@ -1937,6 +2041,15 @@ export class SessionManager {
 		return this._walkBranch(fromId);
 	}
 
+	/** Model and thinking level recorded on this branch, including entries before compaction. @internal */
+	getRecordedSelection(getModel: (provider: string, modelId: string) => Model<Api> | undefined) {
+		const path = this._leafPath();
+		const branch = this.leafPath;
+		if (!path.length || !branch) return { model: undefined, thinkingLevel: undefined };
+		branch.selection ??= new BranchSelection();
+		return branch.selection.read(path, getModel);
+	}
+
 	private _walkBranch(startId: string | null): SessionEntry[] {
 		const path: SessionEntry[] = [];
 		let current = startId ? this.byId.get(startId) : undefined;
@@ -1955,14 +2068,12 @@ export class SessionManager {
 		const cached = this.leafPath;
 		if (cached?.leafId === leafId) return cached.path;
 		const appended = cached && this._appendedSince(cached.leafId, leafId);
-		let path: SessionEntry[];
 		if (cached && appended) {
-			// Appended under the cached leaf: extend the cached path in place.
-			path = cached.path;
-			for (const entry of appended) path.push(entry);
-		} else {
-			path = this._walkBranch(leafId);
+			for (const entry of appended) cached.path.push(entry);
+			cached.leafId = leafId;
+			return cached.path;
 		}
+		const path = this._walkBranch(leafId);
 		this.leafPath = { leafId, path };
 		return path;
 	}
@@ -1983,17 +2094,19 @@ export class SessionManager {
 	}
 
 	/** The cached projection of the current leaf path. Must not be modified or returned to callers. */
-	private _projection(): { projection: SessionProjection; revision: number } {
+	private _projection(): CachedSessionProjection {
 		const leafId = this.leafId;
 		const cached = this.projection;
 		if (cached && cached.leafId === leafId) return cached;
 		const appended =
 			leafId !== null && cached?.leafId != null ? this._appendedSince(cached.leafId, leafId) : undefined;
 		let projection: SessionProjection;
+		let usageBoundaries: ProjectionUsageBoundaries;
 		if (cached && appended?.every((entry) => entry.type !== "compaction" && entry.type !== "context_edit")) {
 			// Entries after the path's latest compaction are all in context, and no earlier projected entry changes:
 			// a context edit or a compaction would change what came before, so those rebuild.
 			projection = cached.projection;
+			usageBoundaries = cached.usageBoundaries;
 			for (const entry of appended) {
 				applySessionContextSetting(projection, entry);
 				const messages = sessionEntryToContextMessages(entry);
@@ -2002,8 +2115,9 @@ export class SessionManager {
 			}
 		} else {
 			projection = projectSessionPath(this._leafPath());
+			usageBoundaries = projectionUsageBoundaries(projection);
 		}
-		this.projection = { leafId, projection, revision: ++this.projectionRevision };
+		this.projection = { leafId, projection, revision: ++this.projectionRevision, usageBoundaries };
 		return this.projection;
 	}
 
@@ -2015,6 +2129,11 @@ export class SessionManager {
 		const path = this._leafPath();
 		const entries = contextEntriesOfPath(path);
 		return entries === path ? path.slice() : entries;
+	}
+
+	/** Fresh projected entries and messages for extension handlers inspecting the active branch before any drafts. */
+	buildContextPreview(): Pick<SessionProjection, "entries" | "messages"> {
+		return projectContextEntries(contextEntriesOfPath(this._leafPath()));
 	}
 
 	/**
@@ -2043,9 +2162,19 @@ export class SessionManager {
 		return this._projection().projection;
 	}
 
+	/** Usage cutoffs for the current canonical projection. @internal */
+	getProjectionUsageBoundaries(): ProjectionUsageBoundaries {
+		return this._projection().usageBoundaries;
+	}
+
+	/** Whether an edit is inside the active compaction window. @internal */
+	hasProjectedContextEdits(): boolean {
+		return this._projection().usageBoundaries.hasContextEdits;
+	}
+
 	buildSessionContext(): SessionContext {
-		const { messages, thinkingLevel, model } = this.buildSessionProjection();
-		return { messages, thinkingLevel, model };
+		const { messages, thinkingLevel, model } = this._projection().projection;
+		return { messages: messages.slice(), thinkingLevel, model: model && { ...model } };
 	}
 
 	/**
@@ -2070,48 +2199,97 @@ export class SessionManager {
 		return this.fileEntries.filter((e): e is SessionEntry => e.type !== "session");
 	}
 
+	/** File-order entries after the first occurrence of the cursor, including entries on other branches. */
+	getEntriesAfter(id: string): SessionEntry[] | undefined {
+		const cursor = this.byId.get(id);
+		if (!cursor) return undefined;
+		// Normal files have one header and unique IDs. Walk back from the tail where a polling client
+		// last read. For imported files with duplicate IDs, retain the first-match behavior.
+		const index =
+			this.fileEntries.length === this.byId.size + 1
+				? this.fileEntries.lastIndexOf(cursor)
+				: this.fileEntries.findIndex((entry) => entry.type !== "session" && entry.id === id);
+		const result: SessionEntry[] = [];
+		for (let i = index + 1; i < this.fileEntries.length; i++) {
+			const entry = this.fileEntries[i];
+			if (entry.type !== "session") result.push(entry);
+		}
+		return result;
+	}
+
+	/** Price the completed request against persisted usage, including entries on other branches. */
+	getCacheMiss(message: AssistantMessage, models: ModelPriceSource): CacheMiss | undefined {
+		this.cacheRequestCursor ??= { end: 0 };
+		return detectCacheMiss(this.fileEntries, message, models, this.cacheRequestCursor);
+	}
+
+	/** File-order session totals, including compacted and off-branch entries. Appends only visit the new suffix. */
+	getEntryStats(): SessionEntryStats {
+		const cached = this.entryStats;
+		if (!cached || cached.end !== this.fileEntries.length) {
+			const totals = accumulateSessionStats(this.fileEntries, cached?.end, cached && { ...cached.totals });
+			this.entryStats = { end: this.fileEntries.length, totals };
+			return { ...totals };
+		}
+		return { ...cached.totals };
+	}
+
 	/**
 	 * Get the session as a tree structure. Returns a shallow defensive copy of all entries.
 	 * A well-formed session has exactly one root (first entry with parentId === null).
 	 * Orphaned entries (broken parent chain) are also returned as roots.
 	 */
 	getTree(): SessionTreeNode[] {
-		const entries = this.getEntries();
-		const nodeMap = new Map<string, SessionTreeNode>();
-		const roots: SessionTreeNode[] = [];
-
-		// Create nodes with resolved labels
-		for (const entry of entries) {
-			const label = this.labelsById.get(entry.id);
-			const labelTimestamp = this.labelTimestampsById.get(entry.id);
-			nodeMap.set(entry.id, { entry, children: [], label, labelTimestamp });
+		const makeNode = (entry: SessionEntry): SessionTreeNode => ({
+			entry,
+			children: [],
+			label: this.labelsById.get(entry.id),
+			labelTimestamp: this.labelTimestampsById.get(entry.id),
+		});
+		// Most entries follow their parent in the file. Only links that skip an entry need an index.
+		// Pre-create those parents so forward references work as well as ordinary branches.
+		const indexed = new Map<string, SessionTreeNode>();
+		const index = (id: string) => {
+			if (indexed.has(id)) return;
+			const entry = this.byId.get(id);
+			if (entry) indexed.set(id, makeNode(entry));
+		};
+		const mayRepeat = this.fileEntries.length !== this.byId.size + 1;
+		let previousId: string | null = null;
+		for (const entry of this.fileEntries) {
+			if (entry.type === "session") continue;
+			if (entry.parentId !== null && entry.parentId !== previousId && entry.parentId !== entry.id) {
+				index(entry.parentId);
+			}
+			// The last definition supplies the node for every occurrence of a repeated ID.
+			if (mayRepeat) index(entry.id);
+			previousId = entry.id;
 		}
 
-		// Build tree
-		for (const entry of entries) {
-			const node = nodeMap.get(entry.id)!;
-			if (entry.parentId === null || entry.parentId === entry.id) {
+		const roots: SessionTreeNode[] = [];
+		const forks: SessionTreeNode[] = [];
+		let previous: SessionTreeNode | undefined;
+		for (const entry of this.fileEntries) {
+			if (entry.type === "session") continue;
+			const node = indexed.get(entry.id) ?? makeNode(entry);
+			const parentId = entry.parentId;
+			if (parentId === null || entry.id === parentId) {
 				roots.push(node);
 			} else {
-				const parent = nodeMap.get(entry.parentId);
+				const parent = previous?.entry.id === parentId ? previous : indexed.get(parentId);
 				if (parent) {
 					parent.children.push(node);
+					if (parent.children.length === 2) forks.push(parent);
 				} else {
-					// Orphan - treat as root
 					roots.push(node);
 				}
 			}
+			previous = node;
 		}
 
-		// Sort children by timestamp (oldest first, newest at bottom)
-		// Use iterative approach to avoid stack overflow on deep trees
-		const stack: SessionTreeNode[] = [...roots];
-		while (stack.length > 0) {
-			const node = stack.pop()!;
-			node.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
-			stack.push(...node.children);
+		for (const parent of forks) {
+			parent.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
 		}
-
 		return roots;
 	}
 
@@ -2239,61 +2417,28 @@ export class SessionManager {
 			}
 		}
 
-		if (this.persist) {
-			// Build label entries
-			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
-			let parentId = lastEntryId;
-			const labelEntries: LabelEntry[] = [];
-			for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
-				const labelEntry: LabelEntry = {
-					type: "label",
-					id: generateId(new Set(pathEntryIds)),
-					parentId,
-					timestamp: labelTimestamp,
-					targetId,
-					label,
-				};
-				pathEntryIds.add(labelEntry.id);
-				labelEntries.push(labelEntry);
-				parentId = labelEntry.id;
-			}
-
-			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
-			this.sessionId = newSessionId;
-			this.sessionFile = newSessionFile;
-			this._buildIndex();
-
-			// Use the same rule as _persist(): write now if the branched path already
-			// has a conversation, otherwise let _persist() create the file later.
-			if (this._hasConversation()) {
-				this._rewriteFile();
-				this.flushed = true;
-			} else {
-				this.flushed = false;
-			}
-
-			return newSessionFile;
-		}
-
-		// In-memory mode: replace current session with the path + labels
 		const labelEntries: LabelEntry[] = [];
 		let parentId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
 		for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
-			const labelEntry: LabelEntry = {
-				type: "label",
-				id: generateId(new Set([...pathEntryIds, ...labelEntries.map((e) => e.id)])),
-				parentId,
-				timestamp: labelTimestamp,
-				targetId,
-				label,
-			};
-			labelEntries.push(labelEntry);
-			parentId = labelEntry.id;
+			const id = generateId(pathEntryIds);
+			pathEntryIds.add(id);
+			labelEntries.push({ type: "label", id, parentId, timestamp: labelTimestamp, targetId, label });
+			parentId = id;
 		}
 		this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
 		this.sessionId = newSessionId;
+		if (this.persist) this.sessionFile = newSessionFile;
 		this._buildIndex();
-		return undefined;
+		if (!this.persist) return undefined;
+
+		// Match _persist(): setup-only branches create their file when the first conversation message arrives.
+		if (this._hasConversation()) {
+			this._rewriteFile();
+			this.flushed = true;
+		} else {
+			this.flushed = false;
+		}
+		return newSessionFile;
 	}
 
 	/**
@@ -2369,84 +2514,108 @@ export class SessionManager {
 	): SessionManager {
 		const resolvedSourcePath = resolvePath(sourcePath);
 		const resolvedTargetCwd = resolvePath(targetCwd);
-		const sourceEntries = loadEntriesFromFile(resolvedSourcePath);
-		if (sourceEntries.length === 0) {
-			throw new Error(`Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}`);
-		}
-
-		const sourceHeader = sourceEntries.find((e) => e.type === "session") as SessionHeader | undefined;
-		if (!sourceHeader) {
-			throw new Error(`Cannot fork: source session has no header: ${resolvedSourcePath}`);
-		}
-
-		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
-		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true, mode: SESSION_DIR_MODE });
-		}
-
-		// Create new session file with new ID but forked content
-		if (options?.id !== undefined) {
-			assertValidSessionId(options.id);
-		}
-		const newSessionId = options?.id ?? createSessionId();
-		const timestamp = new Date().toISOString();
-		const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-		const newSessionFile = join(dir, `${fileTimestamp}_${newSessionId}.jsonl`);
-
-		// Write new header pointing to source as parent, with updated cwd
-		const newHeader: SessionHeader = {
-			type: "session",
-			version: CURRENT_SESSION_VERSION,
-			id: newSessionId,
-			timestamp,
-			cwd: resolvedTargetCwd,
-			parentSession: resolvedSourcePath,
-		};
-		// Write the header and all non-header entries through one fd. Reopening the file per entry
-		// is slow where open/close is expensive (e.g. filesystem security monitors).
-		const fd = openSessionFile(newSessionFile, "wx");
+		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDirPath(resolvedTargetCwd);
+		const entries: FileEntry[] = [];
+		// The picker only discovers .jsonl files. Publish the complete fork exclusively after
+		// reading, canonicalizing and closing it. A malformed source cannot expose a partial branch.
+		const tempPath = join(dir, `.fork-${createSessionId()}.tmp`);
+		const output: { writer?: SessionBatchWriter; path?: string } = {};
 		try {
-			writeFileSync(fd, `${JSON.stringify(newHeader)}\n`);
-			for (const entry of sourceEntries) {
-				if (entry.type !== "session") {
-					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+			try {
+				visitSessionEntries(resolvedSourcePath, (entry, line) => {
+					if (entry.type === "session") {
+						if (output.writer) return;
+						if (options?.id !== undefined) assertValidSessionId(options.id);
+						const id = options?.id ?? createSessionId();
+						const timestamp = new Date().toISOString();
+						const header: SessionHeader = {
+							type: "session",
+							version: CURRENT_SESSION_VERSION,
+							id,
+							timestamp,
+							cwd: resolvedTargetCwd,
+							parentSession: resolvedSourcePath,
+						};
+						mkdirSync(dir, { recursive: true, mode: SESSION_DIR_MODE });
+						output.path = join(dir, `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`);
+						output.writer = new SessionBatchWriter(openSessionFile(tempPath, "wx"));
+						output.writer.write(JSON.stringify(header));
+						entries.push(header);
+						return;
+					}
+					const encoded = JSON.stringify(entry);
+					output.writer!.write(encoded);
+					// Canonical input already has exactly the value a reopen would return. Imported
+					// numbers such as -0 and 1e400 can acquire a different value on serialization.
+					const saved: FileEntry | null = encoded === line ? entry : JSON.parse(encoded);
+					if (saved) entries.push(saved);
+				});
+				if (!output.writer || !output.path) {
+					throw new Error(`Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}`);
 				}
+				output.writer.flush();
+			} finally {
+				if (output.writer) closeSync(output.writer.fd);
 			}
-		} finally {
-			closeSync(fd);
-		}
 
-		return new SessionManager(resolvedTargetCwd, dir, newSessionFile, true);
+			try {
+				linkSync(tempPath, output.path);
+			} catch (error) {
+				// Filesystems such as FAT may disallow hard links. Keep the original exclusive-create rule.
+				const code = (error as NodeJS.ErrnoException).code;
+				if (!code || !["EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "ENOSYS", "EMLINK", "EXDEV"].includes(code))
+					throw error;
+				copyFileSync(tempPath, output.path, fsConstants.COPYFILE_EXCL);
+			}
+			return new SessionManager(resolvedTargetCwd, dir, output.path, true, undefined, entries);
+		} finally {
+			if (output.writer) unlinkSync(tempPath);
+		}
 	}
 
 	/**
-	 * Find an exact session ID without loading transcript bodies.
+	 * Find an exact local ID, or optionally a unique local prefix, without loading transcript bodies.
 	 * @param cwd Working directory (used to compute default session directory)
-	 * @param id Exact session ID
+	 * @param id Session ID or prefix
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
 	 */
-	static findById(cwd: string, id: string, sessionDir?: string): string | undefined {
+	static findById(
+		cwd: string,
+		id: string,
+		sessionDir?: string,
+		match: "exact" | "unique-prefix" = "exact",
+	): string | undefined {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
 		const filterCwd = sessionDir !== undefined && !pathsEqual(dir, getDefaultSessionDirPath(cwd));
 		const resolvedCwd = resolvePath(cwd);
 
+		let prefixMatch: string | undefined;
+		let needsListing = false;
 		try {
 			for (const file of readdirSync(dir)) {
 				if (!file.endsWith(".jsonl")) continue;
 				const path = join(dir, file);
 				const header = readSessionHeaderForDiscovery(path);
-				if (header?.id !== id) continue;
+				if (!header) {
+					// A bounded header scan can miss an oversized legacy header. Let the full listing resolve it.
+					needsListing = true;
+					continue;
+				}
+				const exact = header.id === id;
+				if (!exact && (match === "exact" || !id || !header.id.startsWith(id))) continue;
 				if (filterCwd && !sessionCwdMatches(getSessionHeaderCwd(header), resolvedCwd)) continue;
-				return path;
+				if (exact) return path;
+				if (prefixMatch) needsListing = true;
+				prefixMatch = path;
 			}
 		} catch {
-			// Exact session discovery is best-effort, matching list().
+			return undefined;
 		}
-		return undefined;
+		return needsListing ? undefined : prefixMatch;
 	}
 
 	/**
-	 * List all sessions for a directory.
+	 * List sessions for a directory. An optional ID prefix filters by the session header before reading message bodies.
 	 * @param cwd Working directory (used to compute default session directory)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
 	 * @param onProgress Optional callback for progress updates (loaded, total)
@@ -2456,6 +2625,7 @@ export class SessionManager {
 		sessionDir?: string,
 		onProgress?: SessionListProgress,
 		signal?: AbortSignal,
+		idPrefix?: string,
 	): Promise<SessionInfo[]> {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
 		const filterCwd = sessionDir !== undefined && !pathsEqual(dir, getDefaultSessionDirPath(cwd));
@@ -2464,12 +2634,12 @@ export class SessionManager {
 		const progress: SessionListProgress | undefined = onProgress
 			? (loaded, total, partialSessions) => onProgress(loaded, total, partialSessions?.filter(includeSession))
 			: undefined;
-		const sessions = (await listSessionsFromDir(dir, progress, signal)).filter(includeSession);
+		const sessions = (await listSessionsFromDir(dir, progress, signal, idPrefix)).filter(includeSession);
 		return sortSessionInfos(sessions);
 	}
 
 	/**
-	 * List all sessions across all project directories.
+	 * List sessions across project directories, optionally filtered by the session ID prefix.
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
 	static async listAll(onProgress?: SessionListProgress, signal?: AbortSignal): Promise<SessionInfo[]>;
@@ -2477,11 +2647,13 @@ export class SessionManager {
 		sessionDir?: string,
 		onProgress?: SessionListProgress,
 		signal?: AbortSignal,
+		idPrefix?: string,
 	): Promise<SessionInfo[]>;
 	static async listAll(
 		sessionDirOrOnProgress?: string | SessionListProgress,
 		onProgressOrSignal?: SessionListProgress | AbortSignal,
 		signal?: AbortSignal,
+		idPrefix?: string,
 	): Promise<SessionInfo[]> {
 		const customSessionDir =
 			typeof sessionDirOrOnProgress === "string" ? normalizePath(sessionDirOrOnProgress) : undefined;
@@ -2497,7 +2669,7 @@ export class SessionManager {
 				: (onProgressOrSignal ?? signal);
 		abortSignal?.throwIfAborted();
 		if (customSessionDir) {
-			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal));
+			return sortSessionInfos(await listSessionsFromDir(customSessionDir, progress, abortSignal, idPrefix));
 		}
 
 		const sessionsDir = getSessionsDir();
@@ -2557,6 +2729,7 @@ export class SessionManager {
 					progress?.(loaded, totalFiles, publishPartial ? sortSessionInfos([...partialSessions]) : undefined);
 				},
 				abortSignal,
+				idPrefix,
 			);
 
 			return sortSessionInfos(results.filter((info): info is SessionInfo => info !== null));

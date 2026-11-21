@@ -14,7 +14,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
-import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
+import type { ModelRouteRequest, VirtualModelDefinition } from "../src/core/virtual-models.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
 async function createRuntime(requests: ModelRouteRequest[] = []) {
@@ -51,12 +51,39 @@ function assistantFrom(model: Model<string>, text: string): AssistantMessage {
 	return { ...fauxAssistantMessage(text), api: model.api, provider: model.provider, model: model.id };
 }
 
-describe("getBranchSelection", () => {
+describe("recorded branch selection", () => {
+	it("follows branch changes and resolves registrations again on the same leaf", async () => {
+		const { runtime, virtual } = await createRuntime();
+		const manager = SessionManager.inMemory();
+		const physical = runtime.getModel("faux", "small")!;
+		const lookup = (provider: string, id: string) => runtime.getModel(provider, id);
+		const root = manager.appendThinkingLevelChange("low");
+		manager.appendModelChange(virtual.provider, virtual.id);
+		const answer = manager.appendMessage(assistantFrom(physical, "ok"));
+		expect(manager.getRecordedSelection(lookup)).toEqual({
+			model: { provider: "router", modelId: "auto" },
+			thinkingLevel: "low",
+		});
+		expect(manager.getRecordedSelection(() => undefined).model).toEqual({ provider: "faux", modelId: "small" });
+		manager.branch(root);
+		manager.appendThinkingLevelChange("high");
+		expect(manager.getRecordedSelection(lookup)).toEqual({ model: undefined, thinkingLevel: "high" });
+		manager.branch(answer);
+		expect(manager.getRecordedSelection(lookup).thinkingLevel).toBe("low");
+		manager.resetLeaf();
+		expect(manager.getRecordedSelection(lookup)).toEqual({ model: undefined, thinkingLevel: undefined });
+		manager.appendModelChange(physical.provider, physical.id);
+		expect(manager.getRecordedSelection(lookup)).toEqual({
+			model: { provider: "faux", modelId: "small" },
+			thinkingLevel: undefined,
+		});
+	});
+
 	function select(build: (sessionManager: SessionManager) => void, runtime: ModelRuntime) {
 		const sessionManager = SessionManager.inMemory();
 		build(sessionManager);
 		const lookups: string[] = [];
-		const selection = getBranchSelection(sessionManager.getBranch(), (provider, modelId) => {
+		const { model: selection } = sessionManager.getRecordedSelection((provider, modelId) => {
 			lookups.push(`${provider}/${modelId}`);
 			return runtime.getModel(provider, modelId);
 		});

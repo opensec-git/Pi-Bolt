@@ -1,10 +1,19 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerLiveSession, unregisterLiveSession } from "../../src/core/live-sessions.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import {
@@ -351,7 +360,7 @@ describe("subagent stream binding", () => {
 	});
 
 	/** A parent session with no live children: its runs are pushed as messages, its agents written as files. */
-	async function files() {
+	async function files(pollMs = 20) {
 		const dir = mkdtempSync(join(tmpdir(), "pi-subagent-binding-"));
 		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
 		const sessionDir = join(dir, "sessions");
@@ -363,7 +372,7 @@ describe("subagent stream binding", () => {
 		const streams = new SubagentStreams({
 			getSession: () => parent.session,
 			send: (message) => sent.push(message as Message),
-			pollMs: 20,
+			pollMs,
 		});
 		cleanups.push(() => streams.clear());
 		const call = (runId: string, args: Message, timestamp?: number) =>
@@ -453,6 +462,379 @@ describe("subagent stream binding", () => {
 			(message.events as Message[]).some((event) => event.type === "message_start");
 		return { parent, streams, call, result, agent, replies, resets, sent, live, isStart };
 	}
+
+	it("reads the saved branch once across subscriptions and still sees live results while waiting", async () => {
+		const { parent, streams, call, result, agent, replies } = await files();
+		call("first", { prompt: "one" });
+		call("second", { prompt: "two" });
+		vi.useFakeTimers();
+		const branch = vi.spyOn(parent.session.sessionManager, "getBranch");
+		const listing = vi.spyOn(streams, "candidateFiles");
+		try {
+			streams.subscribe("first");
+			streams.subscribe("second");
+			expect(branch).toHaveBeenCalledTimes(1);
+			branch.mockClear();
+			listing.mockClear();
+			result("first", "aaaaaaaa");
+			result("second", "bbbbbbbb");
+			agent("aaaaaaaa", "different saved prompt", "first answer", 100);
+			agent("bbbbbbbb", "different saved prompt", "second answer", 200);
+			vi.advanceTimersByTime(1000);
+			expect(branch).not.toHaveBeenCalled();
+			expect(listing).toHaveBeenCalledTimes(2);
+			expect(listing.mock.results[0].value).toBe(listing.mock.results[1].value);
+			expect(replies("first")).toEqual([expect.stringContaining("first answer")]);
+			expect(replies("second")).toEqual([expect.stringContaining("second answer")]);
+			streams.unsubscribe("first");
+			streams.unsubscribe("second");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			branch.mockRestore();
+			listing.mockRestore();
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("invalidates saved runs on a branch switch and keeps temporary live results out of the saved index", async () => {
+		const { parent, streams, result } = await files();
+		const manager = parent.session.sessionManager;
+		const file = parent.session.sessionFile;
+		const savedId = manager.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "saved", name: "Agent", arguments: { prompt: "original" } }],
+		} as never);
+		expect(streams.runs(file)?.get("saved")?.prompt).toBe("original");
+		result("saved", "temporary-agent");
+		expect(streams.runs(file)?.get("saved")?.agentId).toBe("temporary-agent");
+		parent.session.messages.pop();
+		expect(streams.runs(file)?.get("saved")?.agentId).toBeUndefined();
+		manager.resetLeaf();
+		expect(streams.runs(file)?.has("saved")).toBe(false);
+		manager.branch(savedId);
+		expect(streams.runs(file)?.get("saved")?.prompt).toBe("original");
+	});
+
+	it("delivers appends and same-size atomic replacements before the fallback poll", async () => {
+		const { streams, call, agent, replies, resets } = await files(60_000);
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "earlier", 100);
+		streams.subscribe("run");
+		const line = JSON.stringify({ type: "message", message: { role: "assistant", content: "one" } });
+		appendFileSync(file, `${line}\n`);
+		await until(() => replies("run").at(-1) === '"one"');
+		writeFileSync(`${file}.tmp`, readFileSync(file, "utf8").replace('"one"', '"two"'));
+		renameSync(`${file}.tmp`, file);
+		await until(() => replies("run").at(-1) === '"two"');
+		expect(resets("run")).toHaveLength(2);
+		appendFileSync(file, `${line}\n`);
+		await until(() => replies("run").at(-1) === '"one"');
+		expect(replies("run")).toHaveLength(5);
+	});
+
+	it("rediscovers a replaced child file after the last subscription ends", async () => {
+		const { streams, call, agent, replies } = await files();
+		call("first", { prompt: "one" });
+		agent("childxyz", "one", "old answer", 100);
+		streams.subscribe("first");
+		await until(() => replies("first").length > 0);
+		expect(replies("first")).toEqual([expect.stringContaining("old answer")]);
+		expect(streams.unsubscribe("first")).toBe(true);
+
+		call("second", { prompt: "two" });
+		agent("childxyz", "two", "new answer", 200);
+		streams.subscribe("second");
+		await until(() => replies("second").length > 0);
+		expect(replies("second")).toEqual([expect.stringContaining("new answer")]);
+	});
+
+	it("rebinds both shared-file subscriptions on replacement and keeps the remaining listener after unsubscribe", async () => {
+		const { streams, call, agent, replies } = await files(60_000);
+		const resume = "abcdefgh1234";
+		const file = agent(resume, "hello", "initial", 100);
+		call("a", { prompt: "hello", resume });
+		call("b", { prompt: "again", resume });
+		streams.subscribe("a");
+		streams.subscribe("b");
+		writeFileSync(`${file}.tmp`, readFileSync(file, "utf8").replace('"initial"', '"updated"'));
+		renameSync(`${file}.tmp`, file);
+		await until(() => ["a", "b"].every((id) => replies(id).at(-1)?.includes("updated")));
+		streams.unsubscribe("a");
+		appendFileSync(file, '{"type":"message","message":{"role":"assistant","content":"new"}}\n');
+		await until(() => replies("b").at(-1) === '"new"');
+		expect(replies("a")).toHaveLength(2);
+	});
+
+	it("follows saved appends through the periodic poll when watching is unavailable", async () => {
+		const { streams, call, agent, replies } = await files();
+		vi.spyOn(streams, "watchFile").mockReturnValue(undefined);
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		streams.subscribe("run");
+		appendFileSync(file, '{"type":"message","message":{"role":"assistant","content":"fallback"}}\n');
+		await until(() => replies("run").at(-1) === '"fallback"');
+	});
+
+	it("reads complete UTF-8 header lines across pages and at the byte limit", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-subagent-header-"));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const streams = new SubagentStreams({ getSession: () => undefined, send: () => {} });
+		const prefix =
+			'{"type":"session","parentSession":"parent"}\n{"type":"message","message":{"role":"user","content":"';
+		for (const page of [4096, 16384, 65536]) {
+			const file = join(dir, String(page));
+			const prompt = `${"x".repeat(page - 1 - prefix.length)}📎task`;
+			writeFileSync(file, `${prefix}${prompt}"}}`);
+			expect(streams.header(file)?.firstUser).toBe(prompt);
+		}
+		const file = join(dir, "limit");
+		const suffix = '"}}';
+		const prompt = "x".repeat(256 * 1024 - prefix.length - suffix.length);
+		writeFileSync(file, `${prefix}${prompt}x${suffix}\n`);
+		expect(streams.header(file)).toMatchObject({ parent: "parent" });
+		expect(streams.header(file)?.firstUser).toBeUndefined();
+		writeFileSync(file, `${prefix}${prompt}${suffix}`);
+		expect(streams.header(file)?.firstUser).toBe(prompt);
+	});
+
+	it("counts malformed and empty header lines toward the 40-line limit", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-subagent-header-lines-"));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const streams = new SubagentStreams({ getSession: () => undefined, send: () => {} });
+		const file = join(dir, "child.jsonl");
+		const header = '{"type":"session","parentSession":"parent"}\n';
+		const user = '{"type":"message","message":{"role":"user","content":"task"}}';
+		const filler = "invalid\n\n".repeat(19);
+		writeFileSync(file, `${header}${filler}\n${user}\n`);
+		expect(streams.header(file)?.firstUser).toBeUndefined();
+		writeFileSync(file, `${header}${filler}${user}\n`);
+		expect(streams.header(file)?.firstUser).toBe("task");
+	});
+
+	it("joins split transcript records once, retains trailing bytes and drops partial records on truncation", async () => {
+		const { streams, call, agent, replies, resets } = await files();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			const line = (text: string) =>
+				JSON.stringify({ type: "message", message: { role: "assistant", content: text } });
+			const split = Buffer.from(line("left📎right"));
+			const firstByte = split.indexOf(Buffer.from("📎"));
+			for (const piece of [split.subarray(0, firstByte + 1), split.subarray(firstByte + 1, firstByte + 3)]) {
+				appendFileSync(file, piece);
+				vi.advanceTimersByTime(20);
+				expect(replies("run")).toHaveLength(1);
+			}
+			appendFileSync(file, split.subarray(firstByte + 3));
+			appendFileSync(file, `\nmalformed\n${line("second")}\n{"type":`);
+			vi.advanceTimersByTime(20);
+			expect(replies("run").slice(1)).toEqual(['"left📎right"', '"second"']);
+			appendFileSync(file, '"message","message":{"role":"assistant","content":"third"}}\n{"incomplete":');
+			vi.advanceTimersByTime(20);
+			expect(replies("run").at(-1)).toBe('"third"');
+			writeFileSync(file, `${line("replacement")}\n`);
+			vi.advanceTimersByTime(20);
+			expect(replies("run").at(-1)).toBe('"replacement"');
+			expect(resets("run")).toHaveLength(2);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("yields between blocks of a large saved line and delivers it before the next scheduled poll", async () => {
+		const { streams, call, agent, replies } = await files();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			const entry = { type: "message", message: { role: "assistant", content: "a".repeat(5 * 1024 * 1024) } };
+			appendFileSync(file, `${JSON.stringify(entry)}\n`);
+			vi.advanceTimersByTime(20);
+			let countBetweenBlocks = 0;
+			setImmediate(() => {
+				countBetweenBlocks = replies("run").length;
+			});
+			vi.advanceTimersByTime(10);
+			expect(countBetweenBlocks).toBe(1);
+			expect(replies("run")).toHaveLength(2);
+			expect(replies("run").at(-1)).toContain("cut for the phone");
+			appendFileSync(file, `${JSON.stringify(entry)}\n`);
+			vi.advanceTimersByTime(10);
+			streams.unsubscribe("run");
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("matches whole-record UTF-8 decoding across incomplete and malformed sequences", async () => {
+		const { streams, call, agent, replies } = await files();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			const prefix = '{"type":"message","message":{"role":"assistant","content":"';
+			const chunks = [Buffer.from([0xef]), Buffer.from([0xbb, 0xbf, 0xf0, 0x9f]), Buffer.from([0x41, 0xe2])];
+			appendFileSync(file, prefix);
+			for (const chunk of chunks) {
+				appendFileSync(file, chunk);
+				vi.advanceTimersByTime(20);
+			}
+			appendFileSync(file, '"}}\n');
+			vi.advanceTimersByTime(20);
+			expect(replies("run").at(-1)).toBe(JSON.stringify(Buffer.concat(chunks).toString("utf8")));
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("preserves saved preview bytes and batch boundaries for text, thinking, images and escaped content", async () => {
+		const { streams, call, agent, sent } = await files();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		const max = 256 * 1024;
+		const text = "a".repeat(max + 1);
+		const inputs = [
+			{ role: "assistant", content: text },
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text },
+					{ type: "text", text: "tail" },
+				],
+			},
+			{ role: "assistant", content: [{ type: "thinking", thinking: text }] },
+			{ role: "toolResult", content: [{ type: "image", data: text, mimeType: "image/png" }] },
+			{ role: "compactionSummary", summary: text, tokensBefore: 123 },
+			{ role: "assistant", content: "界".repeat(max / 4) },
+			{ role: "assistant", content: "\u0001".repeat(max / 4) },
+			{ role: "assistant", content: "short", details: { output: text } },
+		];
+		const expected = inputs.map((m) => capMessage(m, max));
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			for (let i = 0; i < inputs.length; i++) {
+				const from = sent.length;
+				const line = JSON.stringify({ type: "message", message: inputs[i] }) + "\n";
+				appendFileSync(file, line);
+				vi.advanceTimersByTime(60);
+				const batches = sent.slice(from).filter((m) => m.type === "subagent_entries");
+				expect(batches.map((m) => m.messages)).toEqual([[expected[i]]]);
+			}
+			// Count the serialized UTF-8 bytes. The third record fills the first batch.
+			const record = { role: "assistant", content: "界".repeat(64000) };
+			const from = sent.length;
+			const line = JSON.stringify({ type: "message", message: record }) + "\n";
+			appendFileSync(file, line.repeat(4));
+			vi.advanceTimersByTime(20);
+			const batches = sent.slice(from).filter((m) => m.type === "subagent_entries");
+			expect(batches.flatMap((m) => m.messages)).toEqual([record, record, record, record]);
+			expect(batches.map((m) => (m.messages as Message[]).length)).toEqual([3, 1]);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("projects oversized saved fields with fixed limits and validates the rest of each record", async () => {
+		const { streams, call, agent, sent } = await files();
+		streams.withFixedLimits();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		const max = streams.limits.maxMessageBytes;
+		const block = 1024 * 1024;
+		const prefix = '{"type":"message","message":{"role":"assistant","content":"';
+		// Place the backslash of a Unicode escape at the last byte of a disk block.
+		const long = "a".repeat(3 * block - Buffer.byteLength(prefix) - 1);
+		const record = (message: Message) => JSON.stringify({ type: "message", message });
+		const subject = 'é漢\\"\n'.repeat(550_000);
+		const sample = {
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: subject },
+				{ type: "text", text: "ok" },
+			],
+		};
+		const details = { role: "toolResult", details: "a".repeat(4 * block), content: "kept" };
+		// A similarly named field in another object can affect the fallback for oversized messages.
+		const nested = { role: "user", content: "small", holder: { content: "a".repeat(4 * block) } };
+		const edit = {
+			role: "assistant",
+			content: [{ type: "toolCall", arguments: { edits: [{ oldText: "before", newText: subject }] } }],
+		};
+		// A named key can survive in the oversized-message fallback. Its entire name matters.
+		const longKey = { role: "assistant", content: "ok", ["key".repeat(block)]: 7 };
+		const following = { role: "assistant", content: "next" };
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			const from = sent.length;
+			for (const line of [
+				record(sample),
+				record(details),
+				record(nested),
+				record(edit),
+				record(longKey),
+				prefix + long + String.fromCharCode(92) + 'u754cend"}}',
+				prefix + long + String.fromCharCode(92) + 'ud83d", "content":"replacement"}}',
+				prefix + long + String.fromCharCode(92) + 'u0z00"}}',
+				prefix + long + String.fromCharCode(92) + 'q"}}',
+				prefix + long + String.fromCharCode(92) + "u1234" + String.fromCharCode(1) + '"}}',
+				prefix + long + '","meta": } }',
+				record(following),
+			]) {
+				appendFileSync(file, `${line}\n`);
+				vi.advanceTimersByTime(120);
+			}
+			const received = sent
+				.slice(from)
+				.filter((m) => m.type === "subagent_entries")
+				.flatMap((m) => m.messages);
+			expect(received).toEqual([
+				capMessage(sample, max),
+				capMessage(details, max),
+				capMessage(nested, max),
+				capMessage(edit, max),
+				capMessage(longKey, max),
+				capMessage({ role: "assistant", content: `${long}界end` }, max),
+				{ role: "assistant", content: "replacement" },
+				following,
+			]);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("honors a mutable preview cap raised before a partial line finishes", async () => {
+		const { streams, call, agent, sent } = await files();
+		call("run", { prompt: "hello" });
+		const file = agent("child", "hello", "initial", 100);
+		const text = "z".repeat(4 * 1024 * 1024);
+		vi.useFakeTimers();
+		try {
+			streams.subscribe("run");
+			appendFileSync(file, '{"type":"message","message":{"role":"assistant","content":"' + text);
+			vi.advanceTimersByTime(120);
+			streams.limits.maxMessageBytes = 5 * 1024 * 1024;
+			const from = sent.length;
+			appendFileSync(file, '"}}\n');
+			vi.advanceTimersByTime(40);
+			expect(sent.slice(from).flatMap((m) => m.messages)).toEqual([{ role: "assistant", content: text }]);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
+	});
 
 	it("does not bind a repeated prompt to an earlier run's agent", async () => {
 		const { streams, call, result, agent, replies } = await files();
@@ -603,6 +985,88 @@ describe("subagent stream binding", () => {
 					: (message.events as Message[]).map((event) => String(event.type)),
 			);
 		expect(order).toEqual(["message_end", "saved:assistant", "tool_execution_start", "message_start"]);
+	});
+
+	it("sleeps until a missing saved message is due and resumes normal batching as soon as it arrives", async () => {
+		const { streams, call, result, agent, sent, live } = await files(100);
+		call("run", { prompt: "task" });
+		result("run", "11111111aaaa");
+		const file = agent("11111111aaaa", "task", "earlier", 100);
+		const emit = live(file, "general-purpose#11111111", [{ role: "user", content: "task" }], 100);
+		vi.useFakeTimers();
+		const timers = vi.spyOn(globalThis, "setTimeout");
+		try {
+			streams.subscribe("run");
+			vi.advanceTimersByTime(100);
+			const message = { role: "assistant", content: [] };
+			const end = () => emit({ type: "message_end", message });
+			const tool = (id: string) =>
+				emit({ type: "tool_execution_end", toolCallId: id, toolName: "read", isError: false });
+			const delivered = (id: string) =>
+				sent.some((m) => (m.events as Message[] | undefined)?.some((e) => e.toolCallId === id));
+			timers.mockClear();
+			end();
+			tool("waiting");
+			vi.advanceTimersByTime(1400);
+			expect(delivered("waiting")).toBe(false);
+			expect(timers.mock.calls.length).toBeLessThanOrEqual(2);
+			appendFileSync(file, JSON.stringify({ type: "message", message }) + "\n");
+			vi.advanceTimersByTime(100);
+			expect(delivered("waiting")).toBe(true);
+			tool("next");
+			vi.advanceTimersByTime(80);
+			expect(delivered("next")).toBe(true);
+
+			end();
+			tool("expired");
+			vi.advanceTimersByTime(4999);
+			expect(delivered("expired")).toBe(false);
+			vi.advanceTimersByTime(1);
+			expect(delivered("expired")).toBe(true);
+		} finally {
+			streams.clear();
+			timers.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it("sends exact JSON snapshots and splits batches by encoded UTF-8 bytes", async () => {
+		const { parent, call, result, agent, live } = await files();
+		const runId = 'quote"\n\ud800';
+		call(runId, { prompt: "task" });
+		result(runId, "11111111aaaa");
+		const file = agent("11111111aaaa", "task", "earlier", 100);
+		const emit = live(file, "general-purpose#11111111", [{ role: "user", content: "task" }], 100, {
+			streaming: false,
+		});
+		const wire: string[] = [];
+		const streams = new SubagentStreams({
+			getSession: () => parent.session,
+			send: () => {},
+			sendJson: (json) => wire.push(json),
+		});
+		vi.useFakeTimers();
+		try {
+			streams.subscribe(runId);
+			const usage = { output: 0 };
+			const expected: Message[] = [];
+			for (let i = 0; i < 7; i++) {
+				usage.output = i;
+				const assistantMessageEvent = { type: "thinking_delta", contentIndex: 0, delta: "界".repeat(70_000) };
+				emit({ type: "message_update", message: { role: "assistant", content: [], usage }, assistantMessageEvent });
+				expected.push({ type: "message_update", usage: { ...usage }, assistantMessageEvent });
+			}
+			usage.output = 999;
+			vi.advanceTimersByTime(80);
+			expect(wire).toEqual(
+				[0, 2, 4, 6].map((start) =>
+					JSON.stringify({ type: "subagent_events", runId, events: expected.slice(start, start + 2) }),
+				),
+			);
+		} finally {
+			streams.clear();
+			vi.useRealTimers();
+		}
 	});
 
 	it("splits a burst of live events into messages of bounded size", async () => {

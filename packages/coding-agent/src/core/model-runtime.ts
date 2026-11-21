@@ -563,7 +563,7 @@ export class ModelRuntime implements Models {
 	 */
 	getModelChoices(): { models: readonly Model<Api>[]; model(choice: Model<Api>): Model<Api> } {
 		const models: Model<Api>[] = [];
-		const standIns = new Map<Model<Api>, { listing: ModelListing; index: number }>();
+		const listings = new Map<string, { listing: ModelListing; entries: ModelListing["entries"] }>();
 		for (const provider of this.models.getProviders()) {
 			const listing = getModelListing(provider);
 			if (!listing) {
@@ -574,17 +574,17 @@ export class ModelRuntime implements Models {
 				}
 				continue;
 			}
-			listing.entries.forEach((entry, index) => {
-				const standIn = entry as Model<Api>;
-				models.push(standIn);
-				standIns.set(standIn, { listing, index });
-			});
+			const entries = listing.entries;
+			listings.set(provider.id, { listing, entries });
+			for (const entry of entries) models.push(entry as Model<Api>);
 		}
 		return {
 			models,
 			model: (choice) => {
-				const standIn = standIns.get(choice);
-				return standIn ? standIn.listing.models()[standIn.index] : choice;
+				const snapshot = listings.get(choice.provider);
+				if (!snapshot) return choice;
+				const index = snapshot.entries.indexOf(choice);
+				return index < 0 ? choice : snapshot.listing.models()[index];
 			},
 		};
 	}

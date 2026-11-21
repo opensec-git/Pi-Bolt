@@ -1,6 +1,6 @@
 import { open } from "node:fs/promises";
 
-const IMAGE_TYPE_SNIFF_BYTES = 4100;
+export const IMAGE_TYPE_SNIFF_BYTES = 4100;
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 export function detectSupportedImageMimeType(buffer: Uint8Array): string | null {

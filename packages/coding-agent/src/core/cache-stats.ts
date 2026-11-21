@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "./session-manager.ts";
+import type { FileEntry, SessionEntry } from "./session-manager.ts";
 
 /**
  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
@@ -101,44 +101,41 @@ function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): P
 	};
 }
 
-function scan(
-	entries: SessionEntry[],
-	models: ModelPriceSource,
-): { prev: PreviousRequest | undefined; totals: CacheWasteTotals; misses: Map<AssistantMessage, CacheMiss> } {
-	let prev: PreviousRequest | undefined;
-	const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
-	const misses = new Map<AssistantMessage, CacheMiss>();
-
-	for (const entry of entries) {
-		if (entry.type === "compaction" || entry.type === "branch_summary") {
-			// The context legitimately changed; the next turn's prompt is new content,
-			// not re-billed content. Model switches are NOT exempt: they re-bill the
-			// full prompt and should be counted.
-			prev = undefined;
-			continue;
-		}
-		if (entry.type === "usage" && entry.kind === "cache_warm") {
-			const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
-			if (promptTokens > 0) {
-				prev = {
-					promptTokens,
-					modelKey: `${entry.provider}/${entry.model}`,
-					timestamp: Date.parse(entry.timestamp),
-					reportedCache: true,
-				};
-			}
-		} else if (entry.type === "message" && entry.message.role === "assistant") {
-			const miss = detectMiss(prev, entry.message, models);
-			if (miss) {
-				totals.missedTokens += miss.missedTokens;
-				totals.missedCost += miss.missedCost;
-				totals.missCount += 1;
-				misses.set(entry.message, miss);
-			}
-			prev = asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+/** The last request needed to price the next notice, in persisted file order across branches. */
+function nextRequest(prev: PreviousRequest | undefined, entry: FileEntry): PreviousRequest | undefined {
+	if (entry.type === "compaction" || entry.type === "branch_summary") return undefined;
+	if (entry.type === "message" && entry.message.role === "assistant") {
+		return asPreviousRequest(entry.message, prev?.reportedCache ?? false) ?? prev;
+	}
+	if (entry.type === "usage" && entry.kind === "cache_warm") {
+		const promptTokens = entry.usage.input + entry.usage.cacheRead + entry.usage.cacheWrite;
+		if (promptTokens > 0) {
+			return {
+				promptTokens,
+				modelKey: `${entry.provider}/${entry.model}`,
+				timestamp: Date.parse(entry.timestamp),
+				reportedCache: true,
+			};
 		}
 	}
-	return { prev, totals, misses };
+	return prev;
+}
+
+function visitMisses(
+	entries: readonly SessionEntry[],
+	models: ModelPriceSource,
+	visit: (message: AssistantMessage, miss: CacheMiss) => void,
+	include?: (message: AssistantMessage) => boolean,
+): void {
+	let prev: PreviousRequest | undefined;
+	for (const entry of entries) {
+		if (entry.type === "message" && entry.message.role === "assistant" && (!include || include(entry.message))) {
+			const miss = detectMiss(prev, entry.message, models);
+			if (miss) visit(entry.message, miss);
+		}
+		// Hidden and off-branch entries can still establish the previous request for a visible notice.
+		prev = nextRequest(prev, entry);
+	}
 }
 
 /**
@@ -146,7 +143,13 @@ function scan(
  * cache reads (they were in the previous turn's prompt) but were re-billed.
  */
 export function computeCacheWaste(entries: SessionEntry[], models: ModelPriceSource): CacheWasteTotals {
-	return scan(entries, models).totals;
+	const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
+	visitMisses(entries, models, (_message, miss) => {
+		totals.missedTokens += miss.missedTokens;
+		totals.missedCost += miss.missedCost;
+		totals.missCount++;
+	});
+	return totals;
 }
 
 /**
@@ -157,8 +160,17 @@ export function computeCacheWaste(entries: SessionEntry[], models: ModelPriceSou
 export function collectCacheMisses(
 	entries: SessionEntry[],
 	models: ModelPriceSource,
+	include?: (message: AssistantMessage) => boolean,
 ): Map<AssistantMessage, CacheMiss> {
-	return scan(entries, models).misses;
+	const misses = new Map<AssistantMessage, CacheMiss>();
+	visitMisses(entries, models, (message, miss) => misses.set(message, miss), include);
+	return misses;
+}
+
+/** Owned by one append-only session file. Discard it when the file is replaced or rebuilt. */
+export interface CacheRequestCursor {
+	end: number;
+	previous?: PreviousRequest;
 }
 
 /**
@@ -166,9 +178,14 @@ export function collectCacheMisses(
  * `entries` must not yet contain `message` (message_end fires before persistence).
  */
 export function detectCacheMiss(
-	entries: SessionEntry[],
+	entries: readonly FileEntry[],
 	message: AssistantMessage,
 	models: ModelPriceSource,
+	cursor: CacheRequestCursor = { end: 0 },
 ): CacheMiss | undefined {
-	return detectMiss(scan(entries, models).prev, message, models);
+	let previous = cursor.previous;
+	for (let i = cursor.end; i < entries.length; i++) previous = nextRequest(previous, entries[i]);
+	cursor.end = entries.length;
+	cursor.previous = previous;
+	return detectMiss(previous, message, models);
 }

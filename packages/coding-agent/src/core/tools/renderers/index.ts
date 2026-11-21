@@ -28,18 +28,25 @@ export {
 	writeRenderers,
 };
 
+// Shell renderers carry their prompt in closures. Construct those only for a requested shell.
+const builtInRenderers: Record<ToolName, ToolRenderers> = {
+	read: readRenderers,
+	get bash() {
+		return createShellRenderers("$");
+	},
+	get powershell() {
+		return createShellRenderers("PS>");
+	},
+	edit: editRenderers,
+	write: writeRenderers,
+	grep: grepRenderers,
+	find: findRenderers,
+	ls: lsRenderers,
+};
+
 /** Renderers for every built-in tool, keyed by tool name. */
 export function createAllToolRenderers(): Record<ToolName, ToolRenderers> {
-	return {
-		read: readRenderers,
-		bash: createShellRenderers("$"),
-		powershell: createShellRenderers("PS>"),
-		edit: editRenderers,
-		write: writeRenderers,
-		grep: grepRenderers,
-		find: findRenderers,
-		ls: lsRenderers,
-	};
+	return { ...builtInRenderers };
 }
 
 /**
@@ -52,7 +59,7 @@ export function withBuiltInRenderers<TDefinition extends ToolRenderers>(
 	toolName: string,
 	definition: TDefinition | undefined,
 ): TDefinition | ToolRenderers | undefined {
-	const builtIn = createAllToolRenderers()[toolName as ToolName];
+	const builtIn = builtInRenderers[toolName as ToolName];
 	if (!definition) return builtIn;
 	if (!builtIn) return definition;
 	return {

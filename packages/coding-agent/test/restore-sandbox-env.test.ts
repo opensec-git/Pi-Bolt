@@ -43,6 +43,22 @@ describe("restoreSandboxEnv", () => {
 		}
 	});
 
+	it("leaves a nonempty Bun environment without PATH intact", () => {
+		const versions = Object.getOwnPropertyDescriptor(process, "versions")!;
+		const env = process.env;
+		try {
+			Object.defineProperty(process, "versions", { value: { bun: "1.2.0" } });
+			process.env = { ONLY_VAR: "present" };
+			readFileSync.mockClear();
+			restoreSandboxEnv();
+			expect(readFileSync).not.toHaveBeenCalled();
+			expect(process.env).toEqual({ ONLY_VAR: "present" });
+		} finally {
+			process.env = env;
+			Object.defineProperty(process, "versions", versions);
+		}
+	});
+
 	it("restores environment from /proc/self/environ when bun env is empty", () => {
 		const originalVersions = Object.getOwnPropertyDescriptor(process, "versions");
 		Object.defineProperty(process, "versions", {

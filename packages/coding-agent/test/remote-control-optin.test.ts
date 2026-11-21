@@ -623,12 +623,9 @@ describe("pi service while remote control is off", () => {
 			});
 		}
 
-		it("is run by the installers and the Windows update after the step that runs the new executable, ignoring its result", () => {
+		// tests/installer/extensions.py exercises the POSIX installer against actual side-by-side builds.
+		it("is run by the Windows installer and updater after the new executable is installed, ignoring its result", () => {
 			const root = resolve(__dirname, "../../..");
-			const installSh = readFileSync(join(root, "install.sh"), "utf8");
-			expect(installSh).toContain(
-				`(cd "$INSTALL" && "$INSTALL/$NAME/pi" list >/dev/null 2>&1) || true\n\t# A remote control service that runs (an earlier version's) is restarted, so it runs this version; nothing when none runs.\n\t(cd "$INSTALL" && "$INSTALL/$NAME/pi" service restart >/dev/null 2>&1) || true\n`,
-			);
 			const installPs1 = readFileSync(join(root, "install.ps1"), "utf8");
 			expect(installPs1).toMatch(
 				/try \{ & \$exe list \*> \$null \} catch \{ \} finally \{ Pop-Location \}\r?\n.*\r?\n\tPush-Location -LiteralPath \$state\.Dir\r?\n\ttry \{ & \$exe service restart \*> \$null \} catch \{ \} finally \{ Pop-Location \}\r?\n/,

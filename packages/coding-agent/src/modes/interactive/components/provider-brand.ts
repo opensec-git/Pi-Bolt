@@ -63,11 +63,22 @@ function openRouterGlow(text: string, elapsedMs: number): string {
 
 const ANIMATION_FRAME_MS = 50;
 
-/** Re-renders `tui` every animation frame while `isAnimating()` holds; returns the function that stops it. */
-export function startBrandAnimation(tui: TUI, isAnimating: () => boolean): () => void {
-	const timer = setInterval(() => {
-		if (isAnimating()) tui.requestRender();
-	}, ANIMATION_FRAME_MS);
-	timer.unref?.();
-	return () => clearInterval(timer);
+/** Requests frames at the brand animation rate while the selector shows an animated row. */
+export class BrandAnimation {
+	private readonly tui: TUI;
+	private timer?: ReturnType<typeof setInterval>;
+
+	constructor(tui: TUI) {
+		this.tui = tui;
+	}
+
+	setActive(active: boolean): void {
+		if (active && !this.timer) {
+			this.timer = setInterval(() => this.tui.requestRender(), ANIMATION_FRAME_MS);
+			this.timer.unref?.();
+		} else if (!active && this.timer) {
+			clearInterval(this.timer);
+			this.timer = undefined;
+		}
+	}
 }

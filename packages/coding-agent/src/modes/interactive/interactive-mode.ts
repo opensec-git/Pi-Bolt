@@ -13,6 +13,8 @@ import {
 	isRetryableAssistantError,
 	type Message,
 	type Model,
+	type ToolCall,
+	type ToolResultMessage,
 	type Usage,
 } from "@earendil-works/pi-ai/compat";
 import type {
@@ -70,13 +72,7 @@ import {
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
-import {
-	CACHE_TTL_MS,
-	type CacheMiss,
-	collectCacheMisses,
-	computeCacheWaste,
-	detectCacheMiss,
-} from "../../core/cache-stats.ts";
+import { CACHE_TTL_MS, type CacheMiss, collectCacheMisses, computeCacheWaste } from "../../core/cache-stats.ts";
 import { formatCacheWarmingStatus, formatCacheWarmingUsage } from "../../core/cache-warmer.ts";
 import { ConnectionWarmer, isModelActivity, runtimePreconnect } from "../../core/connection-warmer.ts";
 import { findExtensionStackMatches, recordCrash, takeUnnotifiedCrash } from "../../core/crash-log.ts";
@@ -91,8 +87,10 @@ import type {
 	ExtensionUIDialogOptions,
 	ExtensionUIHost,
 	ExtensionWidgetOptions,
+	MarkdownMessageType,
 	MarkdownTransformer,
 	ProjectTrustContext,
+	ToolRenderers,
 	UserBashEventResult,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
@@ -115,6 +113,7 @@ import { findMatchingProviders } from "../../core/provider-matching.ts";
 import { RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { planRadiusMcpServer } from "../../core/radius-mcp.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { isBuiltinOnlyInteractiveCli } from "../../core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdOptions,
@@ -323,6 +322,61 @@ type CompactionCostNotice = {
 
 type RenderSessionItem = AgentMessage | Extract<SessionEntry, { type: "custom" | "usage" }> | CompactionCostNotice;
 
+/** Associate each result with the preceding, still-open call, including histories that reused an id. */
+function restoredToolResults(items: readonly RenderSessionItem[]): Map<ToolCall, ToolResultMessage> {
+	const results = new Map<ToolCall, ToolResultMessage>();
+	const open = new Map<string, ToolCall>();
+	for (const item of items) {
+		if (!("role" in item)) continue;
+		if (item.role === "assistant" && item.stopReason !== "aborted" && item.stopReason !== "error") {
+			for (const block of item.content) {
+				if (block.type === "toolCall") open.set(block.id, block);
+			}
+		} else if (item.role === "toolResult") {
+			const call = open.get(item.toolCallId);
+			if (call) {
+				results.set(call, item);
+				open.delete(item.toolCallId);
+			}
+		}
+	}
+	return results;
+}
+
+function restoredToolError(
+	message: AssistantMessage,
+	retryAttempt: number,
+): Pick<ToolResultMessage, "content" | "isError"> | undefined {
+	let text: string;
+	if (message.stopReason === "error") text = message.errorMessage || "Error";
+	else if (message.stopReason === "aborted") {
+		text =
+			retryAttempt > 0
+				? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
+				: "Operation aborted";
+	} else return undefined;
+	return { content: [{ type: "text", text }], isError: true };
+}
+
+function prepareTranscriptReflow(renderer: TuiMainScreen | TuiAltScreen): void {
+	if (renderer instanceof TuiAltScreen) renderer.prepareDocumentReflow();
+}
+
+/** Keep the existing absolute scroll offset when a compaction, branch switch, or setting replaces the transcript. */
+function clearTranscriptForRebuild(renderer: TuiMainScreen | TuiAltScreen, transcript: TranscriptContainer): void {
+	prepareTranscriptReflow(renderer);
+	transcript.clear();
+	if (renderer instanceof TuiAltScreen && !renderer.isFollowingOutput) transcript.completeNow();
+}
+
+function residentChildren(container: Container): Iterable<Component> {
+	return container instanceof TranscriptContainer ? container.residentChildren : container.children;
+}
+
+function createTranscriptSpacer(): Spacer {
+	return new Spacer(1);
+}
+
 function isCustomSessionEntry(item: RenderSessionItem): item is Extract<SessionEntry, { type: "custom" }> {
 	return "type" in item && item.type === "custom";
 }
@@ -500,6 +554,7 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+const COMPACTED_RELOCATE_MIN = 32;
 /** How many transcript entries compacting at once makes a full collection before their copies are made worth it. */
 const COMPACTED_COLLECT_FIRST = 256;
 
@@ -584,6 +639,7 @@ export class InteractiveMode {
 	// Thinking block visibility state
 	private hideThinkingBlock = false;
 	private outputPad = 1;
+	private markdownTheme?: MarkdownTheme;
 	private readonly mermaidMarkdownTransformer: MarkdownTransformer = createMermaidMarkdownTransformer({
 		getMode: () => this.settingsManager.getMermaidRenderingMode(),
 		theme,
@@ -956,7 +1012,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		if (this.chatContainer.children.length > 0) {
+		if (this.chatContainer.childCount > 0) {
 			this.chatContainer.addChild(new Spacer(1));
 		}
 		this.chatContainer.addChild(new DynamicBorder());
@@ -1001,11 +1057,33 @@ export class InteractiveMode {
 	private mountInteractiveTui(tui: TuiMainScreen | TuiAltScreen, components: readonly Component[]): void {
 		for (const component of components) tui.addChild(component);
 		if (TuiLayouts.isViewportTUI(tui)) {
-			if (!this.fullscreenLayoutRoot) throw new Error("Fullscreen layout is not initialized");
+			if (!this.fullscreenLayoutRoot) {
+				const viewport = createChatViewport({
+					document: this.documentContainer,
+					pendingMessages: this.pendingMessagesContainer,
+					status: this.statusContainer,
+					widgetsAbove: this.widgetContainerAbove,
+					editor: this.editorContainer,
+					widgetsBelow: this.widgetContainerBelow,
+					footer: this.footerContainer,
+					scrollbar: this.settingsManager.getFullscreenScrollbar(),
+					scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
+					scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
+				});
+				this.transcriptScrollView = viewport.transcript;
+				this.transcriptScrollView.estimatedPrefixHeight = () => this.chatContainer.estimatedPrefixHeight;
+				this.fullscreenLayoutRoot = viewport.root;
+			}
 			tui.setLayoutRoot(this.fullscreenLayoutRoot);
 		}
-		// (Scrolling, search, selection and anything else that reads the transcript in whole find all of it.)
-		if (tui instanceof TuiAltScreen) tui.beforeDocumentRead = () => this.chatContainer.completeNow();
+		if (tui instanceof TuiAltScreen) {
+			this.chatContainer.renderEndFirst(() => this.transcriptLinesShown());
+			tui.beforeViewportScroll = (rows, height) => this.chatContainer.ensureRowsFromEnd(rows, height);
+			tui.onViewportFollowEnd = () => this.chatContainer.followEnd();
+			tui.beforeDocumentRead = () => this.chatContainer.completeNow();
+		} else {
+			this.chatContainer.renderWholeDocument();
+		}
 	}
 
 	private stopInteractiveTui(fullscreenExitOutput: FullscreenExitOutput): void {
@@ -1014,7 +1092,6 @@ export class InteractiveMode {
 			this.switchTuiMode("regular", false, false);
 			this.renderer.renderNow();
 		}
-		this.chatContainer.stopBackfill();
 		this.ui.stop({ preserveScreen: this.renderer.mode === "fullscreen" });
 	}
 
@@ -1022,8 +1099,6 @@ export class InteractiveMode {
 		const previousUi = this.renderer;
 		if (mode === previousUi.mode) return true;
 		if (previousUi.hasOverlayEntries) return false;
-		// Regular mode writes the whole transcript.
-		this.chatContainer.completeNow();
 
 		const components = [...previousUi.children];
 		const focus = previousUi.getFocusedComponent();
@@ -1091,20 +1166,6 @@ export class InteractiveMode {
 
 		// Keep one component tree and remount it when changing renderers.
 		this.renderWidgets(); // Initialize with default spacer
-		const viewport = createChatViewport({
-			document: this.documentContainer,
-			pendingMessages: this.pendingMessagesContainer,
-			status: this.statusContainer,
-			widgetsAbove: this.widgetContainerAbove,
-			editor: this.editorContainer,
-			widgetsBelow: this.widgetContainerBelow,
-			footer: this.footerContainer,
-			scrollbar: this.settingsManager.getFullscreenScrollbar(),
-			scrollbarTrackStyle: (text) => theme.fg("scrollbarTrack", text),
-			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
-		});
-		this.transcriptScrollView = viewport.transcript;
-		this.fullscreenLayoutRoot = viewport.root;
 		this.mountInteractiveTui(this.renderer, [
 			this.documentContainer,
 			this.pendingMessagesContainer,
@@ -1154,8 +1215,6 @@ export class InteractiveMode {
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();
-		// The first frame renders only the end of a resumed transcript, the part it shows; the rest renders after it.
-		if (this.renderer.mode === "fullscreen") this.chatContainer.renderEndFirst(() => this.transcriptLinesShown());
 
 		// Set up theme file watcher
 		onThemeChange(() => {
@@ -1177,31 +1236,17 @@ export class InteractiveMode {
 		ttiTrace("startup.done");
 		this.footerDataProvider.startGitWatcher();
 		this.loadDeferredPromptTemplates();
-		const backfilling = this.chatContainer.backfill(() => {
-			ttiTrace("transcript.backfilled");
-			this.ui.requestRender();
-			this.afterTranscriptRendered();
-		});
-		if (!backfilling) this.afterTranscriptRendered();
+		this.startTranscriptMaintenance();
 	}
 
-	/**
-	 * The terminal rows a fullscreen frame that follows the transcript's end shows of it, plus one; with the scrollbar always
-	 * shown, at least enough lines that its thumb is at its smallest (2 rows), as it is for the whole transcript of a long
-	 * session (getScrollbarGeometry() in tui/src/layout.ts: round(track² / content) rows, at least 2).
-	 */
+	/** Keep a viewport of scroll margin. A permanently visible scrollbar also needs enough rows for its minimum thumb. */
 	private transcriptLinesShown(): number {
 		const rows = this.ui.terminal.rows;
 		const scrollbarAlways = this.transcriptScrollView?.scrollbar === "always";
-		return (scrollbarAlways ? Math.max(rows, Math.floor(0.4 * rows * rows)) : rows) + 1;
+		return (scrollbarAlways ? Math.max(2 * rows, Math.floor(0.4 * rows * rows)) : 2 * rows) + 1;
 	}
 
-	/**
-	 * What follows rendering the whole transcript at start: compacting it when idle, and loading the syntax grammars that
-	 * rendering it asked for. (The grammars load only once every entry was rendered, so each is first rendered with the same
-	 * grammars as when a resumed transcript rendered whole before the first frame.)
-	 */
-	private afterTranscriptRendered(): void {
+	private startTranscriptMaintenance(): void {
 		this.scheduleTranscriptCompaction();
 		loadAllHighlightLanguagesOnDemand((languages) => {
 			if (!this.isInitialized) return;
@@ -1224,9 +1269,8 @@ export class InteractiveMode {
 	 * Apply the theme setting, query the terminal's colors, and add the startup header. The header goes up at once
 	 * when the theme draws it the same with or without the terminal's colors (any theme but the system theme and
 	 * theme pairs), so the first frame carries it; otherwise it waits for the colors, as a header drawn before
-	 * them would change color when they arrive. Either way this resolves once the terminal answered (its DA1
-	 * reply) or 100 ms passed, so what startup does next (extensions, startup notices) sees the same terminal
-	 * colors as before. Colors that arrive later still re-render everything.
+	 * them would change color when they arrive. The bundled extensions do not read the terminal palette
+	 * at startup. External extensions and embedded sessions can read it even with a fixed theme.
 	 */
 	private async applyThemeAndShowStartupHeader(): Promise<void> {
 		this.themeController.applyFromSettings();
@@ -1238,6 +1282,11 @@ export class InteractiveMode {
 		this.addStartupHeader();
 		ttiTrace("header.added", waitForColors ? "after-colors" : "before-colors");
 		this.ui.requestRender();
+		if (waitForColors) return;
+		if (isBuiltinOnlyInteractiveCli(this.session)) {
+			void terminalColors.catch((error: unknown) => this.showError(String(error)));
+			return;
+		}
 		await terminalColors;
 	}
 
@@ -1652,10 +1701,13 @@ export class InteractiveMode {
 	}
 
 	private getMarkdownThemeWithSettings(): MarkdownTheme {
-		// (Set on the theme itself, not spread into a copy: a copy would take its codeBlockBg getter's value of now.)
-		const markdownTheme = getMarkdownTheme();
-		markdownTheme.codeBlockIndent = this.settingsManager.getCodeBlockIndent();
-		return markdownTheme;
+		const indent = this.settingsManager.getCodeBlockIndent();
+		if (!this.markdownTheme || this.markdownTheme.codeBlockIndent !== indent) {
+			// Rows retain their indentation. Color callbacks and the shading getter follow the live theme.
+			this.markdownTheme = getMarkdownTheme();
+			this.markdownTheme.codeBlockIndent = indent;
+		}
+		return this.markdownTheme;
 	}
 
 	// =========================================================================
@@ -2321,7 +2373,7 @@ export class InteractiveMode {
 						return { cancelled: true };
 					}
 
-					this.chatContainer.clear();
+					clearTranscriptForRebuild(this.renderer, this.chatContainer);
 					this.renderInitialMessages();
 					if (result.editorText && !this.editor.getText().trim()) {
 						this.editor.setText(result.editorText);
@@ -2370,6 +2422,7 @@ export class InteractiveMode {
 	}
 
 	private applyRuntimeSettings(): void {
+		prepareTranscriptReflow(this.renderer);
 		setCapabilityOverrides(this.settingsManager.getTerminalCapabilityOverrides());
 		this.ensurePngTranscoder();
 		configureHttpDispatcher(this.settingsManager.getHttpIdleTimeoutMs());
@@ -2538,7 +2591,7 @@ export class InteractiveMode {
 
 	private renderCurrentSessionState(): void {
 		this.loadedResourcesContainer.clear();
-		this.chatContainer.clear();
+		clearTranscriptForRebuild(this.renderer, this.chatContainer);
 		this.pendingMessagesContainer.clear();
 		this.pendingBashComponents = [];
 		this.compactionQueuedMessages = [];
@@ -2571,18 +2624,21 @@ export class InteractiveMode {
 	/**
 	 * Once Pi has been idle for a moment, the settled entries of the transcript let go of the components their lines were
 	 * rendered from (AssistantMessageComponent.compact(), ToolExecutionComponent.compact()): in a long session those are
-	 * most of the memory the transcript takes. Each is then put back as a fresh copy (compactedCopy()), so that what
+	 * most of the memory the transcript takes. In large batches each is put back as a fresh copy (compactedCopy()), so what
 	 * is left of it was not allocated among what rendering the transcript left behind. What has not been rendered since it last
 	 * changed stays as it is. Each call starts the wait again.
 	 */
 	private scheduleTranscriptCompaction(): void {
 		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
+		if (this.chatContainer.mountedRows.length === 0) {
+			this.transcriptCompactionTimer = undefined;
+			return;
+		}
 		this.transcriptCompactionTimer = setTimeout(() => {
 			this.transcriptCompactionTimer = undefined;
-			// (Entries held back are not rendered yet; the end of backfill() schedules this again.)
-			if (this.session.isStreaming || this.session.isCompacting || this.chatContainer.isHoldingBack) return;
+			if (this.session.isStreaming || this.session.isCompacting) return;
 			const pending = new Set<Component>(this.pendingTools.values());
-			const children = this.chatContainer.children;
+			const children = this.chatContainer.mountedRows;
 			const compacted: number[] = [];
 			for (let i = 0; i < children.length; i++) {
 				const child = children[i]!;
@@ -2591,13 +2647,18 @@ export class InteractiveMode {
 					if (child.compact()) compacted.push(i);
 				}
 			}
-			if (compacted.length === 0) return;
+			// A single answer can settle just a few rows in a long transcript. They already draw the cached lines
+			// in place. Only relocating a substantial batch justifies rebuilding the parent layout.
+			if (compacted.length < COMPACTED_RELOCATE_MIN) return;
 			// Many at once (a resumed session): collect first, so that the copies take the room what rendering the
 			// transcript left behind gives back, instead of adding to the heap's highest point.
 			if (compacted.length >= COMPACTED_COLLECT_FIRST) runtimeFullCollection()?.();
 			// (A copy in each one's place: what is left of an entry was allocated while the transcript was rendered.)
 			for (const i of compacted) {
-				children[i] = (children[i] as AssistantMessageComponent | ToolExecutionComponent).compactedCopy();
+				this.chatContainer.replaceMountedChild(
+					i,
+					(children[i] as AssistantMessageComponent | ToolExecutionComponent).compactedCopy(),
+				);
 			}
 			// The frame after lays the copies out in place of the entries, which nothing holds then; it draws the same lines.
 			this.ui.requestRender();
@@ -2779,8 +2840,10 @@ export class InteractiveMode {
 	}
 
 	private setHiddenThinkingLabel(label?: string): void {
+		if ((label ?? this.defaultHiddenThinkingLabel) !== this.hiddenThinkingLabel)
+			prepareTranscriptReflow(this.renderer);
 		this.hiddenThinkingLabel = label ?? this.defaultHiddenThinkingLabel;
-		for (const child of this.chatContainer.children) {
+		for (const child of this.chatContainer.residentChildren) {
 			if (child instanceof AssistantMessageComponent) {
 				child.setHiddenThinkingLabel(this.hiddenThinkingLabel);
 			}
@@ -3064,7 +3127,7 @@ export class InteractiveMode {
 				this.chatContainer.removeChild(existing);
 				this.inlineViews.delete(key);
 			}
-		} else if (existing && this.chatContainer.children.includes(existing)) {
+		} else if (existing && this.chatContainer.hasChild(existing)) {
 			existing.setText(lines.join("\n"));
 		} else {
 			const text = new Text(lines.join("\n"), 1, 0);
@@ -3956,7 +4019,7 @@ export class InteractiveMode {
 				} else if (event.entry.type === "compaction") {
 					const entries = this.sessionManager.buildContextEntries();
 					if (entries[0]?.id !== event.entry.id) break;
-					this.chatContainer.clear();
+					clearTranscriptForRebuild(this.renderer, this.chatContainer);
 					const branch = this.sessionManager.getBranch();
 					const compactionIndex = branch.findIndex((entry) => entry.id === event.entry.id);
 					const entriesAfterCompaction = new Set(branch.slice(compactionIndex + 1).map((entry) => entry.id));
@@ -4052,7 +4115,8 @@ export class InteractiveMode {
 							}
 						}
 					}
-					if (changed) this.ui.requestRender();
+					// Use the current renderer directly on this per-chunk path to avoid a proxy wrapper per request.
+					if (changed) this.renderer.requestRender();
 				}
 				break;
 
@@ -4225,7 +4289,7 @@ export class InteractiveMode {
 					if (entries[0]?.type !== "compaction") {
 						throw new Error("Completed compaction is missing from the session context");
 					}
-					this.chatContainer.clear();
+					clearTranscriptForRebuild(this.renderer, this.chatContainer);
 					// The latest compaction is prepended for model context; append it below at its chronological position.
 					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
@@ -4351,9 +4415,8 @@ export class InteractiveMode {
 	 * we update the previous status line instead of appending new ones to avoid log spam.
 	 */
 	private showStatus(message: string): void {
-		const children = this.chatContainer.children;
-		const last = children.length > 0 ? children[children.length - 1] : undefined;
-		const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
+		const last = this.chatContainer.childFromEnd(0);
+		const secondLast = this.chatContainer.childFromEnd(1);
 
 		if (last && secondLast && last === this.lastStatusText && secondLast === this.lastStatusSpacer) {
 			this.lastStatusMessage = message;
@@ -4383,84 +4446,83 @@ export class InteractiveMode {
 			return;
 		}
 
-		if (this.streamingComponent) {
-			const streamingIndex = this.chatContainer.children.indexOf(this.streamingComponent);
-			if (streamingIndex >= 0) {
-				this.chatContainer.children.splice(streamingIndex, 0, component);
-				return;
-			}
-		}
+		if (this.streamingComponent && this.chatContainer.insertBeforeChild(this.streamingComponent, component)) return;
 
 		this.chatContainer.addChild(component);
 	}
 
 	private addMessageToChat(
 		message: AgentMessage,
-		options?: { populateHistory?: boolean; messageId?: string; timestamp?: string },
+		options?: {
+			populateHistory?: boolean;
+			messageId?: string;
+			timestamp?: string;
+			defer?: boolean;
+			markdownTransformers?: readonly MarkdownTransformer[];
+		},
 	): void {
+		const addRow = (create: () => Component, defer = options?.defer) => {
+			if (defer) this.chatContainer.addDeferredChild(create);
+			else this.chatContainer.addChild(create());
+		};
 		switch (message.role) {
 			case "bashExecution": {
-				const component = new BashExecutionComponent(
-					message.command,
-					this.ui,
-					message.excludeFromContext,
-					this.outputPad,
-				);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(
-					message.exitCode,
-					message.cancelled,
-					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-					message.fullOutputPath,
-				);
-				this.chatContainer.addChild(component);
+				addRow(() => {
+					const component = new BashExecutionComponent(
+						message.command,
+						this.ui,
+						message.excludeFromContext,
+						this.outputPad,
+					);
+					if (message.output) component.appendOutput(message.output);
+					component.setComplete(
+						message.exitCode,
+						message.cancelled,
+						message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
+						message.fullOutputPath,
+					);
+					if (this.toolOutputExpanded) component.setExpanded(true);
+					return component;
+				});
 				break;
 			}
 			case "custom": {
 				if (message.display) {
 					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(
-						message,
-						renderer,
-						this.getMarkdownThemeWithSettings(),
-						this.outputPad,
-						this.getMarkdownTransformers(),
-						options?.messageId,
-						options?.timestamp,
-					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
+					addRow(() => {
+						const component = new CustomMessageComponent(
+							message,
+							renderer,
+							this.getMarkdownThemeWithSettings(),
+							this.outputPad,
+							options?.markdownTransformers ?? this.getMarkdownTransformers(),
+							options?.messageId,
+							options?.timestamp,
+						);
+						component.setExpanded(this.toolOutputExpanded);
+						return component;
+					}, options?.defer && !renderer);
 				}
 				break;
 			}
-			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(
-					message,
-					this.getMarkdownThemeWithSettings(),
-					this.outputPad,
-					this.getMarkdownTransformers(),
-					options?.messageId,
-					options?.timestamp,
-				);
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
+			case "compactionSummary":
 			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(
-					message,
-					this.getMarkdownThemeWithSettings(),
-					this.outputPad,
-					this.getMarkdownTransformers(),
-					options?.messageId,
-					options?.timestamp,
-				);
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
+				addRow(createTranscriptSpacer);
+				addRow(() => {
+					const style = [
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+						options?.markdownTransformers ?? this.getMarkdownTransformers(),
+						options?.messageId,
+						options?.timestamp,
+					] as const;
+					const component =
+						message.role === "compactionSummary"
+							? new CompactionSummaryMessageComponent(message, ...style)
+							: new BranchSummaryMessageComponent(message, ...style);
+					component.setExpanded(this.toolOutputExpanded);
+					return component;
+				});
 				break;
 			}
 			case "system":
@@ -4468,45 +4530,39 @@ export class InteractiveMode {
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
-					}
+					if (this.chatContainer.childCount > 0) addRow(createTranscriptSpacer);
+					const addUserText = (text: string) =>
+						addRow(
+							() =>
+								new UserMessageComponent(
+									text,
+									this.getMarkdownThemeWithSettings(),
+									this.outputPad,
+									options?.markdownTransformers ?? this.getMarkdownTransformers(),
+									options?.messageId,
+									options?.timestamp,
+								),
+						);
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-							this.getMarkdownTransformers(),
-							options?.messageId,
-							options?.timestamp,
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
+						addRow(() => {
+							const component = new SkillInvocationMessageComponent(
+								skillBlock,
 								this.getMarkdownThemeWithSettings(),
 								this.outputPad,
-								this.getMarkdownTransformers(),
+								options?.markdownTransformers ?? this.getMarkdownTransformers(),
 								options?.messageId,
 								options?.timestamp,
 							);
-							this.chatContainer.addChild(userComponent);
+							component.setExpanded(this.toolOutputExpanded);
+							return component;
+						});
+						if (skillBlock.userMessage) {
+							addRow(createTranscriptSpacer);
+							addUserText(skillBlock.userMessage);
 						}
 					} else {
-						const userComponent = new UserMessageComponent(
-							textContent,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-							this.getMarkdownTransformers(),
-							options?.messageId,
-							options?.timestamp,
-						);
-						this.chatContainer.addChild(userComponent);
+						addUserText(textContent);
 					}
 					if (options?.populateHistory) {
 						this.editor.addToHistory?.(textContent);
@@ -4515,17 +4571,19 @@ export class InteractiveMode {
 				break;
 			}
 			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-					this.outputPad,
-					this.getMarkdownTransformers(),
-					options?.messageId,
-					options?.timestamp,
+				addRow(
+					() =>
+						new AssistantMessageComponent(
+							message,
+							this.hideThinkingBlock,
+							this.getMarkdownThemeWithSettings(),
+							this.hiddenThinkingLabel,
+							this.outputPad,
+							options?.markdownTransformers ?? this.getMarkdownTransformers(),
+							options?.messageId,
+							options?.timestamp,
+						),
 				);
-				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
 			case "toolResult": {
@@ -4545,20 +4603,45 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		const fullscreen = this.renderer?.mode === "fullscreen";
+		// Extensions can run stateful code while constructing a row. Preserve that construction order.
+		const extensions = fullscreen ? this.session.resourceLoader.getExtensions().extensions : [];
+		const registrations = extensions.map((extension) => extension.markdownTransformer);
+		let markdownTransformers: readonly MarkdownTransformer[] | undefined;
+		const transformed = new Set<MarkdownMessageType>();
+		// A custom renderer can replace its extension's registration synchronously. Keep each deferred row's
+		// snapshot, and re-read only when a later row sees a different registration.
+		const refreshMarkdownTransformers = () => {
+			if (markdownTransformers && extensions.every((ext, i) => ext.markdownTransformer === registrations[i])) return;
+			markdownTransformers = this.getMarkdownTransformers();
+			transformed.clear();
+			for (const [index, extension] of extensions.entries()) {
+				const registration = extension.markdownTransformer;
+				registrations[index] = registration;
+				for (const surface of registration?.messageTypes ?? []) transformed.add(surface);
+			}
+		};
+		const results = fullscreen ? restoredToolResults(items) : undefined;
+		const builtinRenderers = new Map<string, ToolRenderers | undefined>();
 		// (By tool name, for this transcript: a resumed session has a row per call.)
 		const compactableRows = new Map<string, boolean>();
-		const rowsCompactable = (toolName: string) => {
+		const rowsCompactable = (toolName: string, hasResolvers: boolean) => {
 			let compactable = compactableRows.get(toolName);
-			if (compactable === undefined) {
+			// Extension callbacks may also have registered a new tool definition under the same name.
+			if (compactable === undefined || (extensions.length > 0 && !hasResolvers)) {
 				compactable = this.toolRowsCompactable(toolName);
 				compactableRows.set(toolName, compactable);
 			}
-			return compactable;
+			return compactable && !hasResolvers;
 		};
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
-			? collectCacheMisses(this.sessionManager.getEntries(), this.session.modelRuntime)
+			? collectCacheMisses(
+					this.sessionManager.getEntries(),
+					this.session.modelRuntime,
+					messageMeta ? (message) => messageMeta.has(message) : undefined,
+				)
 			: new Map<AssistantMessage, CacheMiss>();
 
 		if (options.updateFooter) {
@@ -4581,48 +4664,70 @@ export class InteractiveMode {
 			}
 
 			const message = item;
+			if (fullscreen && message.role !== "toolResult") refreshMarkdownTransformers();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {
 				const meta = messageMeta?.get(message);
+				const defer = fullscreen && !transformed.has("assistant") && !transformed.has("assistant-thinking");
 				this.addMessageToChat(message, {
+					defer,
+					markdownTransformers: defer ? markdownTransformers : undefined,
 					messageId: meta?.id,
 					timestamp: meta?.timestamp,
 				});
 				// Render tool call components
 				for (const content of message.content) {
 					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.id,
-							content.arguments,
-							{
-								showImages: this.settingsManager.getShowImages(),
-								imageWidthCells: this.settingsManager.getImageWidthCells(),
-								outputPad: this.outputPad,
-								compactable: rowsCompactable(content.name),
-							},
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
-							this.sessionManager.getCwd(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-
-						if (message.stopReason === "aborted" || message.stopReason === "error") {
-							let errorMessage: string;
-							if (message.stopReason === "aborted") {
-								const retryAttempt = this.session.retryAttempt;
-								errorMessage =
-									retryAttempt > 0
-										? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-										: "Operation aborted";
-							} else {
-								errorMessage = message.errorMessage || "Error";
+						const hasResolvers = extensions.some((extension) => extension.toolRenderers?.length);
+						const compactable = rowsCompactable(content.name, hasResolvers);
+						const cwd = this.sessionManager.getCwd();
+						const create = (definition: ToolRenderers | undefined) => {
+							const component = new ToolExecutionComponent(
+								content.name,
+								content.id,
+								content.arguments,
+								{
+									showImages: this.settingsManager.getShowImages(),
+									imageWidthCells: this.settingsManager.getImageWidthCells(),
+									outputPad: this.outputPad,
+									compactable,
+								},
+								definition,
+								this.ui,
+								cwd,
+							);
+							component.setExpanded(this.toolOutputExpanded);
+							return component;
+						};
+						const error = restoredToolError(message, this.session.retryAttempt);
+						const result = error ?? results?.get(content);
+						// A restored edit/write has no streamed preview to preserve. Live edit/write rows remain
+						// noncompactable. All extension-rendered and unresolved calls retain their component.
+						if (
+							results &&
+							result &&
+							!hasResolvers &&
+							(compactable ||
+								((content.name === "edit" || content.name === "write") &&
+									this.session.getToolSourceInfo(content.name)?.source === "builtin"))
+						) {
+							// Keep the renderers selected during restore even if tools are registered later.
+							if (extensions.length > 0 || !builtinRenderers.has(content.name)) {
+								builtinRenderers.set(content.name, this.getRegisteredToolDefinition(content.name));
 							}
-							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
-						} else {
-							renderedPendingTools.set(content.id, component);
+							const definition = builtinRenderers.get(content.name);
+							this.chatContainer.addDeferredChild(() => {
+								const component = create(definition);
+								component.updateResult(result);
+								return component;
+							});
+							if (!error) renderedPendingTools.delete(content.id);
+							continue;
 						}
+						const component = create(this.getRegisteredToolDefinition(content.name));
+						this.chatContainer.addChild(component);
+						if (error) component.updateResult(error);
+						else renderedPendingTools.set(content.id, component);
 					}
 				}
 				if (message.stopReason !== "aborted" && message.stopReason !== "error") {
@@ -4639,8 +4744,15 @@ export class InteractiveMode {
 			} else {
 				// All other messages use standard rendering
 				const meta = messageMeta?.get(message);
+				const usesExtensionMarkdown =
+					(message.role === "user" && (transformed.has("user") || transformed.has("custom"))) ||
+					(message.role === "custom" && transformed.has("custom")) ||
+					((message.role === "branchSummary" || message.role === "compactionSummary") &&
+						transformed.has("summary"));
 				this.addMessageToChat(message, {
 					...options,
+					defer: fullscreen && !usesExtensionMarkdown,
+					markdownTransformers: usesExtensionMarkdown ? undefined : markdownTransformers,
 					messageId: meta?.id,
 					timestamp: meta?.timestamp,
 				});
@@ -4686,7 +4798,7 @@ export class InteractiveMode {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 		// Back-to-back warms collapse into one line with the cumulative cost.
 		const previous = this.cacheWarmingNotice;
-		if (previous && this.chatContainer.children.at(-1) === previous.component && previous.note === entry.note) {
+		if (previous && this.chatContainer.childFromEnd(0) === previous.component && previous.note === entry.note) {
 			previous.total.cost += entry.usage.cost.total;
 			previous.component.invalidate();
 			return;
@@ -4770,7 +4882,7 @@ export class InteractiveMode {
 		if (!this.settingsManager.getShowCacheMissNotices()) return;
 
 		// Entries don't contain `message` yet: message_end fires before persistence.
-		const miss = detectCacheMiss(this.sessionManager.getEntries(), message, this.session.modelRuntime);
+		const miss = this.sessionManager.getCacheMiss(message, this.session.modelRuntime);
 		if (miss) this.addCacheMissNotice(miss);
 	}
 
@@ -4811,7 +4923,7 @@ export class InteractiveMode {
 			return;
 		}
 
-		if (this.chatContainer.children.length > 0) {
+		if (this.chatContainer.childCount > 0) {
 			this.chatContainer.addChild(new Spacer(1));
 		}
 		this.chatContainer.addChild(
@@ -4842,7 +4954,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
-		this.chatContainer.clear();
+		clearTranscriptForRebuild(this.renderer, this.chatContainer);
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
 
@@ -5151,14 +5263,14 @@ export class InteractiveMode {
 
 	private setToolsExpanded(expanded: boolean): void {
 		if (expanded === this.toolOutputExpanded) return;
-
+		prepareTranscriptReflow(this.renderer);
 		this.toolOutputExpanded = expanded;
 		const activeHeader = this.customHeader ?? this.builtInHeader;
 		if (isExpandable(activeHeader)) {
 			activeHeader.setExpanded(expanded);
 		}
 		for (const container of [this.loadedResourcesContainer, this.chatContainer, this.pendingMessagesContainer]) {
-			for (const child of container.children) {
+			for (const child of residentChildren(container)) {
 				if (isExpandable(child)) {
 					child.setExpanded(expanded);
 				}
@@ -5169,7 +5281,7 @@ export class InteractiveMode {
 
 	/** Update rendered assistant messages without rebuilding live tool components. */
 	private updateThinkingBlockVisibility(): void {
-		for (const child of this.chatContainer.children) {
+		for (const child of this.chatContainer.residentChildren) {
 			if (child instanceof AssistantMessageComponent) {
 				child.setHideThinkingBlock(this.hideThinkingBlock);
 			}
@@ -5178,6 +5290,7 @@ export class InteractiveMode {
 	}
 
 	private toggleThinkingBlockVisibility(): void {
+		prepareTranscriptReflow(this.renderer);
 		this.hideThinkingBlock = !this.hideThinkingBlock;
 		this.settingsManager.setHideThinkingBlock(this.hideThinkingBlock);
 		this.updateThinkingBlockVisibility();
@@ -5560,16 +5673,18 @@ export class InteractiveMode {
 						this.footer.setAutoCompactEnabled(enabled);
 					},
 					onShowImagesChange: (enabled) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
+						for (const child of this.chatContainer.residentChildren) {
 							if (child instanceof ToolExecutionComponent) {
 								child.setShowImages(enabled);
 							}
 						}
 					},
 					onImageWidthCellsChange: (width) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
+						for (const child of this.chatContainer.residentChildren) {
 							if (child instanceof ToolExecutionComponent) {
 								child.setImageWidthCells(width);
 							}
@@ -5629,16 +5744,19 @@ export class InteractiveMode {
 						}
 					},
 					onThemeChange: (themeSetting) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setTheme(themeSetting);
 						this.themeController.setThemeSetting(themeSetting);
 					},
 					onThemePreview: (themeName) => this.themeController.preview(themeName),
 					onHideThinkingBlockChange: (hidden) => {
+						prepareTranscriptReflow(this.renderer);
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
 						this.updateThinkingBlockVisibility();
 					},
 					onMermaidRenderingModeChange: (mode) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setMermaidRenderingMode(mode);
 						this.chatContainer.invalidate();
 						this.ui.requestRender();
@@ -5648,6 +5766,7 @@ export class InteractiveMode {
 						this.rebuildChatFromMessages();
 					},
 					onShadedCodeBlocksChange: (shaded) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setShadedCodeBlocks(shaded);
 						setShadedCodeBlocks(shaded);
 						// (Redrawn, not rebuilt: an answer that is streaming keeps its component.)
@@ -5689,10 +5808,11 @@ export class InteractiveMode {
 						}
 					},
 					onOutputPadChange: (padding) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setOutputPad(padding);
 						this.outputPad = padding;
 						for (const container of [this.chatContainer, this.pendingMessagesContainer]) {
-							for (const child of container.children) {
+							for (const child of residentChildren(container)) {
 								if ("setOutputPad" in child && typeof child.setOutputPad === "function") {
 									child.setOutputPad(padding);
 								}
@@ -5731,6 +5851,7 @@ export class InteractiveMode {
 						this.settingsManager.setFullscreenExitOutput(output);
 					},
 					onFullscreenScrollbarChange: (mode) => {
+						prepareTranscriptReflow(this.renderer);
 						this.settingsManager.setFullscreenScrollbar(mode);
 						this.applyFullscreenScrollbarSetting();
 					},
@@ -6331,7 +6452,7 @@ export class InteractiveMode {
 						}
 
 						// Update UI
-						this.chatContainer.clear();
+						clearTranscriptForRebuild(this.renderer, this.chatContainer);
 						this.renderInitialMessages();
 						if (result.editorText && !this.editor.getText().trim()) {
 							this.editor.setText(result.editorText);

@@ -2,7 +2,18 @@
  * One-time migrations that run on startup.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
+import {
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "fs";
 import { dirname, join } from "path";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
@@ -72,6 +83,37 @@ export function migrateAuthToAuthJson(): string[] {
 	return providers;
 }
 
+function readAgentEntries(agentDir: string): string[] | undefined {
+	try {
+		return readdirSync(agentDir);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Legacy files only require a cwd in the first physical line. Some precede session IDs. */
+function readFirstLine(path: string): string {
+	const fd = openSync(path, "r");
+	try {
+		const parts: Buffer[] = [];
+		while (true) {
+			const buffer = Buffer.allocUnsafe(4096);
+			const count = readSync(fd, buffer, 0, buffer.length, null);
+			const bytes = buffer.subarray(0, count);
+			const newline = bytes.indexOf(10);
+			if (newline !== -1 || count === 0) {
+				const last = newline === -1 ? bytes : bytes.subarray(0, newline);
+				if (parts.length === 0) return last.toString("utf8");
+				parts.push(last);
+				return Buffer.concat(parts).toString("utf8");
+			}
+			parts.push(bytes);
+		}
+	} finally {
+		closeSync(fd);
+	}
+}
+
 /**
  * Migrate sessions from ~/.pi/agent/*.jsonl to proper session directories.
  *
@@ -84,25 +126,16 @@ export function migrateAuthToAuthJson(): string[] {
 export function migrateSessionsFromAgentRoot(): void {
 	const agentDir = getAgentDir();
 
-	// Find all .jsonl files directly in agentDir (not in subdirectories)
-	let files: string[];
-	try {
-		files = readdirSync(agentDir)
-			.filter((f) => f.endsWith(".jsonl"))
-			.map((f) => join(agentDir, f));
-	} catch {
-		return;
-	}
+	const entries = readAgentEntries(agentDir);
+	if (entries) migrateRootSessions(agentDir, entries);
+}
 
-	if (files.length === 0) return;
-
-	for (const file of files) {
+function migrateRootSessions(agentDir: string, entries: string[]): void {
+	for (const fileName of entries) {
+		if (!fileName.endsWith(".jsonl")) continue;
+		const file = join(agentDir, fileName);
 		try {
-			// Read first line to get session header
-			const content = readFileSync(file, "utf8");
-			const firstLine = content.split("\n")[0];
-			if (!firstLine?.trim()) continue;
-
+			const firstLine = readFirstLine(file);
 			const header = JSON.parse(firstLine);
 			if (header.type !== "session" || !header.cwd) continue;
 
@@ -118,8 +151,7 @@ export function migrateSessionsFromAgentRoot(): void {
 			}
 
 			// Move the file
-			const fileName = file.split("/").pop() || file.split("\\").pop();
-			const newPath = join(correctDir, fileName!);
+			const newPath = join(correctDir, fileName);
 
 			if (existsSync(newPath)) continue; // Skip if target exists
 
@@ -254,20 +286,16 @@ function checkDeprecatedExtensionDirs(baseDir: string, label: string): string[] 
 /**
  * Run extension system migrations (commands→prompts) and collect warnings about deprecated directories.
  */
-function migrateExtensionSystem(cwd: string): string[] {
+function migrateExtensionSystem(cwd: string, checkGlobal: boolean): string[] {
 	const agentDir = getAgentDir();
 	const projectDir = join(cwd, CONFIG_DIR_NAME);
+	const checkProject = existsSync(projectDir);
 
-	// Migrate commands/ to prompts/
-	migrateCommandsToPrompts(agentDir, "Global");
-	migrateCommandsToPrompts(projectDir, "Project");
+	if (checkGlobal) migrateCommandsToPrompts(agentDir, "Global");
+	if (checkProject) migrateCommandsToPrompts(projectDir, "Project");
 
-	// Check for deprecated directories
-	const warnings = [
-		...checkDeprecatedExtensionDirs(agentDir, "Global"),
-		...checkDeprecatedExtensionDirs(projectDir, "Project"),
-	];
-
+	const warnings = checkGlobal ? checkDeprecatedExtensionDirs(agentDir, "Global") : [];
+	if (checkProject) warnings.push(...checkDeprecatedExtensionDirs(projectDir, "Project"));
 	return warnings;
 }
 
@@ -307,9 +335,15 @@ export function runMigrations(cwd: string): {
 	deprecationWarnings: string[];
 } {
 	const migratedAuthProviders = migrateAuthToAuthJson();
-	migrateSessionsFromAgentRoot();
-	migrateToolsToBin();
-	migrateKeybindingsConfigFile();
-	const deprecationWarnings = migrateExtensionSystem(cwd);
+	const agentDir = getAgentDir();
+	const entries = readAgentEntries(agentDir);
+	if (entries) migrateRootSessions(agentDir, entries);
+	// Reuse the directory listing. On searchable but unlistable directories, fall back to named checks.
+	const checkGlobal = !entries || entries.some((name) => /^(?:tools|hooks|commands|keybindings\.json)$/iu.test(name));
+	if (checkGlobal) {
+		migrateToolsToBin();
+		migrateKeybindingsConfigFile();
+	}
+	const deprecationWarnings = migrateExtensionSystem(cwd, checkGlobal);
 	return { migratedAuthProviders, deprecationWarnings };
 }

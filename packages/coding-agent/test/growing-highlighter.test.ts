@@ -43,6 +43,10 @@ const CORPUS_FILES: Record<string, string> = {
 	markdown: "markdown.txt",
 	diff: "diff.txt",
 	sql: "sql.txt",
+	swift: "swift.txt",
+	kotlin: "kotlin.txt",
+	dart: "dart.txt",
+	lua: "lua.txt",
 };
 
 /** Every scope drawn with its name, so that a scope that differs shows. */
@@ -283,7 +287,7 @@ describe("GrowingHighlighter: only the languages proven on their own corpus are 
 	});
 
 	it("every other language is highlighted in full", () => {
-		for (const language of ["markdown", "less", "scss", "ruby", "php", "kotlin", "plaintext", "dockerfile"]) {
+		for (const language of ["markdown", "less", "scss", "ruby", "php", "groovy", "plaintext", "dockerfile"]) {
 			const highlighter = expectEveryLength(longText(language), language, chunks(longText(language).length, 6, 80));
 			expect({ language, finalLength: highlighter.finalLength }).toEqual({ language, finalLength: 0 });
 		}

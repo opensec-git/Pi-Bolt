@@ -11,9 +11,9 @@ import {
 } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ExtensionFactory } from "../src/core/extensions/types.ts";
+import type { ExtensionFactory, ExtensionMode, InlineExtension, ProviderConfig } from "../src/core/extensions/types.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
-import { createAgentSession } from "../src/core/sdk.ts";
+import { createAgentSession, enableCliStreamOptimization } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
@@ -79,13 +79,12 @@ describe("createAgentSession stream options", () => {
 		return stream;
 	}
 
-	async function captureStreamOptions(
+	async function createStreamSession(
 		api: Api,
 		settings: Partial<Settings>,
-		requestOptions: SimpleStreamOptions = {},
-		extensionFactory?: ExtensionFactory,
-		providerEvent?: unknown,
-	): Promise<SimpleStreamOptions | undefined> {
+		extensionFactory: InlineExtension | undefined,
+		streamSimple: NonNullable<ProviderConfig["streamSimple"]>,
+	) {
 		const model = createModel(api);
 		const settingsManager = SettingsManager.inMemory(settings);
 		const resourceLoader = new DefaultResourceLoader({
@@ -99,23 +98,7 @@ describe("createAgentSession stream options", () => {
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
 		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
-		let capturedOptions: SimpleStreamOptions | undefined;
-
-		modelRegistry.registerProvider(model.provider, {
-			api,
-			headers: { "x-provider": "provider" },
-			streamSimple: (requestModel, _context, providerOptions) => {
-				capturedOptions = providerOptions;
-				if (providerEvent === undefined) return createDoneStream(api);
-
-				const stream = createAssistantMessageEventStream();
-				void (async () => {
-					await providerOptions?.onProviderStreamEvent?.(providerEvent, requestModel);
-					stream.end(createDoneMessage(api));
-				})();
-				return stream;
-			},
-		});
+		modelRegistry.registerProvider(model.provider, { api, headers: { "x-provider": "provider" }, streamSimple });
 
 		const modelRuntime = getModelRuntime(modelRegistry);
 		const sessionManager = SessionManager.inMemory(cwd);
@@ -128,9 +111,43 @@ describe("createAgentSession stream options", () => {
 			sessionManager,
 			resourceLoader,
 		});
+		return {
+			session,
+			model,
+			dispose: () => {
+				session.dispose();
+				modelRegistry.unregisterProvider(model.provider);
+			},
+		};
+	}
 
+	async function captureStreamOptions(
+		api: Api,
+		settings: Partial<Settings>,
+		requestOptions: SimpleStreamOptions = {},
+		extensionFactory?: ExtensionFactory,
+		sendProviderEvents?: (emit: (event: unknown) => void | Promise<void>) => void | Promise<void>,
+	): Promise<SimpleStreamOptions | undefined> {
+		let capturedOptions: SimpleStreamOptions | undefined;
+		let sentEvents: Promise<void> | undefined;
+		const { model, session, dispose } = await createStreamSession(
+			api,
+			settings,
+			extensionFactory,
+			(requestModel, _context, providerOptions) => {
+				capturedOptions = providerOptions;
+				if (!sendProviderEvents) return createDoneStream(api);
+				const stream = createAssistantMessageEventStream();
+				sentEvents = Promise.resolve().then(() =>
+					sendProviderEvents((event) => providerOptions?.onProviderStreamEvent?.(event, requestModel)),
+				);
+				const finish = () => stream.end(createDoneMessage(api));
+				void sentEvents.then(finish, finish);
+				return stream;
+			},
+		);
 		try {
-			if (providerEvent === undefined) {
+			if (!sendProviderEvents) {
 				const stream = await session.agent.streamFunction(
 					model,
 					normalizeContext({ messages: [] }),
@@ -139,11 +156,11 @@ describe("createAgentSession stream options", () => {
 				await stream.result();
 			} else {
 				await session.prompt("test");
+				await sentEvents;
 			}
 			return capturedOptions;
 		} finally {
-			session.dispose();
-			modelRegistry.unregisterProvider(model.provider);
+			dispose();
 		}
 	}
 
@@ -233,6 +250,108 @@ describe("createAgentSession stream options", () => {
 		expect(options?.timeoutMs).toBe(1234);
 	});
 
+	const builtin = { name: "usage", builtin: true, factory: () => {} };
+
+	it.each<[string, ExtensionMode, boolean, InlineExtension]>([
+		["an SDK session bound to print", "print", false, builtin],
+		["a JSON session", "json", false, builtin],
+		["an RPC session", "rpc", false, builtin],
+		["a TUI session", "tui", false, builtin],
+		["a print session with a third-party extension", "print", true, () => {}],
+		[
+			"a built-in message_start observer",
+			"print",
+			true,
+			{
+				...builtin,
+				factory: (pi) => {
+					pi.on("message_start", () => {});
+				},
+			},
+		],
+		[
+			"a built-in message_update observer",
+			"print",
+			true,
+			{
+				...builtin,
+				factory: (pi) => {
+					pi.on("message_update", () => {});
+				},
+			},
+		],
+	])("keeps provider argument previews for %s", async (_name, mode, cliPrint, extension) => {
+		let captured: SimpleStreamOptions | undefined;
+		const { session, dispose } = await createStreamSession(
+			"openai-completions",
+			{},
+			extension,
+			(model, _context, options) => {
+				captured = options;
+				return createDoneStream(model.api);
+			},
+		);
+		try {
+			expect(session.extensionRunner.getExtensionPaths()).toHaveLength(1);
+			if (cliPrint) enableCliStreamOptimization(session, "print");
+			await session.bindExtensions({ mode });
+			await session.prompt("test");
+			expect(captured).toBeDefined();
+			expect(captured?.skipToolArgumentPreviews).not.toBe(true);
+			expect(captured?.skipTextDeltas).not.toBe(true);
+		} finally {
+			dispose();
+		}
+	});
+
+	it.each(["print", "interactive"] as const)(
+		"optimizes only the foreground request of a built-in-only CLI %s session",
+		async (mode) => {
+			const firstRequest = Promise.withResolvers<SimpleStreamOptions | undefined>();
+			const foregroundStream = createAssistantMessageEventStream();
+			const requests: Array<SimpleStreamOptions | undefined> = [];
+			const { model, session, dispose } = await createStreamSession(
+				"openai-completions",
+				{},
+				builtin,
+				(model, _context, options) => {
+					requests.push(options);
+					if (requests.length === 1) {
+						firstRequest.resolve(options);
+						return foregroundStream;
+					}
+					return createDoneStream(model.api);
+				},
+			);
+			try {
+				expect(session.extensionRunner.getExtensionPaths()).toEqual(["builtin:usage"]);
+				enableCliStreamOptimization(session, mode);
+				await session.bindExtensions({ mode: mode === "interactive" ? "tui" : "print" });
+				const prompting = session.prompt("test");
+				const foreground = await firstRequest.promise;
+				// A background request from the same session can overlap a foreground tool call.
+				const background = await session.agent.streamFunction(model, normalizeContext({ messages: [] }), {
+					sessionId: session.sessionId,
+					signal: new AbortController().signal,
+				});
+				await background.result();
+				foregroundStream.end(createDoneMessage(model.api));
+				await prompting;
+
+				expect(foreground?.skipToolArgumentPreviews === true).toBe(mode === "print");
+				expect(foreground?.skipTextDeltas === true).toBe(mode === "print");
+				expect(foreground?.coalesceTextDeltas === true).toBe(mode === "interactive");
+				expect(requests[1]?.coalesceTextDeltas).not.toBe(true);
+				expect(requests).toHaveLength(2);
+				expect(requests[1]?.skipToolArgumentPreviews).not.toBe(true);
+				expect(requests[1]?.skipTextDeltas).not.toBe(true);
+			} finally {
+				foregroundStream.end(createDoneMessage(model.api));
+				dispose();
+			}
+		},
+	);
+
 	it("lets request timeoutMs override httpIdleTimeoutMs for OpenAI Codex", async () => {
 		const options = await captureStreamOptions(
 			"openai-codex-responses",
@@ -282,7 +401,7 @@ describe("createAgentSession stream options", () => {
 					extensionEvents.push(event);
 				});
 			},
-			providerEvent,
+			(emit) => emit(providerEvent),
 		);
 
 		expect(options?.onProviderStreamEvent).toEqual(expect.any(Function));
@@ -295,6 +414,115 @@ describe("createAgentSession stream options", () => {
 				model: "capture-model",
 			},
 		]);
+	});
+
+	it("returns synchronously from the raw event callback in extensionless sessions", async () => {
+		await captureStreamOptions("openai-completions", {}, {}, undefined, (emit) => {
+			expect(emit({})).toBeUndefined();
+		});
+	});
+
+	it("picks up raw event subscriptions and removals during the same stream", async () => {
+		const received: string[] = [];
+		let subscribe!: () => () => void;
+		await captureStreamOptions(
+			"openai-completions",
+			{},
+			{},
+			(pi) => {
+				subscribe = () => {
+					const first = pi.on("provider_stream_event", async (event) => {
+						await Promise.resolve();
+						received.push(`first ${event.data}`);
+					});
+					const second = pi.on("provider_stream_event", (event) => {
+						received.push(`second ${event.data}`);
+					});
+					return () => {
+						first();
+						second();
+					};
+				};
+			},
+			async (emit) => {
+				expect(emit("before")).toBeUndefined();
+				const unsubscribe = subscribe();
+				await emit("one");
+				await emit("two");
+				unsubscribe();
+				expect(emit("after")).toBeUndefined();
+			},
+		);
+		expect(received).toEqual(["first one", "second one", "first two", "second two"]);
+	});
+
+	it("forwards events to an extension loaded while a foreground prompt is streaming", async () => {
+		const model = createModel("openai-completions");
+		const received: unknown[] = [];
+		const settingsManager = SettingsManager.inMemory({});
+		const reloadEntered = Promise.withResolvers<void>();
+		const resumeReload = Promise.withResolvers<void>();
+		let enableExtension = false;
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			extensionFactories: [
+				async (pi) => {
+					if (!enableExtension) return;
+					reloadEntered.resolve();
+					await resumeReload.promise;
+					pi.on("provider_stream_event", (event) => {
+						received.push(event.data);
+					});
+				},
+			],
+			extensionsOverride: (base) => (enableExtension ? base : { ...base, extensions: [] }),
+		});
+		await resourceLoader.reload();
+		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
+		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
+		const { session } = await createAgentSession({
+			cwd,
+			agentDir,
+			model,
+			modelRuntime: getModelRuntime(modelRegistry),
+			settingsManager,
+			sessionManager: SessionManager.inMemory(cwd),
+			resourceLoader,
+		});
+
+		const streamOptions = Promise.withResolvers<SimpleStreamOptions | undefined>();
+		const stream = createAssistantMessageEventStream();
+		try {
+			expect(session.extensionRunner.getExtensionPaths()).toHaveLength(0);
+			enableExtension = true;
+			const reloading = session.reload();
+			await reloadEntered.promise;
+			modelRegistry.registerProvider(model.provider, {
+				api: model.api,
+				streamSimple: (_model, _context, options) => {
+					streamOptions.resolve(options);
+					return stream;
+				},
+			});
+			const prompting = session.prompt("test");
+			const options = await streamOptions.promise;
+			await options?.onProviderStreamEvent?.("before reload", model);
+			resumeReload.resolve();
+			await reloading;
+			expect(session.extensionRunner.hasHandlers("provider_stream_event")).toBe(true);
+			await options?.onProviderStreamEvent?.("after reload", model);
+			stream.end(createDoneMessage(model.api));
+			await prompting;
+			expect(received).toEqual(["after reload"]);
+		} finally {
+			resumeReload.resolve();
+			stream.end(createDoneMessage(model.api));
+			session.dispose();
+			modelRegistry.unregisterProvider(model.provider);
+		}
 	});
 
 	it("runs before_provider_headers on assembled headers without forwarding the transform", async () => {

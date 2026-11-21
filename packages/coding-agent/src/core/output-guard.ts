@@ -37,8 +37,14 @@ const RAW_STDOUT_RETRY_DELAY_MS = 10;
  */
 const RAW_STDOUT_HIGH_WATER_MARK = 64 * 1024;
 
-/** Lines not written yet; they go out together, in order, with the next write. */
-let rawStdoutQueue: string[] = [];
+interface StdoutBatch {
+	lines: string[];
+	length: number;
+	next?: StdoutBatch;
+}
+
+let firstBatch: StdoutBatch | undefined;
+let lastBatch: StdoutBatch | undefined;
 /** Characters queued or in flight. */
 let rawStdoutPendingLength = 0;
 let rawStdoutWriting = false;
@@ -176,14 +182,24 @@ export function isStdoutTakenOver(): boolean {
  * Write `text` to the real stdout, after the lines written before it. The lines of one task (for example every event of
  * the stream chunks one network read delivered) go out together in one write when the task ends: JSON and RPC modes
  * write a line per streamed delta, and a write per line cost more than the rest of the delta's handling. One write is in
- * flight at a time; lines that arrive meanwhile are joined into the next one. A write that fails with
+ * flight at a time; small lines that arrive meanwhile share bounded batches. A write that fails with
  * ENOBUFS/EAGAIN/EWOULDBLOCK is retried; any other failure exits the process.
  */
 export function writeRawStdout(text: string): void {
 	if (text.length === 0) {
 		return;
 	}
-	rawStdoutQueue.push(text);
+	if (lastBatch && lastBatch.length + text.length <= RAW_STDOUT_HIGH_WATER_MARK) {
+		lastBatch.lines.push(text);
+		lastBatch.length += text.length;
+	} else {
+		// A large record owns its write. Joining several of them would retain one
+		// large encoded buffer for as long as the consumer takes to drain it.
+		const batch = { lines: [text], length: text.length };
+		if (lastBatch) lastBatch.next = batch;
+		else firstBatch = batch;
+		lastBatch = batch;
+	}
 	rawStdoutPendingLength += text.length;
 	if (!rawStdoutWriting && !rawStdoutScheduled) {
 		rawStdoutScheduled = true;
@@ -197,14 +213,24 @@ export function writeRawStdout(text: string): void {
 
 function writeScheduledRawStdout(): void {
 	rawStdoutScheduled = false;
-	if (!rawStdoutWriting && rawStdoutQueue.length > 0) startRawStdoutWrite();
+	if (!rawStdoutWriting && firstBatch) startRawStdoutWrite();
 }
 
-/** A process.exit() before the scheduled write still writes what was queued (after a write in flight, as streams do). */
+function takeStdoutBatch(): string {
+	const batch = firstBatch!;
+	firstBatch = batch.next;
+	if (!firstBatch) lastBatch = undefined;
+	return batch.lines.length === 1 ? batch.lines[0] : batch.lines.join("");
+}
+
+/** Submit any pending lines in order if the process exits before the next scheduled write. */
 function writeQueuedRawStdoutAtExit(): void {
-	if (rawStdoutQueue.length === 0) return;
-	const text = rawStdoutQueue.join("");
-	rawStdoutQueue = [];
+	if (!firstBatch) return;
+	const remaining: string[] = [];
+	do {
+		remaining.push(takeStdoutBatch());
+	} while (firstBatch);
+	const text = remaining.length === 1 ? remaining[0] : remaining.join("");
 	rawStdoutPendingLength -= text.length;
 	try {
 		getRawStdoutWrite()(text);
@@ -214,14 +240,13 @@ function writeQueuedRawStdoutAtExit(): void {
 }
 
 function startRawStdoutWrite(): void {
-	const text = rawStdoutQueue.length === 1 ? rawStdoutQueue[0] : rawStdoutQueue.join("");
-	rawStdoutQueue = [];
 	rawStdoutWriting = true;
-	writeQueuedRawStdout(text);
+	writeQueuedRawStdout(takeStdoutBatch());
 }
 
 function writeQueuedRawStdout(text: string): void {
 	let settled = false;
+	let synchronous = true;
 	const onWritten = (error?: Error | null): void => {
 		if (settled) return;
 		settled = true;
@@ -235,20 +260,27 @@ function writeQueuedRawStdout(text: string): void {
 			return;
 		}
 		rawStdoutPendingLength -= text.length;
-		if (rawStdoutQueue.length > 0) {
-			startRawStdoutWrite();
-			return;
-		}
-		rawStdoutWriting = false;
-		const waiters = rawStdoutDrainWaiters;
-		rawStdoutDrainWaiters = [];
-		for (const resolve of waiters) resolve();
+		if (synchronous && firstBatch) queueMicrotask(advanceRawStdoutQueue);
+		else advanceRawStdoutQueue();
 	};
 	try {
 		getRawStdoutWrite()(text, onWritten);
 	} catch (error) {
 		onWritten(error instanceof Error ? error : new Error(String(error)));
+	} finally {
+		synchronous = false;
 	}
+}
+
+function advanceRawStdoutQueue(): void {
+	if (firstBatch) {
+		startRawStdoutWrite();
+		return;
+	}
+	rawStdoutWriting = false;
+	const waiters = rawStdoutDrainWaiters;
+	rawStdoutDrainWaiters = [];
+	for (const resolve of waiters) resolve();
 }
 
 function waitForRawStdoutDrain(): Promise<void> {

@@ -80,6 +80,8 @@ export interface BashOperations {
 		cwd: string,
 		options: {
 			onData: (data: Buffer) => void;
+			/** When streamed output is backed up, resolves once the consumer can accept more. */
+			waitForOutputDrain?: () => Promise<void> | undefined;
 			signal?: AbortSignal;
 			timeout?: number;
 			env?: NodeJS.ProcessEnv;
@@ -104,7 +106,7 @@ class ShellTimeoutError extends Error {
 /** Shared process execution used by the built-in shell tools. */
 export function createLocalShellOperations(shellName: string, resolveShellConfig: () => ShellConfig): BashOperations {
 	return {
-		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+		exec: async (command, cwd, { onData, waitForOutputDrain, signal, timeout, env }) => {
 			const timeoutMs = resolveTimeoutMs(timeout);
 			if (signal?.aborted) {
 				throw new Error("aborted");
@@ -142,8 +144,17 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			if (child.pid) trackDetachedChildPid(child.pid, msys);
 			const startedAt = performance.now();
 			let shellExitedAfterMs: number | undefined;
+			let outputPaused = false;
+			const resumeOutput = () => {
+				if (!outputPaused) return;
+				outputPaused = false;
+				child.stdout?.resume();
+				child.stderr?.resume();
+			};
 			child.once("exit", () => {
 				shellExitedAfterMs = performance.now() - startedAt;
+				// Drain the final pipe bytes before waitForChildProcess's post-exit grace period ends.
+				resumeOutput();
 			});
 			let timedOut = false;
 			let exitedBeforeDeadlineAfterMs: number | undefined;
@@ -164,8 +175,20 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
-				child.stdout?.on("data", onData);
-				child.stderr?.on("data", onData);
+				const handleData = waitForOutputDrain
+					? (data: Buffer) => {
+							onData(data);
+							if (outputPaused || shellExitedAfterMs !== undefined || signal?.aborted) return;
+							const drain = waitForOutputDrain();
+							if (!drain) return;
+							outputPaused = true;
+							child.stdout?.pause();
+							child.stderr?.pause();
+							void drain.then(resumeOutput, resumeOutput);
+						}
+					: onData;
+				child.stdout?.on("data", handleData);
+				child.stderr?.on("data", handleData);
 				// Handle abort signal by killing the entire process tree.
 				if (signal) {
 					if (signal.aborted) onAbort();
@@ -224,7 +247,7 @@ function resolveSpawnContext(
 	exposeSessionEnvironment: boolean,
 	ctx: ExtensionContext | undefined,
 ): BashSpawnContext {
-	const env = { ...getShellEnv() };
+	const env = getShellEnv();
 	delete env.PI_SESSION_ID;
 	delete env.PI_SESSION_FILE;
 	delete env.PI_PROVIDER;

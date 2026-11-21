@@ -28,6 +28,23 @@ function transformMermaid(markdown: string, options: TransformOptions = {}): str
 }
 
 describe("Mermaid rendering", () => {
+	it("reuses streamed diagrams across trailing text while honoring source, width and final warnings", () => {
+		const transform = createMermaidMarkdownTransformer({ getMode: () => "streaming" });
+		const first = "```mermaid\nflowchart LR\n  A --> B\n```\n\n";
+		const warning = first.replace("A --> B", "A --> C\n  broken !");
+		for (const [markdown, width, streaming] of [
+			[first, 100, true],
+			[`${first}one`, 1, true],
+			[`${first}one two`, 100, true],
+			[warning, 100, true],
+			[warning, 100, false],
+		] as const) {
+			expect(transform(markdown, { availableWidth: width, isStreaming: streaming, messageType: "assistant" })).toBe(
+				transformMermaid(markdown, { maxWidth: width, isStreaming: streaming }),
+			);
+		}
+	});
+
 	it("finds the word in a streaming text whatever chunk it is split across", () => {
 		// The transformer searches only what was added to the text it last found without the word (and the characters
 		// before it a match can start in): every prefix must be transformed as a transformer that never saw the others does.

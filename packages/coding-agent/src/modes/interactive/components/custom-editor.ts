@@ -15,6 +15,8 @@ export class CustomEditor extends Editor {
 	private workingStatusIndicator: StatusIndicator | undefined;
 	/** The status last drawn in the border and its width: the same text on every frame between spinner ticks. */
 	private borderStatus = { text: "", width: 0 };
+	/** The unstyled suffix after the status when the editor has room for the regular border. */
+	private statusBorderSuffix = { width: 0, text: "" };
 	public readonly embedWorkingStatus: boolean;
 	public actionHandlers: Map<AppKeybinding, () => void> = new Map();
 
@@ -45,30 +47,34 @@ export class CustomEditor extends Editor {
 		let statusWidth = this.borderStatus.width;
 		if (statusWidth === 0) return super.renderTopBorder(width, hiddenLineCount);
 
-		const overflowLabel = hiddenLineCount > 0 ? ` ↑ ${hiddenLineCount} more ` : undefined;
-		const overflowLabelWidth = overflowLabel ? visibleWidth(overflowLabel) : 0;
-		const overflowStart = Math.floor((width - overflowLabelWidth) / 2);
-		const canFitOverflow = () =>
-			overflowLabel !== undefined && overflowLabelWidth + 2 <= width && overflowStart - (3 + statusWidth + 1) >= 1;
+		if (hiddenLineCount > 0) {
+			const overflowLabel = ` ↑ ${hiddenLineCount} more `;
+			const overflowLabelWidth = visibleWidth(overflowLabel);
+			const overflowStart = Math.floor((width - overflowLabelWidth) / 2);
+			let gap = overflowStart - statusWidth - 4;
 
-		if (overflowLabel && !canFitOverflow()) {
-			status = this.workingStatusIndicator.renderSpinnerInBorder(width);
-			statusWidth = visibleWidth(status);
-		}
-
-		if (canFitOverflow()) {
-			const leftBlockWidth = 3 + statusWidth + 1;
-			return (
-				this.borderColor("── ") +
-				status +
-				this.borderColor(
-					` ${"─".repeat(overflowStart - leftBlockWidth)}${overflowLabel}${"─".repeat(width - overflowStart - overflowLabelWidth)}`,
-				)
-			);
+			if (overflowLabelWidth + 2 > width || gap < 1) {
+				status = this.workingStatusIndicator.renderSpinnerInBorder(width);
+				statusWidth = visibleWidth(status);
+				gap = overflowStart - statusWidth - 4;
+			}
+			if (overflowLabelWidth + 2 <= width && gap >= 1) {
+				return (
+					this.borderColor("── ") +
+					status +
+					this.borderColor(
+						` ${"─".repeat(gap)}${overflowLabel}${"─".repeat(width - overflowStart - overflowLabelWidth)}`,
+					)
+				);
+			}
 		}
 
 		if (width >= statusWidth + 5) {
-			return this.borderColor("── ") + status + this.borderColor(` ${"─".repeat(width - statusWidth - 4)}`);
+			const suffixWidth = width - statusWidth - 4;
+			if (this.statusBorderSuffix.width !== suffixWidth) {
+				this.statusBorderSuffix = { width: suffixWidth, text: ` ${"─".repeat(suffixWidth)}` };
+			}
+			return this.borderColor("── ") + status + this.borderColor(this.statusBorderSuffix.text);
 		}
 
 		status = this.workingStatusIndicator.renderSpinnerInBorder(width);

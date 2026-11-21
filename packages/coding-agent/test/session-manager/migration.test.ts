@@ -1,7 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type FileEntry, migrateSessionEntries } from "../../src/core/session-manager.ts";
 
 describe("migrateSessionEntries", () => {
+	it("retries a repeated short ID before linking the next legacy entry", () => {
+		const entries: FileEntry[] = [
+			{ type: "session", id: "legacy", cwd: "/tmp", timestamp: "2025-01-01T00:00:00Z" },
+			...["one", "two"].map((name) => ({
+				type: "session_info" as const,
+				id: "",
+				parentId: null,
+				timestamp: "2025-01-01T00:00:00Z",
+				name,
+			})),
+		];
+		const random = vi
+			.spyOn(crypto, "randomUUID")
+			.mockReturnValueOnce("12345678-0000-4000-8000-000000000001")
+			.mockReturnValueOnce("12345678-0000-4000-8000-000000000002")
+			.mockReturnValueOnce("abcdef01-0000-4000-8000-000000000003");
+		try {
+			migrateSessionEntries(entries);
+			expect(entries[1]).toMatchObject({ id: "12345678", parentId: null });
+			expect(entries[2]).toMatchObject({ id: "abcdef01", parentId: "12345678" });
+		} finally {
+			random.mockRestore();
+		}
+	});
+
 	it("should add id/parentId to v1 entries", () => {
 		const entries: FileEntry[] = [
 			{ type: "session", id: "sess-1", timestamp: "2025-01-01T00:00:00Z", cwd: "/tmp" },

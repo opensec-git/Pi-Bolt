@@ -15,7 +15,11 @@ import {
 import { homedir } from "node:os";
 
 function getEnv(): NodeJS.ProcessEnv {
-	if (process.platform !== "linux" || Object.keys(process.env).length > 0) {
+	if (
+		process.platform !== "linux" ||
+		Object.prototype.propertyIsEnumerable.call(process.env, "PATH") ||
+		Object.keys(process.env).length > 0
+	) {
 		return process.env;
 	}
 	try {

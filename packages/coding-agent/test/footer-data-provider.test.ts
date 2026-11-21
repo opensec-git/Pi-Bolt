@@ -1,8 +1,22 @@
 import { execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import fs, {
+	existsSync,
+	type FSWatcher,
+	mkdirSync,
+	mkdtempSync,
+	renameSync,
+	rmSync,
+	statfsSync,
+	writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof fs>();
+	return { ...actual, default: actual, statfsSync: vi.fn(actual.statfsSync) };
+});
 
 let resolvedBranch = "main";
 
@@ -78,9 +92,9 @@ function createReftableWorktree(tempDir: string): WorktreeFixture {
 }
 
 function emitReftableChange(provider: FooterDataProvider): void {
-	const { reftableWatcher } = provider as unknown as { reftableWatcher: FSWatcher | null };
-	expect(reftableWatcher).not.toBeNull();
-	reftableWatcher?.emit("change", "change", "tables.list");
+	const { reftableWatchers } = provider as unknown as { reftableWatchers: FSWatcher[] };
+	expect(reftableWatchers.length).toBeGreaterThan(0);
+	reftableWatchers.at(-1)?.emit("change", "change", "tables.list");
 }
 
 async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -224,6 +238,27 @@ describe("FooterDataProvider reftable branch detection", () => {
 		}
 	});
 
+	it("ignores an outstanding git reply after changing projects", async () => {
+		vi.useFakeTimers();
+		const { worktreeDir } = createReftableWorktree(tempDir);
+		const other = createPlainRepo(join(tempDir, "other"));
+		const provider = new FooterDataProvider(worktreeDir);
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			resolvedBranch = "previous-project";
+			emitReftableChange(provider);
+			await vi.advanceTimersByTimeAsync(500);
+			expect(execFile).toHaveBeenCalledTimes(1);
+			provider.setCwd(other);
+			expect(provider.getGitBranch()).toBe("main");
+			await vi.advanceTimersByTimeAsync(10);
+			expect(provider.getGitBranch()).toBe("main");
+		} finally {
+			provider.dispose();
+			vi.useRealTimers();
+		}
+	});
+
 	it("updates the cached branch when the reftable directory changes", async () => {
 		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
 		process.chdir(worktreeDir);
@@ -245,6 +280,69 @@ describe("FooterDataProvider reftable branch detection", () => {
 			expect(onBranchChange).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();
+		}
+	});
+
+	it("catches worktree-private table changes during deferral and after an atomic replacement", async () => {
+		const { worktreeDir, reftableDir } = createReftableWorktree(tempDir);
+		const local = join(reftableDir, "..", "worktrees", "src", "reftable");
+		mkdirSync(local);
+		const list = join(local, "tables.list");
+		writeFileSync(list, "0\n");
+		const provider = new FooterDataProvider(worktreeDir, { deferGitWatcher: true });
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			resolvedBranch = "before-watch";
+			writeFileSync(list, "1\n");
+			provider.startGitWatcher();
+			await waitFor(() => provider.getGitBranch() === "before-watch");
+			resolvedBranch = "after-watch";
+			writeFileSync(join(local, "next-list"), "2\n");
+			renameSync(join(local, "next-list"), list);
+			await waitFor(() => provider.getGitBranch() === "after-watch");
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("continues watching a reftable directory replaced under a running provider", async () => {
+		const repo = createPlainReftableRepo(tempDir);
+		const tables = join(repo, ".git", "reftable");
+		writeFileSync(join(tables, "tables.list"), "0\n");
+		const provider = new FooterDataProvider(repo);
+		try {
+			expect(provider.getGitBranch()).toBe("main");
+			renameSync(tables, join(repo, ".git", "former-tables"));
+			mkdirSync(tables);
+			resolvedBranch = "replaced";
+			writeFileSync(join(tables, "tables.list"), "1\n");
+			await waitFor(() => provider.getGitBranch() === "replaced");
+			resolvedBranch = "next";
+			writeFileSync(join(tables, "tables.list"), "2\n");
+			await waitFor(() => provider.getGitBranch() === "next");
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("keeps other polling listeners when a provider leaves an unfamiliar filesystem", () => {
+		const repoDir = createPlainReftableRepo(tempDir);
+		const list = join(repoDir, ".git", "reftable", "tables.list");
+		writeFileSync(list, "0\n");
+		const listener = vi.fn();
+		const sharedWatcher = fs.watchFile(list, { interval: 250 }, listener);
+		vi.mocked(statfsSync).mockImplementation(() => {
+			throw new Error("filesystem type unavailable");
+		});
+		const provider = new FooterDataProvider(repoDir);
+		try {
+			expect(sharedWatcher.listenerCount("change")).toBe(2);
+			provider.dispose();
+			expect(sharedWatcher.listeners("change")).toEqual([listener]);
+		} finally {
+			provider.dispose();
+			fs.unwatchFile(list, listener);
+			vi.mocked(statfsSync).mockReset();
 		}
 	});
 
@@ -282,7 +380,7 @@ describe("FooterDataProvider deferred git watcher", () => {
 	let originalCwd: string;
 	let tempDir: string;
 
-	type WatcherInternals = { headWatcher: FSWatcher | null; reftableWatcher: FSWatcher | null };
+	type WatcherInternals = { headWatcher: FSWatcher | null; reftableWatchers: FSWatcher[] };
 	const internals = (provider: FooterDataProvider) => provider as unknown as WatcherInternals;
 
 	beforeEach(() => {
@@ -352,10 +450,10 @@ describe("FooterDataProvider deferred git watcher", () => {
 		const { worktreeDir } = createReftableWorktree(tempDir);
 		const provider = new FooterDataProvider(worktreeDir, { deferGitWatcher: true });
 		try {
-			expect(internals(provider).reftableWatcher).toBeNull();
+			expect(internals(provider).reftableWatchers).toHaveLength(0);
 			provider.startGitWatcher();
 			expect(internals(provider).headWatcher).not.toBeNull();
-			expect(internals(provider).reftableWatcher).not.toBeNull();
+			expect(internals(provider).reftableWatchers.length).toBeGreaterThan(0);
 		} finally {
 			provider.dispose();
 		}
@@ -393,6 +491,29 @@ describe("FooterDataProvider deferred git watcher", () => {
 			await waitFor(() => provider.getGitBranch() === "feature");
 			expect(execFile).toHaveBeenCalledTimes(1);
 			expect(onBranchChange).toHaveBeenCalledTimes(1);
+		} finally {
+			provider.dispose();
+		}
+	});
+
+	it("ignores a queued directory event after disposal", () => {
+		const provider = new FooterDataProvider(createPlainRepo(tempDir));
+		const watcher = internals(provider).headWatcher;
+		expect(watcher).not.toBeNull();
+		provider.dispose();
+		watcher?.emit("change", "rename", "reftable");
+		expect(internals(provider).headWatcher).toBeNull();
+	});
+
+	it("reattaches the directory watches when an event omits the changed entry name", () => {
+		const provider = new FooterDataProvider(createPlainReftableRepo(tempDir));
+		try {
+			const before = internals(provider).headWatcher;
+			expect(before).not.toBeNull();
+			before?.emit("change", "rename", null);
+			expect(internals(provider).headWatcher).not.toBeNull();
+			expect(internals(provider).headWatcher).not.toBe(before);
+			expect(internals(provider).reftableWatchers).toHaveLength(1);
 		} finally {
 			provider.dispose();
 		}

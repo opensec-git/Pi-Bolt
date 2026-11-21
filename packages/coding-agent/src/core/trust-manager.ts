@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME } from "../config.ts";
+import { waitForLockRetry } from "../utils/lock-retry.ts";
 import { canonicalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 
@@ -161,10 +162,7 @@ function acquireTrustLockSync(path: string): () => void {
 				throw error;
 			}
 			lastError = error;
-			const start = Date.now();
-			while (Date.now() - start < delayMs) {
-				// Sleep synchronously to avoid changing trust store callers to async.
-			}
+			waitForLockRetry(delayMs);
 		}
 	}
 
@@ -196,7 +194,10 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 	let currentDir = canonicalizePath(resolvePath(cwd));
 
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
-	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
+	if (
+		existsSync(configDir) &&
+		TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))
+	) {
 		return true;
 	}
 

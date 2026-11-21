@@ -41,6 +41,7 @@ import {
 	type RpcSlashCommand,
 	rpcPages,
 } from "./rpc-types.ts";
+import { serializeTreeResponse } from "./serialize-tree.ts";
 
 // Re-export types for consumers
 export type {
@@ -701,14 +702,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 			case "get_entries": {
 				const sessionManager = session.sessionManager;
-				let entries = sessionManager.getEntries();
-				if (command.since !== undefined) {
-					const sinceIndex = entries.findIndex((e) => e.id === command.since);
-					if (sinceIndex === -1) {
-						return error(id, "get_entries", `Entry not found: ${command.since}`);
-					}
-					entries = entries.slice(sinceIndex + 1);
-				}
+				const entries =
+					command.since === undefined
+						? sessionManager.getEntries()
+						: sessionManager.getEntriesAfter(command.since);
+				if (!entries) return error(id, "get_entries", `Entry not found: ${command.since}`);
 				return success(id, "get_entries", { entries, leafId: sessionManager.getLeafId() });
 			}
 
@@ -781,7 +779,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			// =================================================================
 
 			case "subagent_subscribe": {
-				subagentStreams ??= new SubagentStreams({ getSession: () => session, send: output });
+				subagentStreams ??= new SubagentStreams({
+					getSession: () => session,
+					send: output,
+					sendJson: (json) => writeRawStdout(`${json}\n`),
+				}).withFixedLimits();
 				subagentStreams.subscribe(command.runId);
 				return success(id, "subagent_subscribe");
 			}
@@ -905,7 +907,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				activeCommands--;
 			}
 			if (response) {
-				output(response);
+				if (response.success && response.command === "get_tree") {
+					writeRawStdout(serializeTreeResponse(response));
+				} else {
+					output(response);
+				}
 				await waitForRawStdoutBackpressure();
 			}
 			checkShutdownRequested();

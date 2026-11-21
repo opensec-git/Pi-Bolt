@@ -5,7 +5,7 @@
 import { Text, type TUI } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { ExtensionSelectorComponent } from "./extension-selector.ts";
-import { radiusShimmer, startBrandAnimation } from "./provider-brand.ts";
+import { BrandAnimation, radiusShimmer } from "./provider-brand.ts";
 
 /** The "Sign in with Radius" option: `label` is the full option, starting with the animated `text`. */
 type RadiusOption = { label: string; text: string };
@@ -17,8 +17,7 @@ type RadiusOption = { label: string; text: string };
 class RadiusLoginMenuComponent extends ExtensionSelectorComponent {
 	private readonly radiusOption: RadiusOption;
 	private readonly animationStart = performance.now();
-	private readonly stopAnimationTimer: () => void;
-	private animating = false;
+	private animation?: BrandAnimation;
 
 	constructor(
 		tui: TUI,
@@ -41,7 +40,7 @@ class RadiusLoginMenuComponent extends ExtensionSelectorComponent {
 			},
 		);
 		this.radiusOption = radiusOption;
-		this.stopAnimationTimer = startBrandAnimation(tui, () => this.animating);
+		this.animation = new BrandAnimation(tui);
 	}
 
 	override render(width: number): string[] {
@@ -49,8 +48,8 @@ class RadiusLoginMenuComponent extends ExtensionSelectorComponent {
 		const { label, text } = this.radiusOption;
 		const selectedLine = new Text(theme.fg("accent", "→ ") + theme.fg("accent", label), 1, 0).render(width)[0];
 		const index = selectedLine === undefined ? -1 : lines.indexOf(selectedLine);
-		this.animating = index >= 0;
-		if (this.animating) {
+		this.animation?.setActive(index >= 0);
+		if (index >= 0) {
 			const shimmer = radiusShimmer(text, performance.now() - this.animationStart);
 			const animatedLine = theme.fg("accent", "→ ") + shimmer + label.slice(text.length);
 			lines[index] = new Text(animatedLine, 1, 0).render(width)[0] ?? "";
@@ -59,8 +58,8 @@ class RadiusLoginMenuComponent extends ExtensionSelectorComponent {
 	}
 
 	private stopAnimation(): void {
-		this.stopAnimationTimer();
-		this.animating = false;
+		this.animation?.setActive(false);
+		this.animation = undefined;
 	}
 
 	override dispose(): void {

@@ -86,8 +86,20 @@ export class OutputFile {
 			return;
 		}
 		try {
-			let bytes = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
 			const room = this.maxBytes - this.bytesWritten;
+			let offset = 0;
+			if (typeof data === "string") {
+				const length = Buffer.byteLength(data);
+				if (length < room) {
+					if (length === 0) return;
+					offset = writeSync(this.fd, data);
+					if (offset === length) {
+						this.bytesWritten += length;
+						return;
+					}
+				}
+			}
+			let bytes = typeof data === "string" ? Buffer.from(data, "utf-8") : data;
 			const full = bytes.length >= room;
 			if (full) {
 				bytes = Buffer.concat([
@@ -95,7 +107,6 @@ export class OutputFile {
 					Buffer.from(`\n[Output beyond ${this.maxBytes} bytes was not saved]\n`),
 				]);
 			}
-			let offset = 0;
 			while (offset < bytes.length) {
 				offset += writeSync(this.fd, bytes, offset, bytes.length - offset);
 			}

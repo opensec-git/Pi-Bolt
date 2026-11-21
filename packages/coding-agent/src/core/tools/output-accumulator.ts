@@ -1,5 +1,7 @@
+import { isUtf8 } from "node:buffer";
 import { open } from "node:fs/promises";
 import { createOutputFile, type OutputFile } from "../../utils/output-files.ts";
+import { nativeByteScans } from "../native-byte-scans.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
@@ -20,6 +22,8 @@ export interface FullOutput {
 	truncated: boolean;
 }
 
+const useBunLineCount = Boolean(process.versions.bun);
+
 function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf-8");
 }
@@ -27,8 +31,8 @@ function byteLength(text: string): number {
 /**
  * Incrementally tracks streaming output with bounded memory.
  *
- * Appends decode chunks with a streaming UTF-8 decoder, keeps only a decoded
- * tail for display snapshots, and opens a temp file when the full output needs
+ * Appends handle streaming UTF-8, keep a bounded tail for display snapshots,
+ * and open a temp file when the full output needs
  * to be preserved.
  */
 export class OutputAccumulator {
@@ -40,11 +44,16 @@ export class OutputAccumulator {
 
 	private rawChunks: Buffer[] = [];
 	private tailText = "";
+	// In byte mode each code unit holds one UTF-8 byte until a display snapshot is requested.
+	private tailIsBytes = false;
+	private sawMultibyteText = false;
 	private tailBytes = 0;
 	private tailStartsAtLineBoundary = true;
 	private totalRawBytes = 0;
 	private totalDecodedBytes = 0;
 	private completedLines = 0;
+	// Average code units per LF in the last chunk. Sparse lines only need a few indexOf calls.
+	private previousCharsPerLf = Infinity;
 	private totalLines = 0;
 	private currentLineBytes = 0;
 	private hasOpenLine = false;
@@ -70,7 +79,7 @@ export class OutputAccumulator {
 		}
 
 		this.totalRawBytes += data.length;
-		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
+		this.appendChunk(data);
 
 		if (this.tempFile || this.shouldUseTempFile()) {
 			this.ensureTempFile();
@@ -191,24 +200,70 @@ export class OutputAccumulator {
 		return this.currentLineBytes;
 	}
 
-	private appendDecodedText(text: string): void {
-		if (text.length === 0) {
-			return;
+	private appendChunk(data: Buffer): void {
+		// UTF-8 decoding can replace a malformed sequence or hold a partial character.
+		// Neither operation adds or removes an ASCII LF from this chunk.
+		const lineFeeds =
+			this.previousCharsPerLf <= 256 && data.length >= 8192 && this.totalRawBytes > this.maxRollingBytes
+				? nativeByteScans()?.(data)
+				: undefined;
+		if (
+			(this.sawMultibyteText || this.tailIsBytes) &&
+			data.length >= 8192 &&
+			this.totalRawBytes > this.maxRollingBytes
+		) {
+			const start = data.indexOf(0x0a) + 1;
+			const end = data.lastIndexOf(0x0a) + 1;
+			if (start > 0 && end - start >= 4096 && isUtf8(data.subarray(start, end))) {
+				// LF ends a UTF-8 sequence. The streaming decoder handles the initial BOM and
+				// split characters at the edges. Valid complete lines already have the exact
+				// bytes that decoding and encoding again would produce.
+				const head = this.decoder.decode(data.subarray(0, start), { stream: true });
+				const tail = this.decoder.decode(data.subarray(end), { stream: true });
+				if (!this.tailIsBytes) {
+					this.tailText = Buffer.from(this.tailText).toString("latin1");
+					this.tailIsBytes = true;
+				}
+				const text =
+					Buffer.from(head).toString("latin1") +
+					data.toString("latin1", start, end) +
+					Buffer.from(tail).toString("latin1");
+				this.appendText(text, text.length, lineFeeds);
+				return;
+			}
 		}
+		this.appendDecodedText(this.decoder.decode(data, { stream: true }), lineFeeds);
+	}
 
-		const bytes = byteLength(text);
+	private appendDecodedText(text: string, lineFeeds?: number): void {
+		if (!text) return;
+		if (this.tailIsBytes) {
+			const encoded = Buffer.from(text).toString("latin1");
+			this.appendText(encoded, encoded.length, lineFeeds);
+		} else {
+			const bytes = byteLength(text);
+			this.sawMultibyteText = bytes !== text.length && !text.includes("\ufffd");
+			this.appendText(text, bytes, lineFeeds);
+		}
+	}
+
+	private appendText(text: string, bytes: number, lineFeeds?: number): void {
 		this.totalDecodedBytes += bytes;
 		const tailLength = this.tailText.length;
 		if (this.tailBytes + bytes > this.maxRollingBytes * 2 && bytes === text.length && this.tailBytes === tailLength) {
-			// Both ASCII (as many UTF-8 bytes as characters): the last maxRollingBytes characters are what trimTail() keeps,
-			// taken without joining the tail and the text and encoding them. A command's output arrives in chunks of up to
-			// 256 KB, each larger than the rolling limit, so this would otherwise copy and encode every chunk twice.
-			const start = tailLength + bytes - this.maxRollingBytes;
+			// In byte mode and in ASCII text, indices are UTF-8 byte offsets. When the
+			// entire retained suffix is in this chunk, skip joining it with the old tail.
+			let start = tailLength + bytes - this.maxRollingBytes;
+			while (this.tailIsBytes) {
+				const byte = start < tailLength ? this.tailText.charCodeAt(start) : text.charCodeAt(start - tailLength);
+				if ((byte & 0xc0) !== 0x80) break;
+				start++;
+			}
 			const before =
 				start - 1 < tailLength ? this.tailText.charCodeAt(start - 1) : text.charCodeAt(start - 1 - tailLength);
 			this.tailStartsAtLineBoundary = before === 0x0a;
 			this.tailText = start >= tailLength ? text.slice(start - tailLength) : this.tailText.slice(start) + text;
-			this.tailBytes = this.maxRollingBytes;
+			this.tailBytes = tailLength + bytes - start;
 		} else {
 			this.tailText += text;
 			this.tailBytes += bytes;
@@ -219,17 +274,28 @@ export class OutputAccumulator {
 
 		let newlines = 0;
 		let lastNewline = -1;
-		for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
-			newlines++;
-			lastNewline = i;
+		if (lineFeeds !== undefined) {
+			newlines = lineFeeds;
+			if (newlines > 0) lastNewline = text.lastIndexOf("\n");
+		} else if (useBunLineCount && this.previousCharsPerLf <= 16 && text.length >= 8192) {
+			// JSC removes matching characters in native code. On short-line logs this
+			// avoids a JS-to-native indexOf call per line. Limit the temporary to one chunk.
+			newlines = text.length - text.replace(/\n/g, "").length;
+			lastNewline = text.lastIndexOf("\n");
+		} else {
+			for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
+				newlines++;
+				lastNewline = i;
+			}
 		}
+		this.previousCharsPerLf = text.length / newlines;
 		if (newlines === 0) {
 			this.currentLineBytes += bytes;
 			this.hasOpenLine = true;
 		} else {
 			this.completedLines += newlines;
 			const tail = text.slice(lastNewline + 1);
-			this.currentLineBytes = byteLength(tail);
+			this.currentLineBytes = this.tailIsBytes ? tail.length : byteLength(tail);
 			this.hasOpenLine = tail.length > 0;
 		}
 		this.totalLines = this.completedLines + (this.hasOpenLine ? 1 : 0);
@@ -253,12 +319,9 @@ export class OutputAccumulator {
 	}
 
 	private getSnapshotText(): string {
-		if (this.tailStartsAtLineBoundary) {
-			return this.tailText;
-		}
-
-		const firstNewline = this.tailText.indexOf("\n");
-		return firstNewline === -1 ? this.tailText : this.tailText.slice(firstNewline + 1);
+		const firstNewline = this.tailStartsAtLineBoundary ? -1 : this.tailText.indexOf("\n");
+		const tail = this.tailText.slice(firstNewline + 1);
+		return this.tailIsBytes ? Buffer.from(tail, "latin1").toString("utf8") : tail;
 	}
 
 	private shouldUseTempFile(): boolean {

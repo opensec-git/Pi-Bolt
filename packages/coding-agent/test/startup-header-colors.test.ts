@@ -1,7 +1,9 @@
 import { Container, setCapabilityOverrides, setKeybindings, TuiMainScreen } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
+import type { AgentSession } from "../src/core/agent-session.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import { enableCliStreamOptimization } from "../src/core/sdk.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme, setTerminalColorScheme, setTerminalColors, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -17,7 +19,7 @@ const HEADER_TEXT = "Pi can explain its own features";
 type StartupHeader = {
 	terminal: VirtualTerminal;
 	themeController: InteractiveThemeController;
-	/** Settles when the startup step settles: the colors arrived or the query timed out. */
+	/** Settles once the next startup step may run. */
 	done: Promise<void>;
 	settled: () => boolean;
 	answer: () => void;
@@ -29,7 +31,11 @@ type StartupHeader = {
  * Run the startup step that applies the theme, queries the terminal's colors, and adds the header, on a real
  * TUI whose terminal answers only when the test says so.
  */
-function startStartupHeader(themeSetting: string | undefined): StartupHeader {
+function startStartupHeader(
+	themeSetting: string | undefined,
+	extensions: string[],
+	standalone: boolean,
+): StartupHeader {
 	const terminal = new VirtualTerminal(100, 30);
 	const ui = new TuiMainScreen(terminal);
 	const headerContainer = new Container();
@@ -40,11 +46,13 @@ function startStartupHeader(themeSetting: string | undefined): StartupHeader {
 		showError: vi.fn(),
 		onChanged: vi.fn(),
 	});
+	const session = { settingsManager, extensionRunner: { getExtensionPaths: () => extensions } };
+	if (standalone) enableCliStreamOptimization(session as unknown as AgentSession, "interactive");
 	const context = Object.assign(Object.create(InteractiveMode.prototype), {
 		ui,
 		renderer: ui,
 		headerContainer,
-		runtimeHost: { session: { settingsManager } },
+		runtimeHost: { session },
 		themeController,
 		options: {},
 		version: "9.9.9",
@@ -80,8 +88,8 @@ function startStartupHeader(themeSetting: string | undefined): StartupHeader {
 
 describe("startup header and the terminal color query", () => {
 	let running: StartupHeader | undefined;
-	const start = (themeSetting: string | undefined) => {
-		running = startStartupHeader(themeSetting);
+	const start = (themeSetting: string | undefined, extensions: string[] = ["builtin:mcp"], standalone = true) => {
+		running = startStartupHeader(themeSetting, extensions, standalone);
 		return running;
 	};
 
@@ -102,21 +110,19 @@ describe("startup header and the terminal color query", () => {
 		vi.unstubAllEnvs();
 	});
 
-	it("draws the header in the first frame for a theme that does not use the terminal's colors", async () => {
+	it("continues startup before the color reply for a fixed theme with only bundled extensions", async () => {
 		const startup = start("dark");
 		await startup.terminal.waitForRender();
 
-		// The terminal has not answered: the header is on screen, and startup still waits for the colors.
 		expect(startup.screen()).toContain(HEADER_TEXT);
-		expect(startup.settled()).toBe(false);
+		expect(startup.settled()).toBe(true);
 		const firstFrame = startup.terminal.getStyledViewport();
 		const themeBeforeReply = theme;
 
 		startup.answer();
-		await startup.done;
+		await startup.themeController.waitForTerminalColors();
 		await startup.terminal.waitForRender();
 
-		// Startup settled on the reply, after applying it; the theme and everything on screen stayed the same.
 		expect(theme).toBe(themeBeforeReply);
 		expect(startup.terminal.getStyledViewport()).toEqual(firstFrame);
 	});
@@ -154,10 +160,21 @@ describe("startup header and the terminal color query", () => {
 		expect(startup.screen()).toContain(HEADER_TEXT);
 	});
 
-	it("keeps the header when the reply is lost, and settles at the timeout", async () => {
-		const startup = start("dark");
+	it("shows the fixed header but waits for the terminal before starting extensions", async () => {
+		const startup = start("dark", ["example-extension"]);
 		await startup.terminal.waitForRender();
 		expect(startup.screen()).toContain(HEADER_TEXT);
+		expect(startup.settled()).toBe(false);
+		startup.answer();
+		await startup.done;
+		expect(startup.settled()).toBe(true);
+	});
+
+	it("starts extensions at the timeout when the reply is lost", async () => {
+		const startup = start("dark", ["builtin:embedded"], false);
+		await startup.terminal.waitForRender();
+		expect(startup.screen()).toContain(HEADER_TEXT);
+		expect(startup.settled()).toBe(false);
 		const firstFrame = startup.terminal.getStyledViewport();
 
 		// No reply: startup goes on once the query times out, and the screen stays as it was.

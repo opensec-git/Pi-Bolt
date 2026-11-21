@@ -1,5 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
-import type { SessionEntry } from "./session-manager.ts";
+import type { FileEntry, SessionEntry } from "./session-manager.ts";
 
 export interface UsageTotals {
 	input: number;
@@ -25,6 +25,55 @@ export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.cacheRead += usage.cacheRead;
 	totals.cacheWrite += usage.cacheWrite;
 	totals.cost += usage.cost.total;
+}
+
+/** Billable usage across all branches and the message counts reported by the session. */
+export interface SessionEntryStats extends UsageTotals {
+	userMessages: number;
+	assistantMessages: number;
+	toolResults: number;
+	toolCalls: number;
+	totalMessages: number;
+	latestCacheHitRate: number | undefined;
+}
+
+export function accumulateSessionStats(
+	entries: readonly FileEntry[],
+	start = 0,
+	stats: SessionEntryStats = {
+		...createUsageTotals(),
+		userMessages: 0,
+		assistantMessages: 0,
+		toolResults: 0,
+		toolCalls: 0,
+		totalMessages: 0,
+		latestCacheHitRate: undefined,
+	},
+): SessionEntryStats {
+	for (let i = start; i < entries.length; i++) {
+		const entry = entries[i];
+		if (entry.type === "message") {
+			stats.totalMessages++;
+			const message = entry.message;
+			if (message.role === "user") stats.userMessages++;
+			else if (message.role === "toolResult") {
+				stats.toolResults++;
+				if (message.usage) addUsageToTotals(stats, message.usage);
+			} else if (message.role === "assistant") {
+				stats.assistantMessages++;
+				if (Array.isArray(message.content)) {
+					for (const part of message.content) if (part.type === "toolCall") stats.toolCalls++;
+				}
+				addUsageToTotals(stats, message.usage);
+				const { input, cacheRead, cacheWrite } = message.usage;
+				const promptTokens = input + cacheRead + cacheWrite;
+				stats.latestCacheHitRate = promptTokens > 0 ? (cacheRead / promptTokens) * 100 : undefined;
+			}
+		} else if (entry.type === "usage" || entry.type === "branch_summary" || entry.type === "compaction") {
+			if (entry.usage) addUsageToTotals(stats, entry.usage);
+		}
+	}
+	return stats;
 }
 
 /** Sum of two usages, keeping the optional token splits when either side reports them. */

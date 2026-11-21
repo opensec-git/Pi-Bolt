@@ -1,8 +1,20 @@
+import { createRequire } from "node:module";
 import { getCapabilities, Marked, startsWithText, type Token } from "@earendil-works/pi-tui";
-import { type AnsiTheme, type MermaidArt, render, toAnsi } from "lovely-mermaid";
+import type * as LovelyMermaid from "lovely-mermaid";
+import type { AnsiTheme, MermaidArt } from "lovely-mermaid";
+import { isBunBinary, isBundledNode } from "../../../config.ts";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import type { MermaidRenderingMode } from "../../../core/settings-manager.ts";
 import type { Theme, ThemeColor } from "../theme/theme.ts";
+
+let mermaid: typeof LovelyMermaid | undefined;
+
+function loadMermaid(): typeof LovelyMermaid {
+	mermaid ??= (
+		isBunBinary || isBundledNode ? require("lovely-mermaid") : createRequire(import.meta.url)("lovely-mermaid")
+	) as typeof LovelyMermaid;
+	return mermaid;
+}
 
 // Made for the first text that names Mermaid: most sessions show none.
 let markdownParser: Marked | undefined;
@@ -62,7 +74,7 @@ function themedLines(art: MermaidArt, theme: MermaidTheme): string[] {
 			}),
 		),
 	};
-	return toAnsi(displayArt, ansiTheme);
+	return loadMermaid().toAnsi(displayArt, ansiTheme);
 }
 
 /** Create a transformer that replaces top-level Mermaid code blocks with Unicode terminal diagrams. */
@@ -72,6 +84,9 @@ export function createMermaidMarkdownTransformer(options: MermaidTransformerOpti
 	// startsWithText(), and the added text taken from its end: a message streaming in is the text before with the added
 	// text joined to it, which the engine copies into one string when all of it is read (startsWith(), or a slice that
 	// crosses where the two meet), a copy of the whole message for each chunk.
+	// A completed diagram can be followed by hundreds of streamed text chunks. Keep just its
+	// geometry so a new width, theme, or hyperlink setting still takes effect on every frame.
+	let lastDiagram: { source: string; art: MermaidArt } | undefined;
 	let withoutMermaid: { text: string; tail: string } | undefined;
 	const namesMermaid = (markdown: string): boolean => {
 		const known = withoutMermaid;
@@ -89,6 +104,8 @@ export function createMermaidMarkdownTransformer(options: MermaidTransformerOpti
 		return found;
 	};
 	return (markdown, context) => {
+		const previous = lastDiagram;
+		lastDiagram = undefined;
 		const mode = options.getMode();
 		// Diagrams render in user and assistant text and in model-written summaries, not in thinking or other surfaces.
 		if (
@@ -109,7 +126,11 @@ export function createMermaidMarkdownTransformer(options: MermaidTransformerOpti
 			.lexer(markdown)
 			.map((token) => {
 				if (!isMermaid(token)) return token.raw;
-				const art = render(token.text);
+				const art = previous?.source === token.text ? previous.art : loadMermaid().render(token.text);
+				// Bound the backing Markdown string as well as the number of terminal cells retained.
+				if (context.isStreaming && markdown.length <= 64 * 1024 && art && art.width * art.plain.length <= 8192) {
+					lastDiagram = { source: token.text, art };
+				}
 				if (!art || art.width > context.availableWidth) return token.raw;
 				if (!context.isStreaming && art.warnings.length > 0) {
 					const suffix = art.warnings.length > 1 ? ` (+${art.warnings.length - 1} more)` : "";

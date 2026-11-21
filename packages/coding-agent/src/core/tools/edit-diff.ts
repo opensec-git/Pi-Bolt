@@ -67,15 +67,31 @@ function getLineEndingAt(content: string, offset: number): "\r\n" | "\n" | "\r" 
 }
 
 const ASCII_ONLY = /^[\x00-\x7f]*$/;
-// The ASCII characters trimEnd strips, other than "\n", at the end of a line.
 const ASCII_TRAILING_WHITESPACE = /[\t\v\f\r ](?:\n|$)/;
 
-/** Strip trailing whitespace from each line. */
+/** Strip trailing whitespace from each line without splitting the untouched lines. */
 function trimLineEnds(text: string): string {
-	return text
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.join("\n");
+	let parts: string[] | undefined;
+	let keptStart = 0;
+	let start = 0;
+	while (start < text.length) {
+		const newline = text.indexOf("\n", start);
+		const end = newline === -1 ? text.length : newline;
+		const last = text.charCodeAt(end - 1);
+		// Ordinary source lines end with a printable character. Check the remaining candidates with Unicode trimEnd.
+		if (end > start && (last <= 0x20 || last >= 0xa0)) {
+			const trimmedEnd = start + text.slice(start, end).trimEnd().length;
+			if (trimmedEnd < end) {
+				parts ??= [];
+				parts.push(text.slice(keptStart, trimmedEnd));
+				keptStart = end;
+			}
+		}
+		start = end + 1;
+	}
+	if (!parts) return text;
+	parts.push(text.slice(keptStart));
+	return parts.join("");
 }
 
 /**
@@ -123,15 +139,6 @@ function normalizeContentForFuzzyMatch(content: string): string {
 	return lastFuzzyOutput;
 }
 
-function splitLinesWithEndings(content: string): string[] {
-	return content.match(/[^\n]*\n|[^\n]+/g) ?? [];
-}
-
-interface LineSpan {
-	start: number;
-	end: number;
-}
-
 interface MatchedEdit {
 	editIndex: number;
 	matchIndex: number;
@@ -142,51 +149,20 @@ interface MatchedEdit {
 /** Replacement of `matchLength` characters at `matchIndex` with `newText`. */
 export type TextReplacement = Pick<MatchedEdit, "matchIndex" | "matchLength" | "newText">;
 
-function getLineSpans(content: string): LineSpan[] {
-	let offset = 0;
-	return splitLinesWithEndings(content).map((line) => {
-		const span = { start: offset, end: offset + line.length };
-		offset = span.end;
-		return span;
-	});
-}
-
-function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement) {
-	const replacementStart = replacement.matchIndex;
-	const replacementEnd = replacement.matchIndex + replacement.matchLength;
-
-	let startLine = -1;
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (replacementStart >= line.start && replacementStart < line.end) {
-			startLine = i;
-			break;
-		}
-	}
-	if (startLine === -1) {
-		throw new Error("Replacement range is outside the base content.");
-	}
-
-	let endLine = startLine;
-	while (endLine < lines.length && lines[endLine].end < replacementEnd) {
-		endLine++;
-	}
-	if (endLine >= lines.length) {
-		throw new Error("Replacement range is outside the base content.");
-	}
-
-	return { startLine, endLine: endLine + 1 };
-}
-
 function applyReplacements(content: string, replacements: TextReplacement[], offset = 0): string {
-	let result = content;
-	for (let i = replacements.length - 1; i >= 0; i--) {
-		const replacement = replacements[i];
-		const matchIndex = replacement.matchIndex - offset;
-		result =
-			result.substring(0, matchIndex) + replacement.newText + result.substring(matchIndex + replacement.matchLength);
+	let result = "";
+	let position = 0;
+	for (const replacement of replacements) {
+		const start = replacement.matchIndex - offset;
+		result += content.slice(position, start) + replacement.newText;
+		position = start + replacement.matchLength;
 	}
-	return result;
+	return result + content.slice(position);
+}
+
+function lineEndAfter(text: string, offset: number): number {
+	const newline = text.indexOf("\n", offset);
+	return newline === -1 ? text.length : newline + 1;
 }
 
 /**
@@ -204,39 +180,45 @@ function widenReplacementsToLines(
 	baseContent: string,
 	replacements: TextReplacement[],
 ): TextReplacement[] {
-	const originalLines = getLineSpans(originalContent);
-	const baseLines = getLineSpans(baseContent);
-	if (originalLines.length !== baseLines.length) {
+	// A final whitespace-only line can disappear during normalization.
+	if (countLines(originalContent, 0, originalContent.length) !== countLines(baseContent, 0, baseContent.length)) {
 		throw new Error("Cannot preserve unchanged lines because the base content has a different line count.");
 	}
 
-	const groups: Array<{ startLine: number; endLine: number; replacements: TextReplacement[] }> = [];
-	const sortedReplacements = [...replacements].sort((a, b) => a.matchIndex - b.matchIndex);
-	for (const replacement of sortedReplacements) {
-		const range = getReplacementLineRange(baseLines, replacement);
-		const current = groups[groups.length - 1];
-		if (current && range.startLine < current.endLine) {
-			current.endLine = Math.max(current.endLine, range.endLine);
-			current.replacements.push(replacement);
-			continue;
+	// Both cursors point to the start of the same line. The caller sorted the replacements, so
+	// mapping their widened ranges needs no line table and never rewinds either cursor.
+	let baseOffset = 0;
+	let originalOffset = 0;
+	const originalBoundary = (boundary: number): number => {
+		while (baseOffset < boundary) {
+			baseOffset = lineEndAfter(baseContent, baseOffset);
+			originalOffset = lineEndAfter(originalContent, originalOffset);
 		}
-		groups.push({ ...range, replacements: [replacement] });
-	}
+		return originalOffset;
+	};
 
-	return groups.map((group) => {
-		const groupStartOffset = baseLines[group.startLine].start;
-		const groupEndOffset = baseLines[group.endLine - 1].end;
-		const originalStart = originalLines[group.startLine].start;
-		return {
+	const widened: TextReplacement[] = [];
+	let i = 0;
+	while (i < replacements.length) {
+		const first = i;
+		const baseStart = lineStartBefore(baseContent, replacements[i].matchIndex);
+		let baseEnd: number;
+		do {
+			const { matchIndex, matchLength } = replacements[i++];
+			if (matchIndex >= baseContent.length || matchIndex + matchLength > baseContent.length) {
+				throw new Error("Replacement range is outside the base content.");
+			}
+			baseEnd = lineEndAfter(baseContent, matchIndex + Math.max(0, matchLength - 1));
+		} while (i < replacements.length && replacements[i].matchIndex < baseEnd);
+		const originalStart = originalBoundary(baseStart);
+		const originalEnd = originalBoundary(baseEnd);
+		widened.push({
 			matchIndex: originalStart,
-			matchLength: originalLines[group.endLine - 1].end - originalStart,
-			newText: applyReplacements(
-				baseContent.slice(groupStartOffset, groupEndOffset),
-				group.replacements,
-				groupStartOffset,
-			),
-		};
-	});
+			matchLength: originalEnd - originalStart,
+			newText: applyReplacements(baseContent.slice(baseStart, baseEnd), replacements.slice(first, i), baseStart),
+		});
+	}
+	return widened;
 }
 
 export interface FuzzyMatchResult {
@@ -319,9 +301,17 @@ function findText(content: string, oldText: string, getFuzzyContent: () => strin
 }
 
 /** Occurrences of `oldText` in `fuzzyContent`, which is already fuzzy-normalized. */
-function countOccurrences(fuzzyContent: string, oldText: string): number {
+function countOccurrences(fuzzyContent: string, oldText: string, exactIndex: number | undefined): number {
 	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-	return fuzzyContent.split(fuzzyOldText).length - 1;
+	// An all-whitespace needle can normalize to the empty split separator (one part per UTF-16 code unit).
+	if (fuzzyOldText.length === 0) return fuzzyContent.length - 1;
+	let count = 0;
+	let index = exactIndex !== undefined && oldText === fuzzyOldText ? exactIndex : fuzzyContent.indexOf(fuzzyOldText);
+	while (index !== -1) {
+		count++;
+		index = fuzzyContent.indexOf(fuzzyOldText, index + fuzzyOldText.length);
+	}
+	return count;
 }
 
 function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
@@ -366,7 +356,7 @@ function getNoChangeError(path: string, totalEdits: number): Error {
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
+ * then spliced from the original in offset order. If any edit needs
  * fuzzy matching, the operation runs in fuzzy-normalized content space and then
  * overlays those line-level changes onto the original content so unchanged line
  * blocks keep their original bytes.
@@ -401,16 +391,20 @@ export function applyEditsToNormalizedContent(
 			}
 		: getFuzzyContent;
 
+	const sameSearchText = replacementBaseContent === fuzzyContent;
 	const matchedEdits: MatchedEdit[] = [];
 	for (let i = 0; i < normalizedEdits.length; i++) {
 		const edit = normalizedEdits[i];
-		const matchResult = findText(replacementBaseContent, edit.oldText, getReplacementBaseFuzzyContent);
+		const matchResult = usedFuzzyMatch
+			? findText(replacementBaseContent, edit.oldText, getReplacementBaseFuzzyContent)
+			: initialMatches[i];
 		if (!matchResult.found) {
 			throw getNotFoundError(path, i, normalizedEdits.length);
 		}
 
 		// normalizeForFuzzyMatch is idempotent, so this is the normalized replacement base either way.
-		const occurrences = countOccurrences(fuzzyContent, edit.oldText);
+		const exactIndex = sameSearchText && !matchResult.usedFuzzyMatch ? matchResult.index : undefined;
+		const occurrences = countOccurrences(fuzzyContent, edit.oldText, exactIndex);
 		if (occurrences > 1) {
 			throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
 		}

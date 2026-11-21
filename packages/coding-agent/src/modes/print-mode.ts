@@ -113,13 +113,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 
 		unsubscribe?.();
 		unsubscribeBackpressure?.();
-		unsubscribe = session.subscribe((event) => {
-			if (mode === "json") {
+		if (mode === "json") {
+			unsubscribe = session.subscribe((event) => {
 				writeRawStdout(`${JSON.stringify(toJsonEvent(event))}\n`);
-			}
-		});
-		unsubscribeBackpressure =
-			mode === "json" ? session.agent.subscribe(() => waitForRawStdoutBackpressure()) : undefined;
+			});
+			unsubscribeBackpressure = session.agent.subscribe(() => waitForRawStdoutBackpressure());
+		}
 	};
 
 	try {

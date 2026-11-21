@@ -1,5 +1,5 @@
 import hljs from "highlight.js/lib/core.js";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	type HighlightTheme,
 	highlight,
@@ -151,6 +151,25 @@ describe("syntax highlight from the token tree", () => {
 
 	it("installs the faster emitter", () => {
 		expect(api.highlight("x", { language: "typescript" }).emitter.constructor.name).toBe("FastHtmlEmitter");
+	});
+
+	it("renders a deeply nested token tree in HTML and themed text", () => {
+		type Container = { kind?: string; children: (Container | string)[] };
+		const result = api.highlight("example", { language: "typescript" });
+		const emitter = result.emitter as { rootNode: Container; toHTML(): string };
+		let child: Container = { kind: "keyword", children: ["example"] };
+		for (let depth = 0; depth < 20000; depth++) child = { children: [child] };
+		emitter.rootNode.children = [child];
+		const html = emitter.toHTML();
+		expect(html).toBe('<span class="hljs-keyword">example</span>');
+		const spy = vi.spyOn(api, "highlight").mockReturnValueOnce({ value: html, emitter });
+		try {
+			expect(highlight("example", { language: "typescript", theme: { keyword: (text) => `[${text}]` } })).toBe(
+				"[example]",
+			);
+		} finally {
+			spy.mockRestore();
+		}
 	});
 
 	const check = (code: string, language: string | undefined) => {

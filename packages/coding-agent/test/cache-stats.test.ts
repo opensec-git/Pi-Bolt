@@ -1,12 +1,12 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	collectCacheMisses,
 	computeCacheWaste,
 	detectCacheMiss,
 	type ModelPriceSource,
 } from "../src/core/cache-stats.ts";
-import type { SessionEntry } from "../src/core/session-manager.ts";
+import { type SessionEntry, SessionManager } from "../src/core/session-manager.ts";
 
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
@@ -115,6 +115,20 @@ describe("computeCacheWaste", () => {
 });
 
 describe("collectCacheMisses", () => {
+	it("uses hidden requests as predecessors and only prices visible misses", () => {
+		const hidden = assistant({ input: 70_000 });
+		const visible = assistant({ input: 75_000 });
+		const getModel = vi.fn(models.getModel);
+		const misses = collectCacheMisses(
+			[entry(turn1), entry(hidden), entry(visible)],
+			{ getModel },
+			(m) => m === visible,
+		);
+		expect([...misses.keys()]).toEqual([visible]);
+		expect(misses.get(visible)?.missedTokens).toBe(70_000);
+		expect(getModel).toHaveBeenCalledTimes(1);
+	});
+
 	it("maps counted misses to their assistant messages by reference", () => {
 		const missTurn = assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 120_000 });
 		const misses = collectCacheMisses([entry(turn1), entry(turn2), entry(missTurn)], models);
@@ -124,6 +138,35 @@ describe("collectCacheMisses", () => {
 });
 
 describe("detectCacheMiss", () => {
+	it("keeps file-order usage through branches, resets and failed appends", () => {
+		const session = SessionManager.inMemory();
+		const current = assistant({ input: 150_000 });
+		const miss = () => session.getCacheMiss(current, models)?.missedTokens;
+		const first = session.appendMessage(turn1);
+		expect(miss()).toBe(100_000);
+		session.appendMessage(assistant({ input: 70_000 }));
+		session.branch(first);
+		expect(miss()).toBe(70_000);
+		session.createBranchedSession(first);
+		expect(miss()).toBe(100_000);
+		const fail = vi.spyOn(session, "_persist").mockImplementationOnce(() => {
+			expect(miss()).toBe(105_000);
+			throw new Error("disk full");
+		});
+		try {
+			expect(() => session.appendMessage(turn2)).toThrow("disk full");
+		} finally {
+			fail.mockRestore();
+		}
+		expect(miss()).toBe(100_000);
+		session.appendCompaction("Summary", first, 100_000);
+		expect(miss()).toBeUndefined();
+		session.appendUsage("cache_warm", "test", "test-model", turn2.usage);
+		expect(miss()).toBe(105_000);
+		session.newSession();
+		expect(miss()).toBeUndefined();
+	});
+
 	it("detects a miss on a just-completed message with idle time", () => {
 		const missMessage = assistant({ cacheWrite: 110_000, cost: { cacheWrite: 0.4125 }, timestamp: 600_000 });
 		const miss = detectCacheMiss([entry(turn1), entry(turn2)], missMessage, models);

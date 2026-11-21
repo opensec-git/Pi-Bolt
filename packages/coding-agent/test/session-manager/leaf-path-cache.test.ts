@@ -68,4 +68,26 @@ describe("SessionManager leaf path cache", () => {
 			"user",
 		]);
 	});
+
+	it("keeps extension previews isolated across compactions, edits and branch switches", () => {
+		const session = SessionManager.inMemory();
+		const first = session.appendMessage(userMsg("original"));
+		const sibling = session.appendMessage(userMsg("other branch"));
+		session.branch(first);
+		session.appendCompaction("summary", first, 100);
+		session.appendContextEdit(first, { content: "updated" });
+		expect(() => session.appendContextEdit(sibling, null)).toThrow("not on the active branch");
+		const preview = session.buildContextPreview();
+		const expected = session.buildSessionProjection();
+		expect(preview.entries).toEqual(expected.entries);
+		expect(preview.messages).toEqual(expected.messages);
+		preview.entries[0].messages.length = 0;
+		preview.messages.pop();
+		expect(session.buildContextPreview()).toEqual({ entries: expected.entries, messages: expected.messages });
+		session.branch(sibling);
+		expect(session.buildContextPreview().messages).toEqual(session.buildSessionContext().messages);
+		session.resetLeaf();
+		expect(session.buildContextPreview()).toEqual({ entries: [], messages: [] });
+		expect(() => session.appendContextEdit(first, null)).toThrow("not on the active branch");
+	});
 });

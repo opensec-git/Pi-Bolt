@@ -486,6 +486,18 @@ describe("resolveModelScopeWithDiagnostics", () => {
 });
 
 describe("resolveCliModel", () => {
+	test("materializes only the provider default for a custom model id", () => {
+		const first = mockModels[0];
+		const preferred = { ...first, id: defaultModelPerProvider.anthropic ?? first.id, contextWindow: 9000 };
+		const materialize = vi.fn((model: Model<Api>) => ({ ...model, maxTokens: 2048 }));
+		const registry = {
+			getModelChoices: () => ({ models: [first, preferred], model: materialize }),
+		} as unknown as Parameters<typeof resolveCliModel>[0]["modelRuntime"];
+		const result = resolveCliModel({ cliModel: "anthropic/local-test", modelRuntime: registry });
+		expect(materialize.mock.calls).toEqual([[preferred]]);
+		expect(result.model).toEqual({ ...preferred, maxTokens: 2048, id: "local-test", name: "local-test" });
+	});
+
 	test("does not strip invalid :suffix as thinking level in --model (treat as raw id)", () => {
 		const registry = {
 			getModels: () => allModels,

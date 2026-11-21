@@ -1,13 +1,20 @@
 /**
  * A copy of `entry`: the same prototype and fields, where a field that holds an array, a Map, a Set or a plain object holds a
- * copy of it (one level down: class instances, functions and strings are shared). For a transcript entry that compacted
+ * copy of it, except for the caller’s shared object (one level down: class instances, functions and strings are shared).
+ * For a transcript entry that compacted
  * (compact()): what is left of it was allocated while the transcript was rendered, among a great deal that died since, and
  * each of those small objects keeps a block of the heap from being given back. A copy made now is allocated with what lives,
  * and the entry it replaces dies with them.
  */
-export function freshCopy<T extends object>(entry: T): T {
+export function freshCopy<T extends object>(entry: T, shared?: object): T {
 	const copy = Object.create(Object.getPrototypeOf(entry)) as Record<string, unknown>;
-	for (const [key, value] of Object.entries(entry)) copy[key] = copyOf(value);
+	const fields = entry as Record<string, unknown>;
+	const keys = Object.keys(fields);
+	for (let i = 0; i < keys.length; i++) {
+		const key = keys[i]!;
+		const value = fields[key];
+		copy[key] = value === shared ? value : copyOf(value);
+	}
 	return copy as T;
 }
 

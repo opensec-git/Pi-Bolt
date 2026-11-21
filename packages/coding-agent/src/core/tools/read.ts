@@ -1,6 +1,6 @@
 import type { Api, ImageContent, Model, ModelImageResizeOptions, TextContent } from "@earendil-works/pi-ai";
 import { isUtf8 } from "buffer";
-import { constants } from "fs";
+import { type BigIntStats, constants } from "fs";
 import {
 	type FileHandle,
 	access as fsAccess,
@@ -11,7 +11,11 @@ import {
 import type { Static } from "typebox";
 import { TextDecoder } from "util";
 import { markProcessedImageBlock, processImage } from "../../utils/image-process.ts";
-import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
+import {
+	detectSupportedImageMimeType,
+	detectSupportedImageMimeTypeFromFile,
+	IMAGE_TYPE_SNIFF_BYTES,
+} from "../../utils/mime.ts";
 import { detachSharedString } from "../../utils/text.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { resolveReadPathAsync } from "./path-utils.ts";
@@ -23,7 +27,7 @@ import {
 	DEFAULT_MAX_LINES,
 	formatSize,
 	type TruncationResult,
-	truncateHead,
+	truncateHeadView,
 	truncationDetails,
 } from "./truncate.ts";
 
@@ -124,6 +128,7 @@ function locateLines(
 /** Text files at least this large are read in chunks instead of whole. */
 const CHUNKED_READ_MIN_BYTES = 1024 * 1024;
 const CHUNKED_READ_CHUNK_BYTES = 1024 * 1024;
+const INDEXED_PAGE_BYTES = 64 * 1024;
 
 /**
  * Where the bytes of `data` can be cut so that decoding each part on its own gives the text decoding all of it gives:
@@ -170,16 +175,44 @@ class DecodedLength {
  */
 interface ChunkedSelection {
 	totalLines: number;
-	/** The selected text when it is at most `prefixBytes` long, else its first `prefixBytes` bytes, decoded. */
-	prefix: string;
-	/** Whether `prefix` is all of the selected text. */
-	complete: boolean;
-	/** Lines of the selected text, counted as truncateHead counts them. */
-	selectedLines: number;
-	/** UTF-8 length of the selected text. */
-	selectedBytes: number;
-	/** UTF-8 length of the selected text's first line. */
+	truncation: TruncationResult;
 	firstLineBytes: number;
+	nextPage?: PagePosition;
+	lastOpenPage?: MeasuredPage;
+	byteExactSuffix?: ByteExactSuffix;
+}
+
+interface PagePosition {
+	line: number;
+	offset: number;
+	/** Exact totals of the suffix when the preceding read measured through EOF. */
+	tail?: { rawBytes: number; decodedBytes: number; lines: number };
+}
+
+interface MeasuredPage extends PagePosition {
+	firstLineBytes: number;
+}
+
+/** The scanned suffix has no UTF-8 byte expansion. Any suffix starting at a later newline has none either. */
+interface ByteExactSuffix {
+	fromLine: number;
+	endOffset: number;
+	endLine: number;
+}
+
+interface LineIndex {
+	stat: BigIntStats;
+	nextPage?: PagePosition;
+	lastOpenPage?: MeasuredPage;
+	byteExactSuffix?: ByteExactSuffix;
+	/** Start of a sampled line, and the count of preceding newlines. */
+	checkpoints: { offset: number; newlines: number }[];
+	spacing: number;
+	totalLines?: number;
+}
+
+function sameFileVersion(a: BigIntStats, b: BigIntStats): boolean {
+	return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
 
 async function readSelectionInChunks(
@@ -188,13 +221,36 @@ async function readSelectionInChunks(
 	endLine: number,
 	prefixBytes: number,
 	isAborted: () => boolean,
+	index?: LineIndex,
 ): Promise<ChunkedSelection | undefined> {
-	const chunk = Buffer.allocUnsafe(CHUNKED_READ_CHUNK_BYTES);
+	const lastOpenPage = index?.lastOpenPage;
+	const repeat = lastOpenPage?.line === startLine ? lastOpenPage : undefined;
+	const page = repeat ?? index?.nextPage;
+	const position = page?.line === startLine ? page : undefined;
+	const knownTotal = index?.totalLines;
+	const tail = endLine === Infinity ? position?.tail : undefined;
+	const knownFirstLineBytes = endLine === Infinity ? repeat?.firstLineBytes : undefined;
+	const suffix = index?.byteExactSuffix;
+	const byteExact =
+		endLine === Infinity &&
+		suffix &&
+		startLine >= suffix.fromLine &&
+		knownTotal !== undefined &&
+		startLine < knownTotal
+			? suffix
+			: undefined;
+	const measured = tail || byteExact;
+	// On an indexed range, start small. Grow back to the normal chunk size for long ranges or sparse lines.
+	let chunk = Buffer.allocUnsafe(
+		knownTotal !== undefined && (Number.isFinite(endLine) || measured)
+			? INDEXED_PAGE_BYTES
+			: CHUNKED_READ_CHUNK_BYTES,
+	);
 	const prefix = Buffer.allocUnsafe(prefixBytes);
 	let prefixLength = 0;
 	const selectedLength = new DecodedLength();
 	const firstLineLength = new DecodedLength();
-	let firstLineEnded = false;
+	let firstLineMeasured = knownFirstLineBytes !== undefined;
 	// No text is selected for a zero limit.
 	const selecting = endLine > startLine;
 	// Byte offsets of the selection in the file, once known; start is where line `startLine` starts.
@@ -205,18 +261,42 @@ async function readSelectionInChunks(
 	let lastSelectedByte = -1;
 	let newlines = 0;
 	let offset = 0;
+	if (position) {
+		newlines = startLine;
+		offset = position.offset;
+		start = offset;
+	} else if (index && knownTotal !== undefined) {
+		const checkpoint = index.checkpoints.findLast((point) => point.newlines <= startLine);
+		if (checkpoint) {
+			({ offset, newlines } = checkpoint);
+			if (newlines === startLine) start = offset;
+		}
+	}
+	let nextCheckpoint = index && knownTotal === undefined ? index.spacing : Infinity;
 	while (true) {
 		if (isAborted()) return undefined;
-		const { bytesRead } = await file.read(chunk, 0, chunk.length, null);
+		if (knownTotal !== undefined && (!selecting || startLine >= knownTotal || end !== -1)) break;
+		const { bytesRead } = await file.read(chunk, 0, chunk.length, index ? offset : null);
 		if (bytesRead === 0) break;
 		const bytes = chunk.subarray(0, bytesRead);
 		const endBefore = end;
-		for (let i = bytes.indexOf(0x0a); i !== -1; i = bytes.indexOf(0x0a, i + 1)) {
+		let checkpointInChunk = nextCheckpoint - offset;
+		// Once a measured suffix is located, neither its end nor its line count needs another scan.
+		const firstNewline = measured && start !== -1 ? -1 : bytes.indexOf(0x0a);
+		for (let i = firstNewline; i !== -1; i = bytes.indexOf(0x0a, i + 1)) {
 			// Line `newlines` ends at i, and line `newlines + 1` starts after it.
-			if (newlines === endLine - 1) end = offset + i;
-			else if (selecting && start !== -1 && end === -1) selectedNewlines++;
+			if (newlines === endLine - 1) {
+				end = offset + i;
+				if (knownTotal !== undefined) break;
+			} else if (selecting && start !== -1 && end === -1) selectedNewlines++;
 			newlines++;
 			if (newlines === startLine) start = offset + i + 1;
+			if (i >= checkpointInChunk && index) {
+				const nextOffset = offset + i + 1;
+				index.checkpoints.push({ offset: nextOffset, newlines });
+				nextCheckpoint = index.checkpoints.length < 256 ? nextOffset + index.spacing : Infinity;
+				checkpointInChunk = nextCheckpoint - offset;
+			}
 		}
 		if (selecting && start !== -1 && endBefore === -1) {
 			// The part of this chunk in the selection.
@@ -224,43 +304,122 @@ async function readSelectionInChunks(
 			const to = (end === -1 || end > offset + bytesRead ? offset + bytesRead : end) - offset;
 			if (from < to) {
 				const part = bytes.subarray(from, to);
-				selectedLength.feed(part);
+				if (!measured) selectedLength.feed(part);
 				selectedRawBytes += part.length;
 				lastSelectedByte = part[part.length - 1]!;
 				if (prefixLength < prefixBytes) {
 					prefixLength += part.copy(prefix, prefixLength, 0, Math.min(part.length, prefixBytes - prefixLength));
 				}
-				if (!firstLineEnded) {
+				if (!firstLineMeasured) {
 					const lineEnd = part.indexOf(0x0a);
 					firstLineLength.feed(lineEnd === -1 ? part : part.subarray(0, lineEnd));
-					firstLineEnded = lineEnd !== -1;
+					firstLineMeasured = lineEnd !== -1;
 				}
 			}
 		}
 		offset += bytesRead;
+		// The previous read counted this entire suffix. Only the displayed prefix and the size of its first line are needed.
+		if (measured && prefixLength === prefixBytes && firstLineMeasured) break;
+		if (
+			chunk.length < CHUNKED_READ_CHUNK_BYTES &&
+			end === -1 &&
+			bytesRead === chunk.length &&
+			!(measured && firstLineMeasured)
+		) {
+			chunk = Buffer.allocUnsafe(CHUNKED_READ_CHUNK_BYTES);
+		}
 	}
-	const complete = selectedRawBytes <= prefixBytes;
+	const rawBytes = tail?.rawBytes ?? (byteExact ? byteExact.endOffset - start : selectedRawBytes);
+	const decodedBytes = tail?.decodedBytes ?? (byteExact ? rawBytes : selectedLength.end());
+	const scannedLines = selectedRawBytes === 0 || lastSelectedByte === 0x0a ? selectedNewlines : selectedNewlines + 1;
+	const lines = tail?.lines ?? (byteExact ? byteExact.endLine - startLine : scannedLines);
+	const truncation = truncateHeadView(prefix.toString("utf-8", 0, prefixLength));
+	if (rawBytes > prefixLength) {
+		// The buffer holds every complete line that fits, plus a UTF-8 sequence of lookahead.
+		truncation.totalBytes = decodedBytes;
+		truncation.totalLines = lines;
+	}
+	let following: PagePosition | undefined;
+	if (end !== -1) {
+		following = { line: endLine, offset: end + 1 };
+	} else if (index && endLine === Infinity && truncation.truncated && truncation.outputLines > 0) {
+		// outputBytes excludes the delimiter before the next line. Invalid UTF-8 can expand on decoding,
+		// so use the raw delimiters for the file position when the two byte counts differ.
+		const consumedBytes = truncation.outputBytes + 1;
+		let rawConsumed = consumedBytes;
+		if (rawBytes !== decodedBytes) {
+			const stored = prefix.subarray(0, prefixLength);
+			rawConsumed = 0;
+			for (let line = 0; line < truncation.outputLines; line++) {
+				rawConsumed = stored.indexOf(0x0a, rawConsumed) + 1;
+				if (!rawConsumed) break;
+			}
+		}
+		if (rawConsumed > 0 && rawConsumed <= prefixLength && prefix[rawConsumed - 1] === 0x0a) {
+			following = {
+				line: startLine + truncation.outputLines,
+				offset: start + rawConsumed,
+				tail: {
+					rawBytes: rawBytes - rawConsumed,
+					decodedBytes: decodedBytes - consumedBytes,
+					lines: lines - truncation.outputLines,
+				},
+			};
+		}
+	}
+	const firstLineBytes = knownFirstLineBytes ?? firstLineLength.end();
 	return {
-		totalLines: newlines + 1,
-		prefix: prefix.toString("utf-8", 0, prefixLength),
-		complete,
-		selectedLines: selectedRawBytes === 0 ? 0 : lastSelectedByte === 0x0a ? selectedNewlines : selectedNewlines + 1,
-		selectedBytes: selectedLength.end(),
-		firstLineBytes: firstLineLength.end(),
+		totalLines: knownTotal ?? newlines + 1,
+		truncation,
+		firstLineBytes,
+		nextPage: following,
+		lastOpenPage:
+			index && endLine === Infinity && start >= 0
+				? { line: startLine, offset: start, firstLineBytes, tail: { rawBytes, decodedBytes, lines } }
+				: undefined,
+		byteExactSuffix:
+			index && !byteExact && endLine === Infinity && start >= 0 && rawBytes === decodedBytes
+				? { fromLine: startLine, endOffset: start + rawBytes, endLine: startLine + lines }
+				: undefined,
 	};
 }
 
-/**
- * truncateHead of the selected text, from a selection read in chunks. When `prefix` is only the start of the selection,
- * it is more than DEFAULT_MAX_BYTES bytes, and decoded text is never shorter in UTF-8 than its bytes (an invalid
- * sequence of up to 3 bytes becomes U+FFFD, 3 bytes): so the prefix holds every line truncateHead keeps, and the line
- * that does not fit, or enough of it not to fit. truncateHead then keeps what it keeps from the whole selection, and
- * only its totals are those of the prefix.
- */
-function truncateSelection(selection: ChunkedSelection): TruncationResult {
-	const truncation = truncateHead(selection.prefix);
-	if (selection.complete) return truncation;
-	return { ...truncation, totalLines: selection.selectedLines, totalBytes: selection.selectedBytes };
+/** Keep at most one file's sparse line counts per tool. File content always comes from the opened handle. */
+class LargeFileReader {
+	private last?: LineIndex;
+
+	async select(path: string, startLine: number, endLine: number, isAborted: () => boolean) {
+		const file = await fsOpen(path, "r");
+		try {
+			const stat = await file.stat({ bigint: true });
+			const read = (index?: LineIndex) =>
+				readSelectionInChunks(file, startLine, endLine, DEFAULT_MAX_BYTES + 4, isAborted, index);
+			if (!stat.isFile() || stat.ino === 0n) return await read();
+			const index: LineIndex =
+				this.last && sameFileVersion(this.last.stat, stat)
+					? this.last
+					: {
+							stat,
+							checkpoints: [],
+							spacing: Math.max(INDEXED_PAGE_BYTES, Math.ceil(Number(stat.size) / 256)),
+						};
+			const selection = await read(index);
+			if (!selection) return undefined;
+			if (sameFileVersion(stat, await file.stat({ bigint: true }))) {
+				index.totalLines = selection.totalLines;
+				index.nextPage = selection.nextPage;
+				if (selection.lastOpenPage) index.lastOpenPage = selection.lastOpenPage;
+				if (selection.byteExactSuffix) index.byteExactSuffix = selection.byteExactSuffix;
+				this.last = index;
+			} else if (index.totalLines !== undefined) {
+				// The ranged read raced a write. Positional reads left the handle at byte zero for a fresh scan.
+				return await read();
+			}
+			return selection;
+		} finally {
+			await file.close();
+		}
+	}
 }
 
 function getNonVisionImageNote(model: Model<Api> | undefined): string | undefined {
@@ -293,13 +452,13 @@ function isStreamableRange(offset: number | undefined, limit: number | undefined
 function selectLinesFromBuffer(buffer: Buffer, startLine: number, limit: number | undefined): SelectedLines {
 	const allLines = buffer.toString("utf-8").split("\n");
 	const endLine = limit === undefined ? undefined : Math.min(startLine + limit, allLines.length);
-	const truncation = truncateHead(allLines.slice(startLine, endLine).join("\n"));
+	const truncation = truncateHeadView(allLines.slice(startLine, endLine).join("\n"));
 	const firstLineBytes = truncation.firstLineExceedsLimit ? Buffer.byteLength(allLines[startLine], "utf-8") : 0;
 	return { totalFileLines: allLines.length, truncation, firstLineBytes };
 }
 
 /**
- * Select lines from a file read in chunks. Only lines truncateHead can show are stored; the rest are
+ * Select lines from a file read in chunks. Only lines truncateHeadView can show are stored; the rest are
  * counted, so memory does not grow with the file. Stops reading when the signal aborts.
  */
 async function selectLinesFromStream(
@@ -336,7 +495,7 @@ async function selectLinesFromStream(
 	const finishLine = () => {
 		if (pieces) {
 			if (selectedLines === 0) firstLineBytes = lineBytes;
-			// Storing continues one line past the caps: truncateHead ignores a trailing empty line, so the
+			// Storing continues one line past the caps: truncateHeadView ignores a trailing empty line, so the
 			// line after the cap must be there for it to decide truncation as for the full text.
 			if (storedLines.length > DEFAULT_MAX_LINES || storedBytes > DEFAULT_MAX_BYTES) storedPastCaps = true;
 			const text = pieces.join("");
@@ -381,8 +540,8 @@ async function selectLinesFromStream(
 	select(decoder.decode());
 	if (line >= startLine && line < endLine) finishLine();
 	const truncation: TruncationResult = {
-		...truncateHead(storedLines.join("\n")),
-		// truncateHead's counts for the joined selected lines, which drop a trailing empty line.
+		...truncateHeadView(storedLines.join("\n")),
+		// truncateHeadView's counts for the joined selected lines, which drop a trailing empty line.
 		totalLines: selectedBytes === 0 ? 0 : selectedLines - (lastLineEmpty ? 1 : 0),
 		totalBytes: selectedBytes,
 	};
@@ -396,6 +555,7 @@ export function createReadToolDefinition(
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const fallbackResizeOptions = options?.resizeOptions;
 	const ops = options?.operations ?? defaultReadOperations;
+	const largeFiles = new LargeFileReader();
 	return {
 		name: "read",
 		label: "read",
@@ -432,13 +592,20 @@ export function createReadToolDefinition(
 							// Check if file exists and is readable.
 							await ops.access(absolutePath);
 							if (aborted) return;
-							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
+							const stat = ops === defaultReadOperations ? await fsStat(absolutePath) : undefined;
+							const smallFile =
+								stat?.isFile() && stat.size > 0 && stat.size < CHUNKED_READ_MIN_BYTES
+									? await ops.readFile(absolutePath)
+									: undefined;
+							const mimeType = smallFile
+								? detectSupportedImageMimeType(smallFile.subarray(0, IMAGE_TYPE_SNIFF_BYTES))
+								: await ops.detectImageMimeType?.(absolutePath);
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
 							if (mimeType) {
 								// Read image as binary.
-								const buffer = await ops.readFile(absolutePath);
+								const buffer = smallFile ?? (await ops.readFile(absolutePath));
 								const processOptions = {
 									autoResizeImages,
 									resizeOptions: ctx?.model?.inputLimits?.images?.resize ?? fallbackResizeOptions,
@@ -467,43 +634,37 @@ export function createReadToolDefinition(
 								let totalFileLines: number;
 								let truncation: TruncationResult;
 								let firstLineBytes: () => number;
-								if (ops === defaultReadOperations && isStreamableRange(offset, limit)) {
+								if (stat && isStreamableRange(offset, limit)) {
 									// Pi-Bolt: lines are found in the bytes, and only the selected ones are decoded; a large
 									// file is read in chunks (readSelectionInChunks), a smaller one whole without splitting it.
 									const requestedEndLine = limit !== undefined ? startLine + limit : Number.POSITIVE_INFINITY;
-									const size = (await fsStat(absolutePath)).size;
-									if (size >= CHUNKED_READ_MIN_BYTES) {
-										const file = await fsOpen(absolutePath, "r");
-										let selection: ChunkedSelection | undefined;
-										try {
-											// A few bytes more than truncateHead keeps: see truncateSelection().
-											selection = await readSelectionInChunks(
-												file,
-												startLine,
-												requestedEndLine,
-												DEFAULT_MAX_BYTES + 4,
-												() => aborted,
-											);
-										} finally {
-											await file.close();
-										}
+									if (stat.size >= CHUNKED_READ_MIN_BYTES) {
+										const selection = await largeFiles.select(
+											absolutePath,
+											startLine,
+											requestedEndLine,
+											() => aborted,
+										);
 										if (!selection) return;
 										totalFileLines = selection.totalLines;
-										truncation =
-											startLine >= totalFileLines ? truncateHead("") : truncateSelection(selection);
+										truncation = selection.truncation;
 										const selectedFirstLineBytes = selection.firstLineBytes;
 										firstLineBytes = () => selectedFirstLineBytes;
 									} else {
-										const textContent = (await ops.readFile(absolutePath)).toString("utf-8");
-										// Find the selected lines by scanning for newlines instead of splitting the file: splitting
-										// allocates a string per line of the whole file to return at most a few thousand of them.
-										const located = locateLines(textContent, startLine, requestedEndLine);
-										totalFileLines = located.totalLines;
-										const selectedContent =
-											requestedEndLine > startLine && startLine < totalFileLines
-												? textContent.slice(located.start, located.end)
-												: "";
-										truncation = truncateHead(selectedContent);
+										const textContent = (smallFile ?? (await ops.readFile(absolutePath))).toString("utf-8");
+										let selectedContent = textContent;
+										if (startLine === 0 && limit === undefined) {
+											truncation = truncateHeadView(textContent);
+											// The read tool counts the final empty line as a selectable line.
+											totalFileLines =
+												truncation.totalLines + (textContent === "" || textContent.endsWith("\n") ? 1 : 0);
+										} else {
+											const located = locateLines(textContent, startLine, requestedEndLine);
+											totalFileLines = located.totalLines;
+											selectedContent =
+												requestedEndLine > startLine ? textContent.slice(located.start, located.end) : "";
+											truncation = truncateHeadView(selectedContent);
+										}
 										firstLineBytes = () => {
 											const firstNewline = selectedContent.indexOf("\n");
 											const firstLine =
@@ -520,7 +681,11 @@ export function createReadToolDefinition(
 													limit,
 													signal,
 												)
-											: selectLinesFromBuffer(await ops.readFile(absolutePath), startLine, limit);
+											: selectLinesFromBuffer(
+													smallFile ?? (await ops.readFile(absolutePath)),
+													startLine,
+													limit,
+												);
 									totalFileLines = selected.totalFileLines;
 									truncation = selected.truncation;
 									firstLineBytes = () => selected.firstLineBytes;

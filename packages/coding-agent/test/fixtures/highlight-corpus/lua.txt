@@ -1,0 +1,21 @@
+local readings = {
+    { tag = "café", value = 42 },
+    { tag = 'quiet', value = nil },
+}
+
+--[=[ This comment contains ]] and
+still belongs to the same comment. ]=]
+local function describe(reading)
+    local note = [==[
+a multiline label
+including a shorter ]=] delimiter
+]==]
+    if reading.value ~= nil then
+        return ("%s: %02d"):format(reading.tag, reading.value)
+    end
+    return note .. "\n" .. reading.tag
+end
+
+for index, item in ipairs(readings) do
+    print(index, describe(item))
+end

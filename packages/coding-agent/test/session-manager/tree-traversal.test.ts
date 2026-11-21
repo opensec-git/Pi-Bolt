@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
-import { type CustomEntry, SessionManager } from "../../src/core/session-manager.ts";
+import { type CustomEntry, type SessionEntry, SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, readSessionFileRoles, userMsg } from "../utilities.ts";
 
 describe("SessionManager append and tree traversal", () => {
@@ -177,6 +177,47 @@ describe("SessionManager append and tree traversal", () => {
 		it("returns empty array for empty session", () => {
 			const session = SessionManager.inMemory();
 			expect(session.getTree()).toEqual([]);
+		});
+
+		it("keeps forward references, orphans, root order and stable sibling order from imports", () => {
+			const message = (id: string, parentId: string | null, timestamp: string): SessionEntry => ({
+				type: "message",
+				id,
+				parentId,
+				timestamp,
+				message: userMsg(id),
+			});
+			const older = "2026-01-01T20:30:00+01:00";
+			const newer = "2026-01-01T20:00:00Z";
+			const session = SessionManager.inMemory(process.cwd(), undefined, [
+				message("later", "parent", newer),
+				message("orphan", "absent", older),
+				message("earlier", "parent", older),
+				message("parent", null, older),
+				message("tie", "parent", newer),
+				message("self", "self", newer),
+			]);
+			const tree = session.getTree();
+			expect(tree.map((node) => node.entry.id)).toEqual(["orphan", "parent", "self"]);
+			expect(tree[1].children.map((node) => node.entry.id)).toEqual(["earlier", "later", "tie"]);
+			tree[1].children.pop();
+			expect(session.getTree()[1].children).toHaveLength(3);
+		});
+
+		it("uses the last definition for each occurrence of a repeated ID in imported files", () => {
+			const parent = SessionManager.inMemory();
+			const root = parent.appendMessage(userMsg("root"));
+			parent.appendMessage(userMsg("child"));
+			const entries = parent.getEntries();
+			const duplicate = { ...entries[1], parentId: null };
+			const session = SessionManager.inMemory(process.cwd(), undefined, [...entries, duplicate]);
+			const [first, second] = session.getTree();
+			expect(first.entry.id).toBe(root);
+			expect(first.children[0]).toBe(second);
+			expect(second.entry).toBe(duplicate);
+
+			const repeated = SessionManager.inMemory(process.cwd(), undefined, [entries[0], entries[0]]).getTree();
+			expect(repeated[0]).toBe(repeated[1]);
 		});
 
 		it("returns single root for linear session", () => {

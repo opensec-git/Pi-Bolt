@@ -224,6 +224,40 @@ describe("TreeSelectorComponent", () => {
 	});
 
 	describe("filter switching with parent traversal", () => {
+		test("filters many branches sharing a hidden chain in linear work", () => {
+			const depth = 64;
+			const entries = [userMessage("root", null, "match")];
+			let parent = "root";
+			for (let i = 0; i < depth; i++) {
+				const entry = userMessage(`ancestor-${i}`, parent, "hidden");
+				entries.push(entry);
+				parent = entry.id;
+			}
+			for (let i = 0; i < depth; i++) entries.push(userMessage(`leaf-${i}`, parent, "match"));
+
+			const selector = new TreeSelectorComponent(
+				buildTree(entries),
+				"leaf-0",
+				24,
+				() => {},
+				() => {},
+			);
+			let parentReads = 0;
+			for (const entry of entries) {
+				const id = entry.parentId;
+				Object.defineProperty(entry, "parentId", {
+					get() {
+						parentReads++;
+						return id;
+					},
+				});
+			}
+			selector.handleInput("match");
+			expect(selector.getTreeList().getSelectedNode()?.entry.id).toBe("leaf-0");
+			expect(selector.getTreeList().render(80).map(stripVTControlCharacters).join("\n")).toContain("(2/65)");
+			expect(parentReads).toBeLessThanOrEqual(entries.length * 3);
+		});
+
 		test("switches to nearest visible user message when changing to user-only filter", () => {
 			// In user-only filter: [user-1, user-2, user-3]
 			const entries = [

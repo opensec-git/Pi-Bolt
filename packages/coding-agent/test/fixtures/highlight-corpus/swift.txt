@@ -1,0 +1,23 @@
+import Foundation
+
+struct Reading: Codable {
+    let tag: String
+    let value: Double?
+}
+
+/* A comment can /* contain another comment */ and continue
+   across the next line. */
+func describe(_ reading: Reading) -> String {
+    guard let value = reading.value else {
+        return #"missing "value""#
+    }
+    let label = """
+        tag: \(reading.tag)
+        value: \(value)
+        """
+    return label
+}
+
+let samples = [Reading(tag: "café", value: 4.25), Reading(tag: "quiet", value: nil)]
+let labels = samples.map { describe($0) }
+print(labels.joined(separator: "\n"))

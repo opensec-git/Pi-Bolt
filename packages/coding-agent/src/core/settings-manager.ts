@@ -6,6 +6,7 @@ import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { PIBOLT } from "../pi-bolt.ts";
+import { waitForLockRetry } from "../utils/lock-retry.ts";
 import { getFileRevision, normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import type { CompactionSettings as ResolvedCompactionSettings } from "./compaction/compaction.ts";
@@ -211,14 +212,16 @@ function toSettingsError(scope: SettingsScope, error: unknown, path?: string): S
 	};
 }
 
-// What each settings file held when it was last read under its lock, with the file's revision at that time. A start reads
-// settings.json four times (three SettingsManagers and a reload), and every read took the lock: a directory made and
-// removed beside the file. An unchanged file is now read once.
-const settingsFileReads = new Map<string, { revision: string; content: string }>();
+type SettingsFileRead = { path: string; revision: string; content: string };
+
+// Consecutive managers at startup share the last file read in each scope. A live manager
+// also keeps its own reads so switching between projects does not force it to take the lock.
+const lastSettingsFileRead: Partial<Record<SettingsScope, SettingsFileRead>> = {};
 
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
+	private readonly reads: Partial<Record<SettingsScope, SettingsFileRead>> = {};
 
 	constructor(cwd: string, agentDir: string) {
 		const resolvedCwd = resolvePath(cwd);
@@ -244,10 +247,7 @@ export class FileSettingsStorage implements SettingsStorage {
 					throw error;
 				}
 				lastError = error;
-				const start = Date.now();
-				while (Date.now() - start < delayMs) {
-					// Sleep synchronously to avoid changing callers to async.
-				}
+				waitForLockRetry(delayMs);
 			}
 		}
 
@@ -258,7 +258,8 @@ export class FileSettingsStorage implements SettingsStorage {
 		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
 		const revision = getFileRevision(path);
 		if (revision === undefined) {
-			settingsFileReads.delete(path);
+			delete this.reads[scope];
+			if (lastSettingsFileRead[scope]?.path === path) delete lastSettingsFileRead[scope];
 			// A failed stat is not necessarily an absent file (for example, EACCES or a symlink loop).
 			try {
 				return readFileSync(path, "utf-8");
@@ -267,9 +268,12 @@ export class FileSettingsStorage implements SettingsStorage {
 				throw error;
 			}
 		}
-		const cached = settingsFileReads.get(path);
-		if (cached?.revision === revision) {
-			return cached.content;
+		const local = this.reads[scope];
+		if (local?.revision === revision) return local.content;
+		const shared = lastSettingsFileRead[scope];
+		if (shared?.path === path && shared.revision === revision) {
+			this.reads[scope] = shared;
+			return shared.content;
 		}
 		let content: string | undefined;
 		this.withLock(scope, (current) => {
@@ -278,9 +282,10 @@ export class FileSettingsStorage implements SettingsStorage {
 		});
 		// Kept only if the file is what it was before it was read.
 		if (content !== undefined && getFileRevision(path) === revision) {
-			settingsFileReads.set(path, { revision, content });
+			this.reads[scope] = lastSettingsFileRead[scope] = { path, revision, content };
 		} else {
-			settingsFileReads.delete(path);
+			delete this.reads[scope];
+			if (lastSettingsFileRead[scope]?.path === path) delete lastSettingsFileRead[scope];
 		}
 		return content;
 	}
@@ -677,6 +682,11 @@ export class SettingsManager {
 	/** Raw global declarations, including separate shared and Pi-Bolt package lists. */
 	getGlobalSettings(): Settings {
 		return structuredClone(this.globalSettings);
+	}
+
+	/** The HTTP proxy comes exclusively from global settings. */
+	getGlobalHttpProxy(): string | undefined {
+		return this.globalSettings.httpProxy;
 	}
 
 	/** Raw trusted project declarations. Untrusted projects return empty settings. */

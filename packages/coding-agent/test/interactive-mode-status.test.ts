@@ -10,6 +10,7 @@ import { expandPromptTemplate, type PromptTemplate } from "../src/core/prompt-te
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
+import { TranscriptContainer } from "../src/modes/interactive/components/transcript-container.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -81,7 +82,7 @@ describe("InteractiveMode.showStatus", () => {
 
 	test("coalesces immediately-sequential status messages", () => {
 		const fakeThis: any = {
-			chatContainer: new Container(),
+			chatContainer: new TranscriptContainer(),
 			ui: { requestRender: vi.fn() },
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,
@@ -100,7 +101,7 @@ describe("InteractiveMode.showStatus", () => {
 
 	test("appends a new status line if something else was added in between", () => {
 		const fakeThis: any = {
-			chatContainer: new Container(),
+			chatContainer: new TranscriptContainer(),
 			ui: { requestRender: vi.fn() },
 			lastStatusSpacer: undefined,
 			lastStatusText: undefined,

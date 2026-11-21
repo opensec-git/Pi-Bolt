@@ -27,7 +27,7 @@ import {
 	CloseCode,
 	ENDPOINTS_MESSAGE,
 	encodePairingUri,
-	encryptMessage,
+	encryptJson,
 	MessageAssembler,
 	NOISE_PROLOGUE,
 	PROTOCOL_VERSION,
@@ -260,7 +260,12 @@ class RemoteConnection {
 	}
 
 	streams(): SubagentStreams {
-		this.subagentStreams ??= this.server.newSubagentStreams((message) => this.send(message));
+		this.subagentStreams ??= this.server
+			.newSubagentStreams(
+				(message) => this.send(message),
+				(json) => this.sendJson(json),
+			)
+			.withFixedLimits();
 		return this.subagentStreams;
 	}
 
@@ -270,8 +275,12 @@ class RemoteConnection {
 	}
 
 	send(message: unknown): void {
+		if (this.isOpen) this.sendJson(JSON.stringify(message));
+	}
+
+	private sendJson(json: string): void {
 		if (!this.isOpen || !this.keys) return;
-		for (const frame of encryptMessage(this.keys.send, message)) this.socket.send(frame, { binary: true });
+		for (const frame of encryptJson(this.keys.send, json)) this.socket.send(frame, { binary: true });
 	}
 
 	private onMessage(data: WebSocket.RawData, isBinary: boolean): void {
@@ -772,10 +781,14 @@ export class RemoteControlServer {
 	}
 
 	/** Streams of one phone's subagent views, reading the session phones see now. */
-	newSubagentStreams(send: (message: object) => void): SubagentStreams {
+	newSubagentStreams(
+		send: SubagentStreamsOptions["send"],
+		sendJson?: SubagentStreamsOptions["sendJson"],
+	): SubagentStreams {
 		return new SubagentStreams({
 			getSession: () => this.options.getSession(),
 			send,
+			sendJson,
 			...this.options.subagentStreams,
 		});
 	}
