@@ -136,16 +136,24 @@ The default build has no JIT: Pi's own code is compiled machine code, and an ext
 extensions don't notice. For extensions that do heavy work (search, parsing) or use `bun:ffi`, install the JIT build. Pi itself
 stays compiled, so it is within about 5% of the default.
 
+With npm or Bun on macOS, Linux or Termux, select the JIT build for one session. The launcher downloads the matching signed
+build on first use and reuses it on later runs.
+
 ```bash
-# macOS, Linux ARM64, Termux
-curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=arm64-jit sh
-# Linux x86-64
-curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=x64-jit sh
+PIBOLT_VARIANT=jit pi-bolt --extension ./word-count.ts
 ```
 
-On Windows, run `$env:PIBOLT_VARIANT = "x64-jit"` before the PowerShell command. With npm, keep `PIBOLT_VARIANT` set in your
-shell profile; it is read on every run. `pi-bolt --version` then ends in `JIT on`, and `pi-bolt update` keeps the build you
-chose.
+With the standalone installer, put the JIT build alongside your usual command and run it directly.
+
+```bash
+curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=jit PIBOLT_NO_PATH=1 sh
+~/.pi-bolt/pi-bolt-jit --extension ./word-count.ts
+```
+
+Omit `PIBOLT_NO_PATH=1` to make the JIT build your `pi-bolt` command. On Windows, set `$env:PIBOLT_VARIANT = "jit"` before
+running the PowerShell installer or installing the npm package. For a side-by-side PowerShell install, also set
+`$env:PIBOLT_NO_PATH = "1"` and run `& "$env:USERPROFILE\.pi-bolt\pi-bolt-win32-x64-jit\pi-bolt.exe"`.
+Use `--version` with the selected command to confirm that it reports `JIT on`.
 
 On the default build, an extension that needs the JIT (it calls into a native library through `bun:ffi`) fails with a line that
 names the extension and gives the command that switches to the JIT build.
