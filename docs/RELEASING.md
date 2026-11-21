@@ -307,7 +307,8 @@ By hand:
    `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform (recorded on macOS first with
    `--out DIR` and merged in on Linux with `--with DIR`, it also places what only macOS runs). On Windows, `scripts\train-heap.ps1`
    then adds the prebuilt heap's order to it (`heap-functions.txt`, and the strings' order in `bytecode.order`): commit that too.
-   The `heap-profile` workflow runs it on the Windows runner with the latest release's runtime
+   The `heap-profile` workflow runs it on the Windows runner with the latest release's runtime (when the engine changed, with
+   the Windows runtime the `runtime` workflow attached to the version's draft)
    (`gh workflow run heap-profile.yml -R opensec-git/Pi-Bolt --ref <branch>`), uploads the profile as an artifact and pushes it to
    the branch `heap-profile/pi-X.Y.Z`; open a pull request from that branch by hand.
 3. Push; `ci` builds and tests it, and it is released as above.
