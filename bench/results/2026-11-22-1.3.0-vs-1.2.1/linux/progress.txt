@@ -1,0 +1,48 @@
+=== 2026-11-21 16:02:17 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-21 16:02:19 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-21 16:02:24 session: 101 interactive tool prompts over HTTPS, 5 rounds
+=== 2026-11-21 16:03:46 restored: 6,000 restored messages in RPC, 6 rounds
+=== 2026-11-21 16:03:57 idle: post-answer idle CPU and memory, 10 rounds of 15 s
+=== 2026-11-21 16:09:48 special: get_entries / get_session_stats on 12,000 entries, 6 rounds
+=== 2026-11-21 16:09:50 special: tree search, linear and branched, 6 rounds
+=== 2026-11-21 16:10:15 special: 8 Mi and 32 Mi nested edit preview, 6 pairs
+=== 2026-11-21 16:11:42 standard: benchmark.py, blank home, 11 runs
+=== 2026-11-21 16:11:54 standard: benchmark.py, realistic home, 11 runs
+=== 2026-11-21 16:12:06 standard: benchmark.py, extensions home, 11 runs
+=== 2026-11-21 16:12:22 standard: 60,000-character answer, round 1 of 5
+=== 2026-11-21 16:14:08 standard: 60,000-character answer, round 2 of 5
+=== 2026-11-21 16:15:51 standard: 60,000-character answer, round 3 of 5
+=== 2026-11-21 16:17:44 standard: 60,000-character answer, round 4 of 5
+=== 2026-11-21 16:19:28 standard: 60,000-character answer, round 5 of 5
+=== 2026-11-21 16:21:11 standard: resuming a 2,292-entry session in fullscreen, round 1 of 7
+=== 2026-11-21 16:21:21 standard: resuming a 2,292-entry session in fullscreen, round 2 of 7
+=== 2026-11-21 16:21:31 standard: resuming a 2,292-entry session in fullscreen, round 3 of 7
+=== 2026-11-21 16:21:40 standard: resuming a 2,292-entry session in fullscreen, round 4 of 7
+=== 2026-11-21 16:21:49 standard: resuming a 2,292-entry session in fullscreen, round 5 of 7
+=== 2026-11-21 16:21:59 standard: resuming a 2,292-entry session in fullscreen, round 6 of 7
+=== 2026-11-21 16:22:10 standard: resuming a 2,292-entry session in fullscreen, round 7 of 7
+=== 2026-11-21 16:22:20 done
+=== 2026-11-21 16:22:34 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-21 16:22:37 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-21 16:22:43 session: 101 interactive tool prompts over HTTPS, 5 rounds
+=== 2026-11-21 16:24:17 restored: 6,000 restored messages in RPC, 6 rounds
+=== 2026-11-21 16:24:27 idle: post-answer idle CPU and memory, 10 rounds of 15 s
+=== 2026-11-21 16:30:16 special: get_entries / get_session_stats on 12,000 entries, 6 rounds
+=== 2026-11-21 16:30:18 special: tree search, linear and branched, 6 rounds
+=== 2026-11-21 16:30:43 special: 8 Mi and 32 Mi nested edit preview, 6 pairs
+=== 2026-11-21 16:32:09 standard: benchmark.py, blank home, 11 runs
+=== 2026-11-21 16:32:21 standard: benchmark.py, realistic home, 11 runs
+=== 2026-11-21 16:32:33 standard: benchmark.py, extensions home, 11 runs
+=== 2026-11-21 16:32:50 standard: 60,000-character answer, round 1 of 5
+=== 2026-11-21 16:34:34 standard: 60,000-character answer, round 2 of 5
+=== 2026-11-21 16:36:17 standard: 60,000-character answer, round 3 of 5
+=== 2026-11-21 16:38:00 standard: 60,000-character answer, round 4 of 5
+=== 2026-11-21 16:39:43 standard: 60,000-character answer, round 5 of 5
+=== 2026-11-21 16:41:27 standard: resuming a 2,292-entry session in fullscreen, round 1 of 7
+=== 2026-11-21 16:41:36 standard: resuming a 2,292-entry session in fullscreen, round 2 of 7
+=== 2026-11-21 16:41:45 standard: resuming a 2,292-entry session in fullscreen, round 3 of 7
+=== 2026-11-21 16:41:55 standard: resuming a 2,292-entry session in fullscreen, round 4 of 7
+=== 2026-11-21 16:42:03 standard: resuming a 2,292-entry session in fullscreen, round 5 of 7
+=== 2026-11-21 16:42:12 standard: resuming a 2,292-entry session in fullscreen, round 6 of 7
+=== 2026-11-21 16:42:22 standard: resuming a 2,292-entry session in fullscreen, round 7 of 7
+=== 2026-11-21 16:42:31 done

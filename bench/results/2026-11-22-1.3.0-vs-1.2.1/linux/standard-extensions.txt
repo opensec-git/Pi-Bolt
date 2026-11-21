@@ -1,0 +1,54 @@
+startup: round 1/13
+startup: round 2/13
+startup: round 3/13
+startup: round 4/13
+startup: round 5/13
+startup: round 6/13
+startup: round 7/13
+startup: round 8/13
+startup: round 9/13
+startup: round 10/13
+startup: round 11/13
+startup: round 12/13
+startup: round 13/13
+headless: round 1/13
+headless: round 2/13
+headless: round 3/13
+headless: round 4/13
+headless: round 5/13
+headless: round 6/13
+headless: round 7/13
+headless: round 8/13
+headless: round 9/13
+headless: round 10/13
+headless: round 11/13
+headless: round 12/13
+headless: round 13/13
+interactive: round 1/13
+interactive: round 2/13
+interactive: round 3/13
+interactive: round 4/13
+interactive: round 5/13
+interactive: round 6/13
+interactive: round 7/13
+interactive: round 8/13
+interactive: round 9/13
+interactive: round 10/13
+interactive: round 11/13
+interactive: round 12/13
+interactive: round 13/13
+
+startup
+  build                          wall_ms          cpu_ms         peak_mb     peak_own_mb
+  1.2.1                          6 (-3%)         5 (-3%)        40 (+2%)         3 (+0%)
+  1.3.0                                6               5              39               3
+
+headless
+  build                          wall_ms          cpu_ms         peak_mb     peak_own_mb
+  1.2.1                         78 (+3%)        82 (+2%)       113 (+2%)        29 (+3%)
+  1.3.0                               75              81             110              28
+
+interactive
+  build                           tti_ms        turns_ms         wall_ms          cpu_ms         peak_mb     peak_own_mb
+  1.2.1                        67 (+15%)       192 (+0%)       518 (-1%)       246 (+2%)       126 (+1%)        39 (+3%)
+  1.3.0                               58             191             524             240             125              38

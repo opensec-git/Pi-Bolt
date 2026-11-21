@@ -1,0 +1,24 @@
+date: 2026-11-21T22:02:17Z
+host: Linux 7.0.0-15-generic x86_64
+cpu: AMD EPYC 9355P 32-Core Processor, 64 threads
+load: 55.10 37.80 36.91
+build 1.2.1: the bolt-v1.2.1 release archive pi-bolt-linux-x64.tar.xz, pi-bolt-linux-x64/pi
+  version: 1.5.2 (Pi-Bolt 1.2.1, linux-x64, JIT off)
+  sha256 pi: 30164c0edd4bcadfbe2fbb1613c201e82c640a7b01d70d001a9200b1413910b9
+build 1.3.0: built from release/1.3.0 at 03338d997 with the bolt-v1.3.0 draft runtime, pi-start
+  version: 1.6.0 (Pi-Bolt 1.3.0, linux-x64, JIT off)
+  sha256 pi: 2d07705da0a7f6b9fe5d114d948a9247ae12867589da30a38a3088d212cb2dfe
+  sha256 pi-start: 5c2a275c66d98e85018fa006440c242a91f8132ec0dd5514c58aa23c2c5c76a7
+steps: startup modes session restored idle special standard
+date: 2026-11-21T22:22:34Z
+host: Linux 7.0.0-15-generic x86_64
+cpu: AMD EPYC 9355P 32-Core Processor, 64 threads
+load: 67.85 65.89 54.31
+build 1.2.1: the bolt-v1.2.1 release archive pi-bolt-linux-x64.tar.xz, pi-bolt-linux-x64/pi
+  version: 1.5.2 (Pi-Bolt 1.2.1, linux-x64, JIT off)
+  sha256 pi: 30164c0edd4bcadfbe2fbb1613c201e82c640a7b01d70d001a9200b1413910b9
+build 1.3.0: built from release/1.3.0 at 03338d997 with the bolt-v1.3.0 draft runtime, pi-start
+  version: 1.6.0 (Pi-Bolt 1.3.0, linux-x64, JIT off)
+  sha256 pi: 2d07705da0a7f6b9fe5d114d948a9247ae12867589da30a38a3088d212cb2dfe
+  sha256 pi-start: 5c2a275c66d98e85018fa006440c242a91f8132ec0dd5514c58aa23c2c5c76a7
+steps: startup modes session restored idle special standard
