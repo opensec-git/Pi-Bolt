@@ -192,17 +192,93 @@ export function isRgiEmoji(segment: string): boolean {
 }
 
 /**
+ * Whether a UTF-16 unit always forms a grapheme cluster on its own: printable ASCII, Latin,
+ * punctuation, arrows, box drawing, symbols, kana, CJK ideographs and fullwidth forms. These ranges
+ * hold no combining marks, joiners, variation selectors, Hangul jamo or surrogates, so no Unicode
+ * grapheme rule can join two of them.
+ */
+function isStandaloneGraphemeUnit(code: number): boolean {
+	if (code >= 0x20 && code <= 0x7e) return true;
+	if (code >= 0xa0 && code <= 0x2ff) return code !== 0xad;
+	if (code >= 0x2010 && code <= 0x2bff) {
+		// Line and bidi controls, invisible operators and combining marks for symbols.
+		return (
+			!(code >= 0x2028 && code <= 0x202e) &&
+			!(code >= 0x2060 && code <= 0x206f) &&
+			!(code >= 0x20d0 && code <= 0x20ff)
+		);
+	}
+	return (
+		(code >= 0x3040 && code <= 0x3096) ||
+		(code >= 0x30a0 && code <= 0x30ff) ||
+		(code >= 0x4e00 && code <= 0x9fff) ||
+		(code >= 0xff01 && code <= 0xff60)
+	);
+}
+
+function isStandaloneGraphemeRun(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		if (!isStandaloneGraphemeUnit(text.charCodeAt(i))) return false;
+	}
+	return true;
+}
+
+/**
+ * Segment a run that contains complex units. A standalone unit whose neighbours are standalone too
+ * is its own cluster, since no grapheme rule joins two standalone units. Only the stretches between
+ * such units go through Intl.Segmenter; cutting there is safe because both cut edges are boundaries.
+ */
+function* segmentGraphemes(text: string): Generator<string> {
+	const standalone = (index: number) =>
+		index < 0 || index >= text.length || isStandaloneGraphemeUnit(text.charCodeAt(index));
+	let complexStart = -1;
+	for (let i = 0; i < text.length; i++) {
+		if (standalone(i) && standalone(i - 1) && standalone(i + 1)) {
+			if (complexStart >= 0) {
+				for (const { segment } of getGraphemeSegmenter().segment(text.slice(complexStart, i))) yield segment;
+				complexStart = -1;
+			}
+			yield text[i]!;
+		} else if (complexStart < 0) {
+			complexStart = i;
+		}
+	}
+	if (complexStart >= 0) {
+		for (const { segment } of getGraphemeSegmenter().segment(text.slice(complexStart))) yield segment;
+	}
+}
+
+/**
+ * Grapheme clusters of a text run without ANSI codes. Standalone units are split per character:
+ * Intl.Segmenter costs about 15x more than the slicing it serves, which made one non-ASCII
+ * character slow down every row of a fullscreen frame.
+ */
+function graphemesOf(text: string): Iterable<string> {
+	return isStandaloneGraphemeRun(text) ? text : segmentGraphemes(text);
+}
+
+// Widths of single non-ASCII BMP characters; bounded by the 64K code units.
+const singleUnitWidths = new Map<number, number>();
+
+/**
  * Calculate the terminal width of a single grapheme cluster.
  * Based on code from the string-width library, but includes a possible-emoji
  * check to avoid running the RGI_Emoji regex unnecessarily.
  */
 function graphemeWidth(segment: string): number {
-	if (segment.length === 1) {
-		const code = segment.charCodeAt(0);
-		if (code >= 0x20 && code <= 0x7e) return 1;
-		if (code === 0x09) return 3;
+	if (segment.length !== 1) return clusterWidth(segment);
+	const code = segment.charCodeAt(0);
+	if (code >= 0x20 && code <= 0x7e) return 1;
+	if (code === 0x09) return 3;
+	let width = singleUnitWidths.get(code);
+	if (width === undefined) {
+		width = clusterWidth(segment);
+		singleUnitWidths.set(code, width);
 	}
+	return width;
+}
 
+function clusterWidth(segment: string): number {
 	// Some marks occupy cells even without a base character.
 	if (terminalSpacingMarkRegex.test(segment)) {
 		return [...segment].length;
@@ -586,7 +662,7 @@ export function getGraphemeCellRange(line: string, column: number): GraphemeCell
 			i = textEnd;
 			continue;
 		}
-		for (const { segment } of getGraphemeSegmenter().segment(run)) {
+		for (const segment of graphemesOf(run)) {
 			const width = graphemeWidth(segment);
 			if (width > 0 && column >= currentCol && column < currentCol + width) {
 				return { start: currentCol, end: currentCol + width };
@@ -619,7 +695,7 @@ export function getOsc8LinkAtColumn(line: string, column: number): string | unde
 			i = textEnd;
 			continue;
 		}
-		for (const { segment } of getGraphemeSegmenter().segment(run)) {
+		for (const segment of graphemesOf(run)) {
 			const width = segment === "\t" ? 3 : graphemeWidth(segment);
 			if (column >= currentCol && column < currentCol + width) return activeUrl;
 			currentCol += width;
@@ -2021,7 +2097,7 @@ export function sliceWithWidth(
 			i = textEnd;
 			continue;
 		}
-		for (const { segment } of getGraphemeSegmenter().segment(run)) {
+		for (const segment of graphemesOf(run)) {
 			const w = graphemeWidth(segment);
 			const inRange = currentCol >= startCol && currentCol < endCol;
 			const fits = !strict || currentCol + w <= endCol;
@@ -2116,7 +2192,7 @@ export function extractSegments(
 			i = textEnd;
 			continue;
 		}
-		for (const { segment } of getGraphemeSegmenter().segment(run)) {
+		for (const segment of graphemesOf(run)) {
 			const w = graphemeWidth(segment);
 
 			if (currentCol < beforeEnd && currentCol + w <= beforeEnd) {

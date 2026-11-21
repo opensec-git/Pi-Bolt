@@ -6,7 +6,6 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, AuthOperationOptions, KnownProvider, Model } from "@earendil-works/pi-ai";
 import { Minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
-import { chalk } from "../utils/lazy-packages.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 
@@ -15,6 +14,7 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-5-5",
 	"ant-ling": "Ring-2.6-1T",
 	anthropic: "claude-opus-5-5",
+	// Pi-Bolt keeps GPT-6.1 Sol as the default where Pi 1.6.0 changed it to GPT-6.2 Sol.
 	openai: "gpt-6.1-sol",
 	azure: "gpt-6.1-sol",
 	"openai-codex": "gpt-6.1-sol",
@@ -434,18 +434,6 @@ export async function resolveModelScopeWithDiagnostics(
 	return resolveModelScopeFromModels(patterns, await modelRuntime.getAvailable(undefined, options));
 }
 
-export async function resolveModelScope(
-	patterns: string[],
-	modelRuntime: ModelRuntime,
-	options?: AuthOperationOptions,
-): Promise<ScopedModel[]> {
-	const { scopedModels, diagnostics } = await resolveModelScopeWithDiagnostics(patterns, modelRuntime, options);
-	for (const diagnostic of diagnostics) {
-		console.warn(chalk.yellow(`Warning: ${diagnostic.message}`));
-	}
-	return scopedModels;
-}
-
 export interface ResolveCliModelResult {
 	model: Model<Api> | undefined;
 	thinkingLevel?: ThinkingLevel;
@@ -640,78 +628,4 @@ export async function findInitialModel(options: {
 
 	// 4. No model found
 	return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
-}
-
-/**
- * Restore model from session, with fallback to available models
- */
-export async function restoreModelFromSession(
-	savedProvider: string,
-	savedModelId: string,
-	currentModel: Model<Api> | undefined,
-	shouldPrintMessages: boolean,
-	modelRuntime: ModelRuntime,
-): Promise<{ model: Model<Api> | undefined; fallbackMessage: string | undefined }> {
-	const restoredModel = modelRuntime.getModel(savedProvider, savedModelId);
-
-	// Check if restored model exists and still has auth configured
-	const hasConfiguredAuth = restoredModel ? modelRuntime.hasConfiguredAuth(restoredModel.provider) : false;
-
-	if (restoredModel && hasConfiguredAuth) {
-		if (shouldPrintMessages) {
-			console.log(chalk.dim(`Restored model: ${savedProvider}/${savedModelId}`));
-		}
-		return { model: restoredModel, fallbackMessage: undefined };
-	}
-
-	// Model not found or no API key - fall back
-	const reason = !restoredModel ? "model no longer exists" : "no auth configured";
-
-	if (shouldPrintMessages) {
-		console.error(chalk.yellow(`Warning: Could not restore model ${savedProvider}/${savedModelId} (${reason}).`));
-	}
-
-	// If we already have a model, use it as fallback
-	if (currentModel) {
-		if (shouldPrintMessages) {
-			console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
-		}
-		return {
-			model: currentModel,
-			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${currentModel.provider}/${currentModel.id}.`,
-		};
-	}
-
-	// Try to find any available model
-	const availableModels = [...modelRuntime.getAvailableSnapshot()];
-
-	if (availableModels.length > 0) {
-		// Try to find a default model from known providers
-		let fallbackModel: Model<Api> | undefined;
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
-			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
-			if (match) {
-				fallbackModel = match;
-				break;
-			}
-		}
-
-		// If no default found, use first available
-		if (!fallbackModel) {
-			fallbackModel = availableModels[0];
-		}
-
-		if (shouldPrintMessages) {
-			console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
-		}
-
-		return {
-			model: fallbackModel,
-			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`,
-		};
-	}
-
-	// No models available
-	return { model: undefined, fallbackMessage: undefined };
 }

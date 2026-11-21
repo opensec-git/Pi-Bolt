@@ -246,6 +246,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 		// Gateways that drop unknown request fields would silently turn a `continue` into a request
 		// without the earlier conversation, so the default is limited to Anthropic's own endpoint.
 		// Widen or remove this restriction once proxies generally forward the `thread` field.
+		// Pi-Bolt: only the anthropic provider, as before Pi 1.6.0 (#11987 widened it to any provider on the host).
 		supportsMessageThreads:
 			model.compat?.supportsMessageThreads ??
 			(model.provider === "anthropic" && hostMatches(hostOf(model.baseUrl), "api.anthropic.com")),
@@ -1953,15 +1954,18 @@ function convertTools(
 		const schema = parameters as {
 			properties?: unknown;
 			required?: string[];
+			additionalProperties?: unknown;
 			$defs?: unknown;
 			definitions?: unknown;
 		};
-		// Keep shared definitions so property $refs still resolve. Other root keywords stay out:
+		// Keep shared definitions so property $refs still resolve, and additionalProperties so the
+		// model knows whether extra arguments are allowed. Other root keywords stay out:
 		// Anthropic rejects root anyOf/oneOf/allOf with a 400.
 		const legacyInputSchema = {
 			type: "object" as const,
 			properties: schema.properties ?? {},
 			required: schema.required ?? [],
+			...(schema.additionalProperties === undefined ? {} : { additionalProperties: schema.additionalProperties }),
 			...(schema.$defs === undefined ? {} : { $defs: schema.$defs }),
 			...(schema.definitions === undefined ? {} : { definitions: schema.definitions }),
 		};

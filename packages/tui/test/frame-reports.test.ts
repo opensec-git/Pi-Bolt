@@ -120,7 +120,7 @@ function makeTree(): Tree {
 }
 
 /** The reference tree's lines, rendered from nothing: containers and boxes by plain loops, Markdown without caches. */
-function reference(component: Component, width: number): string[] {
+function reference(component: Component, width: number): readonly string[] {
 	if (component instanceof Box) {
 		const box = component as unknown as {
 			paddingX: number;
@@ -149,7 +149,7 @@ class ReferenceDocument implements Component {
 	constructor(tree: Tree) {
 		this.tree = tree;
 	}
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		setMarkdownCachingForTest(false);
 		try {
 			return reference(this.tree.document, width);
@@ -378,9 +378,9 @@ describe("frames from reported changes", () => {
 				revision = lines.revision;
 				assert.deepStrictEqual(followed, all, `${label}: the live lines`);
 				if (next() < 0.2) {
-					const copy = live.document.render(contentWidth);
+					// (Container.render() returns a copy: the caller's array is its own.)
+					const copy = live.document.render(contentWidth) as string[];
 					assert.deepStrictEqual(copy, all, `${label}: render()`);
-					// (The caller's array is its own.)
 					copy.push("changed by the caller");
 					copy[0] = "changed";
 				}

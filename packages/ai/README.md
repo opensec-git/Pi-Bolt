@@ -93,7 +93,7 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 - **Fireworks** (uses OpenAI- and Anthropic-compatible APIs)
 - **Kimi For Coding** (Moonshot AI subscription endpoint, uses Anthropic-compatible API)
 - **Meta** (Model API, uses OpenAI Responses-compatible API)
-- **Qwen Token Plan** (separate Individual and existing catalogs, with a separate China provider)
+- **Qwen Token Plan** (separate Team and Individual providers, each with a China provider)
 - **Xiaomi MiMo** (defaults to API billing endpoint, with separate Token Plan providers for `cn`/`ams`/`sgp` regions)
 - **Any OpenAI-compatible API**: Ollama, vLLM, LM Studio, etc.
 
@@ -521,21 +521,18 @@ Built-in providers resolve these env vars (Node.js; in browsers pass `apiKey` ex
 | OpenCode Zen / OpenCode Go | `OPENCODE_API_KEY` |
 | Kimi For Coding | `KIMI_API_KEY` |
 | Meta | `META_API_KEY` |
-| Qwen Token Plan (existing catalog) | `QWEN_TOKEN_PLAN_API_KEY` |
-| Qwen Token Plan (Individual) | `QWEN_TOKEN_PLAN_API_KEY` |
-| Qwen Token Plan (China) | `QWEN_TOKEN_PLAN_CN_API_KEY` |
-| Qwen Token Plan (Individual, China) | `QWEN_TOKEN_PLAN_CN_API_KEY` |
+| Qwen Token Plan (Team) | `QWEN_TOKEN_PLAN_TEAM_API_KEY` |
+| Qwen Token Plan (Individual) | `QWEN_TOKEN_PLAN_INDIVIDUAL_API_KEY` |
+| Qwen Token Plan (Team, China) | `QWEN_TOKEN_PLAN_TEAM_CN_API_KEY` |
+| Qwen Token Plan (Individual, China) | `QWEN_TOKEN_PLAN_INDIVIDUAL_CN_API_KEY` |
 | Xiaomi MiMo (API billing) | `XIAOMI_API_KEY` |
 | Xiaomi MiMo Token Plan (China) | `XIAOMI_TOKEN_PLAN_CN_API_KEY` |
 | Xiaomi MiMo Token Plan (Amsterdam) | `XIAOMI_TOKEN_PLAN_AMS_API_KEY` |
 | Xiaomi MiMo Token Plan (Singapore) | `XIAOMI_TOKEN_PLAN_SGP_API_KEY` |
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN` |
 
-`qwen-token-plan-individual` and `qwen-token-plan` share the international endpoint and
-`QWEN_TOKEN_PLAN_API_KEY`. The Individual provider exposes only the models documented for Individual
-subscriptions, while the existing provider retains its broader catalog for backward compatibility.
-`qwen-token-plan-individual-cn` applies the same Individual catalog to the China endpoint and
-`QWEN_TOKEN_PLAN_CN_API_KEY`.
+Qwen Token Plan has a Team and an Individual (Personal) provider per region; each exposes only the
+models documented for its subscription. Set the key variable of your plan.
 Stored credentials remain provider-scoped, so save the key under the provider ID you register.
 
 Amazon Bedrock resolves ambient AWS credentials (`AWS_PROFILE`, access key pairs, `AWS_BEARER_TOKEN_BEDROCK`, ECS task roles, web identity tokens); its provider-owned login flow supports bearer tokens, AWS profiles, and the existing credential chain. Vertex AI resolves either an explicit key or gcloud Application Default Credentials plus project/location, with a provider-owned login flow for API keys, ADC, and service-account files.
@@ -966,7 +963,7 @@ The endpoint needs an OpenAI API key; Sign in with ChatGPT credentials are rejec
 
 ### Chat models on llama.cpp
 
-llama.cpp also serves decision models such as Julia-1 or Kev natively through `/v1/systemone`. Since llama.cpp 0.6.0, `GET /models` lists `decisions` in a model's `architecture.output_modalities` for these models. They use the `typesafe-system-one` API with the server's `/v1` URL as `baseUrl` (for example `http://127.0.0.1:8080/v1`); it needs an `apiKey`, which llama.cpp ignores unless it was started with `--api-key`. The `llama-cpp-classify` API is the fallback for chat models.
+llama.cpp also serves decision models such as Julia-1 or Kev natively through `/v1/systemone`. Since llama.cpp 0.6.0, `GET /models` lists `decisions` in a model's `architecture.output_modalities` for these models. They use the `typesafe-system-one` API with the server's `/v1` URL as `baseUrl` (for example `http://127.0.0.1:9931/v1`); it needs an `apiKey`, which llama.cpp ignores unless it was started with `--api-key`. The `llama-cpp-classify` API is the fallback for chat models.
 
 The `llama-cpp-classify` API turns a chat model served by llama.cpp's `llama-server` into a classifier. Each question becomes one chat prompt: the state, every question of the request, the state again, and the question with its answers under single-token labels (letters for a choice, `Yes`/`No` for a bool, digits for a score). The prompt up to the final question is shared by all questions of a request, so the server's prompt cache evaluates the state once per request. The server returns the log-probabilities of the next token, and the answer is the softmax over the label tokens. Choices support up to 62 options and scores up to 10 levels. The model's `baseUrl` is the server URL; a trailing `/v1` is ignored. In router mode, the model ID selects the model.
 
@@ -983,7 +980,7 @@ const provider = createProvider({
     name: 'Qwen3 4B',
     api: 'llama-cpp-classify',
     provider: 'local-llama',
-    baseUrl: 'http://127.0.0.1:8080',
+    baseUrl: 'http://127.0.0.1:9931',
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32768
@@ -1362,7 +1359,7 @@ const llamacpp = createProvider({
   id: 'llamacpp',
   auth: { apiKey: { name: 'llama.cpp', resolve: async () => ({ auth: {} }) } },
   models: [],
-  fetchModels: async ({ signal }) => fetchModelsFromServer('http://localhost:8080', signal),
+  fetchModels: async ({ signal }) => fetchModelsFromServer('http://localhost:9931', signal),
   api: openAICompletionsApi(),
 });
 
@@ -1380,7 +1377,7 @@ Use `models.refresh({ providers: ['openrouter'] })` to restrict work to selected
 
 Custom models can carry `headers` (e.g. proxies behind bot detection) and `compat` flags. `Models.getAuth(model)` includes those model headers, and stream methods merge them before explicit request headers and `transformHeaders`. See [OpenAI Compatibility Settings](#openai-compatibility-settings).
 
-Some OpenAI-compatible servers do not understand the `developer` role used for reasoning-capable models. For those providers, set `compat.supportsDeveloperRole` to `false` so the system prompt is sent as a `system` message instead. If the server also does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false` too. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
+The `developer` role is OpenAI's replacement for `system` on reasoning models, and many other OpenAI-compatible servers reject it. `openai-completions` therefore sends system messages (the system prompt and mid-conversation system messages) as `system` unless the endpoint is `api.openai.com`. Set `compat.supportsDeveloperRole` to override this. If a server does not support `reasoning_effort`, set `compat.supportsReasoningEffort` to `false`. This commonly applies to Ollama, vLLM, SGLang, and similar OpenAI-compatible servers.
 
 Use model-level `thinkingLevelMap` to describe model-specific thinking controls. Keys are pi thinking levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). Missing standard levels through `high` use provider defaults; `xhigh` and `max` are opt-in and require a non-null map entry. String values are sent to the provider, `null` marks a level unsupported, and maps may skip levels.
 
@@ -1450,7 +1447,7 @@ The `openai-completions` API is implemented by many providers with minor differe
 ```typescript
 interface OpenAICompletionsCompat {
   supportsStore?: boolean;           // Whether provider supports the `store` field (default: true)
-  supportsDeveloperRole?: boolean;   // Whether provider supports `developer` role vs `system` (default: true)
+  supportsDeveloperRole?: boolean;   // Send system messages of reasoning models as `developer` instead of `system` (default: true only for `api.openai.com`)
   supportsReasoningEffort?: boolean; // Whether provider supports `reasoning_effort` (default: true)
   supportsUsageInStreaming?: boolean; // Whether provider supports `stream_options: { include_usage: true }` (default: true)
   supportsStrictMode?: boolean;      // Whether provider supports `strict` in tool definitions (default: false; enabled in metadata for capable built-in models)

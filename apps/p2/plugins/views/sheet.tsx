@@ -1,7 +1,7 @@
 // The views' controls outside the workbench: the top bar's Annotate switch and Views sheet (the session's views, shown
-// or hidden on this device, adding one, the owner's saved views), and the composer's chip for what the next message
-// carries.
-import { BACKGROUND_CONTEXT, liveIn } from "@p2/app/v1";
+// or hidden on this device, adding one), and the composer's chip for what the next message carries; opening a view and
+// describing one, shared with the views' commands (commands.tsx).
+import { BACKGROUND_CONTEXT, type HeldIn, liveIn } from "@p2/app/v1";
 import {
 	closeLayers,
 	openLayer,
@@ -10,14 +10,13 @@ import {
 	Sheet,
 	useComposerState,
 	useObject,
-	useOwner,
 	useReadable,
 	useRoute,
 	useSheet,
 	useStatus,
 } from "@p2/app/v1/web";
 import { type FormEvent, useState } from "react";
-import { SavedViews, type View, Views } from "./contract.ts";
+import { type OpenInput, type View, Views } from "./contract.ts";
 import { viewsIn } from "./layout.ts";
 import { hide, setAnnotateMode, show, useAnnotateMode, useLayout } from "./layout-store.ts";
 
@@ -67,27 +66,20 @@ function ViewsSheet({ session }: { session: string }) {
 	const editor = liveIn(views, "editor");
 	const list = useReadable(views?.views) ?? [];
 	const layout = useLayout(session);
-	const owner = useOwner();
-	const library = useObject(SavedViews, owner ? {} : undefined);
-	useStatus(library);
-	const saved = useReadable(liveIn(library, "owner")?.saved) ?? [];
 	const { fail } = useComposerState();
 	const [path, setPath] = useState("");
 	const [closing, setClosing] = useState<string>();
 	const placed = new Set(viewsIn(layout.tree));
 
-	const open = (input: Parameters<NonNullable<typeof editor>["open"]>[0]) =>
-		editor
-			?.open(input, BACKGROUND_CONTEXT)
-			.then(({ id }) => {
-				show(session, id);
-				closeLayers();
-			})
+	const open = (input: OpenInput) =>
+		editor &&
+		openView(editor, session, input)
+			.then(() => closeLayers())
 			.catch(fail);
 	const openMarkdown = (event: FormEvent) => {
 		event.preventDefault();
-		const file = path.trim().replace(/^\.\//, "");
-		if (file) void open({ kind: "markdown", path: file });
+		const file = markdownPath(path);
+		if (file) void open({ kind: "markdown", item: file });
 	};
 
 	return (
@@ -161,55 +153,29 @@ function ViewsSheet({ session }: { session: string }) {
 					</div>
 				</>
 			)}
-			{owner && (
-				<>
-					<h3 className="views-sheet-head">Saved</h3>
-					{saved.length ? (
-						<ul className="views-list">
-							{saved.map((each) => (
-								<li key={each.name}>
-									<div className="views-list-title">
-										<span>{each.title}</span>
-										<span className="muted">
-											{each.kind} · {each.name}
-											{each.description ? ` · ${each.description}` : ""}
-										</span>
-									</div>
-									{editor && (
-										<button
-											type="button"
-											className="text-action"
-											onClick={() => void open({ saved: each.name })}
-										>
-											Open
-										</button>
-									)}
-									<button
-										type="button"
-										className="text-action"
-										onClick={() =>
-											liveIn(library, "owner")?.remove({ name: each.name }, BACKGROUND_CONTEXT).catch(fail)
-										}
-									>
-										Remove
-									</button>
-								</li>
-							))}
-						</ul>
-					) : (
-						<p className="empty-note">No saved views. Ask the agent to save one.</p>
-					)}
-				</>
-			)}
 		</Sheet>
 	);
 }
 
+/** Opens a view in the session (for everyone in it) and shows it in front on this device. */
+export async function openView(
+	editor: HeldIn<typeof Views, "editor">,
+	session: string,
+	input: OpenInput,
+): Promise<void> {
+	const { id } = await editor.open(input, BACKGROUND_CONTEXT);
+	show(session, id);
+}
+
+/** A Markdown file's path as the person typed it, relative to the workspace (a leading `./` dropped); empty: none. */
+export const markdownPath = (text: string): string => text.trim().replace(/^\.\//, "");
+
 /** What a view shows, in a few words. */
-function describe(view: View): string {
-	if (view.kind === "markdown") return `Markdown · ${view.path ?? ""}`;
-	if (view.kind === "changes") return view.path ? `Changes · ${view.path}` : "Changes";
-	return view.selection && !view.selection.sent ? "Custom · selection waiting" : "Custom";
+export function describe(view: View): string {
+	if (view.kind === "markdown") return `Markdown · ${view.item ?? ""}`;
+	if (view.kind === "changes") return view.item ? `Changes · ${view.item}` : "Changes";
+	const kind = view.kind === "html" || view.kind === "md" ? `Artifact · ${view.kind}` : `Plugin · ${view.kind}`;
+	return view.selection && !view.selection.sent ? `${kind} · selection waiting` : kind;
 }
 
 /** In the composer: the selections and annotations the next message carries, which the person may drop. */
@@ -220,8 +186,12 @@ export function ContextChip() {
 	const editor = liveIn(views, "editor");
 	const list = useReadable(views?.views) ?? [];
 	const notes = useReadable(views?.annotations) ?? [];
+	const inline = useReadable(views?.inline) ?? [];
 	const { fail } = useComposerState();
-	const selections = list.filter((view) => view.selection && !view.selection.sent);
+	const selections = [
+		...list.filter((view) => view.selection && !view.selection.sent),
+		...inline.filter((each) => !each.selection.sent),
+	];
 	const pending = notes.filter((annotation) => !annotation.sent).length;
 	if (!editor || (!selections.length && !pending)) return null;
 	const words = [

@@ -144,7 +144,11 @@ function createHost(expanded: boolean): { host: StreamingHost; renderRequests: (
 }
 
 /** The transcript of `message` built from nothing: its text, and its tool call with `args`. */
-function renderFromNothing(message: AssistantMessage, args: ToolCall["arguments"], expanded: boolean): string[] {
+function renderFromNothing(
+	message: AssistantMessage,
+	args: ToolCall["arguments"],
+	expanded: boolean,
+): readonly string[] {
 	const container = new Container();
 	const assistant = new AssistantMessageComponent();
 	assistant.updateContent(message, true);

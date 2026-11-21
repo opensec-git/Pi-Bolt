@@ -19,7 +19,7 @@ one, step by step: Chord's [tutorial](../../../packages/chord/docs/tutorial/). T
 | --- | --- | --- | --- |
 | Server | `plugins/<name>/server.ts` or `server.tsx` | Chord `nodeLoader` via `PluginRuntime.loader` (`src/hosts/plugins.ts`), alphabetical order | server host, `host.name === "server"` |
 | Worker | `plugins/<name>/worker.ts` or `worker.tsx` | same, in every session worker, from the list in its init (`src/hosts/worker.ts`) | `session:<id>` host |
-| Web | `plugins/<name>/web.ts` or `web.tsx` | `buildWebBundle` bundles selected facets; `startWeb` installs them (`src/hosts/bundles.ts`, `src/hosts/web/main.tsx`) | browser client host |
+| Web | `plugins/<name>/web.ts` or `web.tsx` | Chord's plugin build (kind `web`), served by Chord's web surface as one script per plugin (the set as one combined file); `startPage` loads them (`src/hosts/server.ts`, `src/hosts/web/main.tsx`). A web script must not share module state with another plugin's files (`plugin-practices.md`) | browser client host |
 | TUI | `plugins/<name>/tui.ts` or `tui.tsx` | `buildTuiBundle` bundles selected facets; `setupTui` installs them with the core facet (`src/hosts/bundles.ts`, `src/hosts/tui-worker-runtime.ts`) | locked-down worker on the visitor's machine |
 
 A facet is `defineFacet((host) => …)`. There is no manifest and no derived dependency list: a plugin needs what it
@@ -86,9 +86,9 @@ contracts and factories are the enforcement.
 
 | Facet | Trigger | What happens |
 | --- | --- | --- |
-| Server | explicit only: Reload button, `npm run reload`, `reload_plugins` (dev mode; `docs/p2-notes.md` "Dev mode") | Chord cluster transaction with every running worker: compatible changes keep state and resources; registrations swap atomically; contract/state changes need versions or migrations; a `registry_conflict` or failure keeps the old code. `src/runtime`, `src/hosts` need a restart. No reload without `P2_DEV=1`. |
+| Server | explicit only: Reload button, `npm run reload`, `reload_plugins` (`docs/p2-notes.md` "Dev mode", docs/agent-plugins.md) | Chord cluster transaction with every running worker: compatible changes keep state and resources; registrations swap atomically; contract/state changes need versions or migrations; a `registry_conflict` or failure keeps the old code. `src/runtime`, `src/hosts` need a restart. No reload without `P2_DEV=1`. |
 | Worker | same transaction | as server; new workers spawn with the committed list. A Durable phase keeps the extension snapshot it started with (`src/runtime/durable.ts:35-41`); `ExtensionSwitches` changes apply to the next phase. |
-| Web | backend reload builds a new content-named bundle; a visible page polls `/__p2_web` every 5 seconds | Facets are installed once per page (`startWeb`, `src/hosts/web/main.tsx`); any manifest-version change reloads the page. Foregrounding checks immediately; at most two previous generations remain available for up to 60 seconds. |
+| Web | the reload's web surface step publishes the changed plugins' scripts (`WebScripts`) | An open page fetches them and applies them in place (`host.reload` in the page, each plugin's stylesheet swapped with its code): scroll and other panes stay, the reloaded plugin's components remount. Base code changes need a restart; a page reloads onto the new base. The last four sets' files stay served. |
 | TUI | backend reload builds a new bundle; the launcher polls the hash every second; `/reload` | Whole worker swap carrying bounded UI state (`docs/p2-notes.md` "TUI"). Within one worker: a `TuiCommands` change closes overlays (`src/runtime/tui.ts:461-465`); a changed `TuiSlots` value disposes and recreates that surface (`:471-485`). |
 
 ## 2. Server facets
@@ -126,7 +126,7 @@ self.register(Authenticators, {
 ```
 
 Reserved host endpoints are `/health`, `/__p2_dev`, `/__p2_tui[/<hash>.mjs]` and the `/chord` WebSocket upgrade
-(`src/hosts/server.ts`). Plugin `Routes` run before the web host, so they can shadow app pages, `/__p2_web[/…]` and
+(`src/hosts/server.ts`). Plugin `Routes` run before the web host, so they can shadow app pages, `/_chord/web/…` and
 `public/` files.
 
 ### 2.3 Dev, logs, notices
@@ -171,9 +171,9 @@ const extension = createPortsExtension(
 contribute(host, "p2.port-tools", (self) => self.register(Extensions, { [extension.name]: extension }));
 ```
 
-Who: tools run for whoever's input started the turn. Durable knows no principal; a tool declares what it needs
-(`P2Tool`: `origin: "owner"`, `scope: "main"`) and the worker's registry checks it before each call (`guardTool`,
-`originOf` over the run's inputs; see p2-notes **Tool requirements**). Reload: a running phase keeps its snapshot; tool code
+Who: tools run for whoever's input started the turn, with no per-turn authority. Durable knows no principal; a tool
+declares where it works (`P2Tool`: `scope: "main"`, `locked`) and the worker's registry checks it before each call
+(`guardTool`; see p2-notes **Tool requirements**). Reload: a running phase keeps its snapshot; tool code
 that must survive reload reads live resources through getters (`plugins/codemode/worker.ts:37-43`).
 
 ### 3.2 Worker registries and locals
@@ -211,7 +211,7 @@ self.register(SendRouters, {
   the web (`src/web/transcript.ts:506-512`) and need a `TuiEntryRenderers` entry in the TUI.
 - **Documents:** `defineDoc` from `@earendil-works/pi-durable`; write in `harness.commit(tx => tx.doc(Doc, id))`,
   read with `harness.snapshot(Doc, id)` or in tools/hooks via their API. Conversation docs reach clients in
-  `Chat.view.docs`. Examples: `p2.subagents`, `p2.agent-run`, `p2.artifacts`, chat-mode's `ChatModeDoc`
+  `Chat.view.docs`. Examples: `p2.subagents`, `p2.agent-run`, `p2.views`, chat-mode's `ChatModeDoc`
   (`plugins/chat-mode/worker.ts:25`). Change signals: `CommitSignal` (`src/runtime/commits.ts:4`), `watchSource`
   (`src/runtime/durable.ts:113`).
 - **Environments:** tools use `api.env`; plugins use `Harness.environment` / `environments.at(cwd)`. Only one remote
@@ -233,12 +233,12 @@ self.register(SendRouters, {
 | `artifact-actions`, `terminal-actions`, `workspace-actions`, `session-options`, `session-actions` | chat top bar, `plugins/chat/web.tsx:327-331` | single each | artifacts, terminals, workspace, sessions, sharing |
 | `composer:*` | `plugins/chat/web.tsx:925` (`SlotList`) | list | chat-mode |
 | `chat-bottom` | `plugins/chat/web.tsx:934` | single | terminals |
-| `chat-content` | `plugins/chat/web.tsx:1133` | wrapper (gets `children`) | artifacts (viewer contexts) |
+| `chat-content` | `plugins/chat/web.tsx:1133` | wrapper (gets `children`) | artifacts (card contexts, the sent-file viewer, the artifacts side panel) |
 | `chat-attribution` | `plugins/chat/web.tsx:1134` | wrapper | conversations |
 | `sidebar-actions:*` | `plugins/sessions/web.tsx` (`SlotList`) | list: icon buttons before the theme switch | settings |
+| `sidebar-start:*` | `plugins/sessions/web.tsx` (`SlotList`) | list: rows (list items) before "New session" | familiar |
 | `envs-actions:*` | `plugins/envs/EnvsPanel.tsx:524` (`SlotList`) | list | ports |
 | `workspace-terminal` | `src/web/Workspace.tsx:730` | single | terminals |
-| `chat-parent` | **nowhere** | — | subagents registers it (`plugins/subagents/web.tsx:22`) |
 | `workbench` | `src/web/AppLayout.tsx` | wrapper (gets the `main` slot as `children`) | views |
 | `view-actions` | chat top bar, `plugins/chat/web.tsx` | single | views |
 
@@ -356,7 +356,7 @@ actions can be requested; `K` actions fire on the visitor's own key and may ask 
 | `attach` | C | `{path?}` → uploaded file | no |
 | `copy` | C | `{text, label?}` | no |
 | `openUrl` | C | `{kind: "external", url}` (https) or `{kind: "origin", path}` | no |
-| `download` | C | `{kind: "file" \| "artifact", session, …}` | no |
+| `download` | C | `{kind: "file", session, id, name?}` | no |
 | `savePrefs` | C | `{patch}` for `prefs.json` | no |
 | `devCommand` | C | `{action: "reload" \| "restart"}` | yes |
 | `signOut` | C | `{all}` | yes |
@@ -381,8 +381,8 @@ actions can be requested; `K` actions fire on the visitor's own key and may ask 
 5. **Naming.** TUI registries are `Tui*`; web ones are unprefixed (`Slots`, `ComposerExpanders`); `TranscriptEntries`
    lives in the chat plugin but is used by both UIs; worker `SendRouters` lives in chat, `ReadOnlyConversations`
    in the runtime, `SessionArchived` in sessions. Ordered registries are marked only by convention in key strings.
-6. **Slot lists that are not lists.** `footer:*` in the TUI renders only the first entry. `chat-parent`
-   is registered and rendered nowhere. Wrapper slots (`chat-content`, `chat-attribution`) admit one plugin each.
+6. **Slot lists that are not lists.** `footer:*` in the TUI renders only the first entry. Wrapper slots
+   (`chat-content`, `chat-attribution`) admit one plugin each.
 7. **Slots as lifecycle.** TUI plugins register invisible `service:*` / `widget-above:*` slots to get a per-runtime
    object, then find it with `ctx.surface(name)` (`plugins/prompt/tui.ts:74-80`, `plugins/models/tui.ts:116-118`).
    The designed `widget-above`/`widget-below` rendering (`docs/p2-tui-port.md` §7.2) does not exist.
@@ -442,8 +442,7 @@ Ordered by value; each keeps one name and one shape across surfaces.
    shared); give registries an explicit `ordered: true` option (or an `order` field in values) instead of key
    conventions; make `SlotList` key-ordered like the TUI. Move shared registries (`TranscriptEntries`) to
    `src/runtime` or a neutral contract module.
-5. **Real lists.** TUI `footer:*` as an ordered list; delete or render `chat-parent`; make
-   wrapper slots chains (`chat-content:*`).
+5. **Real lists.** TUI `footer:*` as an ordered list; make wrapper slots chains (`chat-content:*`).
 6. **A TUI service registry.** `TuiServices` (`name → (runtime) => { dispose() }`) for per-runtime holders, and
    render `widget-above:*`/`widget-below:*` as designed; replace `ctx.surface("chat") instanceof ChatSurface` with a
    `ctx.chat` interface (editor text, tool views, replies) and expose the same on the web instead of

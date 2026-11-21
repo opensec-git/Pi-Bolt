@@ -40,7 +40,7 @@ function createFakeTui(): TUI {
 	return { requestRender: () => {} } as unknown as TUI;
 }
 
-function count(lines: string[], marker: string): number {
+function count(lines: readonly string[], marker: string): number {
 	return lines.join("\n").split(marker).length - 1;
 }
 

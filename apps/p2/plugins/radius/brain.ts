@@ -5,9 +5,9 @@ import { join } from "node:path";
 import type { OAuthCredential } from "@earendil-works/pi-ai";
 import { radiusProvider } from "@earendil-works/pi-ai/providers/radius";
 import { DEFAULT_RADIUS_GATEWAY, normalizeRadiusGatewayUrl } from "@earendil-works/pi-ai/providers/radius-config";
+import { SERVER_PART_LIMITS } from "@p2/app/v1";
 import { WebSocket } from "ws";
 import type { Forwards } from "../ports/contract.ts";
-import { readBrainIdentity } from "./identity.ts";
 import {
 	encodeRelayUser,
 	RELAY_ORIGIN_HEADER,
@@ -95,14 +95,16 @@ import {
  * socket at once. Relays that predate the parameter ignore it and answer 409,
  * which the backoff retries until the old host expires.
  *
- * Name. Every host connect carries the brain's name (`?name=`, from
- * `identity.json`, see identity.ts), read again for each attempt, and Radius
- * records it when it claims the server. Reading the name never fails a
- * connect: an unreadable or unwritable data directory falls back to the
- * device's name, and a brain without any name connects without `name`, which
- * keeps the name Radius has (else Radius shows the server ID). The brain owns its name, so a rename
- * on this machine reaches Radius with the next reconnect, and Radius never
- * changes it. Relays that predate names ignore the parameter.
+ * Name. The server owns its name (`ServerName`, src/runtime/server-name-file.ts);
+ * Radius keeps a copy for its shell and never changes it. Every host connect
+ * carries the current name (`?name=`), which Radius records when it claims the
+ * server, and a rename while connected is sent with `PUT /v1/servers/<id>/name`
+ * at once, without a reconnect: a reconnect would drop every channel, the
+ * browser's that made the rename among them. A rename that fails or happens
+ * while offline goes with the next connect. A server without any name connects
+ * without `name`, which keeps the name Radius has (else Radius shows the server
+ * ID). Relays that predate names ignore the parameter; relays without the
+ * endpoint answer 404 and get the name with the next connect.
  *
  * Two p2 processes with the same `radius.json` share one server ID, so they
  * would replace each other in turn. The relay closes a replaced host with 1012
@@ -144,7 +146,11 @@ const CHANNEL_SUBPROTOCOL = "pi-server.channel.v1";
 /** A channel socket's direction pauses its source above this many unsent bytes, and resumes below the low mark. */
 const PIPE_HIGH_BYTES = 256 * 1024;
 const PIPE_LOW_BYTES = 64 * 1024;
-const MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
+/**
+ * A WebSocket message the brain carries: the largest part the server sends a page. The relay has its own limit per data
+ * message (32 MiB by default since Radius ee560a41, `SERVER_MAX_DATA_MESSAGE_BYTES`), which a larger part fails at.
+ */
+const MAX_MESSAGE_BYTES = SERVER_PART_LIMITS.part;
 /** The relay's default window, for relays that do not state it in `connection_open`. */
 const DEFAULT_HTTP_WINDOW = 256 * 1024;
 const CONGESTION_HIGH_BYTES = 1024 * 1024;
@@ -191,8 +197,10 @@ export type RadiusBrainConfig = {
 	 */
 	publicOrigin?: string;
 	/**
-	 * This brain's page in the Radius shell (`<shell>/pi/brains/<organization>/<server>`), as last seen on a relayed
-	 * request for its UI. People sessions are shared with by email open them there, signed in to Radius.
+	 * This brain's page in the Radius shell (`<shell>/pi/<organization ID>/<server>`), as last seen on a relayed request
+	 * for its UI; a page of the brain's UI is below it (`…/s/<session>`). People sessions are shared with by email open
+	 * them there, signed in to Radius. The shell names organizations by slug when they have one and replaces this ID
+	 * form, but a link people keep names the organization by ID, which a slug change leaves valid.
 	 */
 	shellPage?: string;
 	credential: OAuthCredential;
@@ -271,6 +279,14 @@ export async function writeRadiusConfig(directory: string, config: RadiusBrainCo
 	await rename(`${path}.tmp`, path);
 }
 
+/**
+ * A saved shell page in the shell's current URL form: pages saved before its URLs dropped `/brains`
+ * (`<shell>/pi/brains/<organization>/<server>`) no longer resolve. The next relayed request saves the current form.
+ */
+export function currentShellPage(saved: string): string {
+	return saved.replace(/^(https?:\/\/[^/]+)\/pi\/brains\//, "$1/pi/");
+}
+
 /** Gateway for new logins: `PI_RADIUS_GATEWAY`, as in the coding agent, else production. */
 export function radiusGatewayFromEnv(): string {
 	return normalizeRadiusGatewayUrl(process.env.PI_RADIUS_GATEWAY ?? DEFAULT_RADIUS_GATEWAY);
@@ -325,6 +341,11 @@ export class RadiusBrain {
 	#reported = false;
 	/** Reports run one at a time, so an older set never lands after a newer one. */
 	#reporting: Promise<void> = Promise.resolve();
+	/** The server's name (see "Name"), and the one Radius has as far as this brain knows (undefined: unknown). */
+	#name: string | undefined;
+	#radiusName: string | undefined;
+	/** Renames are sent one at a time, so an older name never lands after a newer one. */
+	#naming: Promise<void> = Promise.resolve();
 	readonly #heartbeatIdleMs: number;
 	readonly #heartbeatTimeoutMs: number;
 	readonly #handshakeTimeoutMs: number;
@@ -333,6 +354,8 @@ export class RadiusBrain {
 		directory: string;
 		port: () => number;
 		relay: RelayAccess;
+		/** The server's name at the start; `rename` follows it. */
+		name?: string;
 		/** Port forwards; without them, forward channels answer as unknown forwards. */
 		forwards?: Forwards;
 		onStatus?: (status: RadiusStatus) => void;
@@ -343,6 +366,7 @@ export class RadiusBrain {
 		this.#port = options.port;
 		this.#relay = options.relay;
 		this.#forwards = options.forwards;
+		this.#name = options.name;
 		this.#onStatus = options.onStatus ?? (() => {});
 		this.#heartbeatIdleMs = options.timing?.heartbeatIdleMs ?? HEARTBEAT_IDLE_MS;
 		this.#heartbeatTimeoutMs = options.timing?.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
@@ -360,9 +384,24 @@ export class RadiusBrain {
 		this.#report();
 	}
 
+	/** Follows a rename of the server: sent to Radius now if connected, else with the next connect (see "Name"). */
+	rename(name: string | undefined): void {
+		this.#name = name;
+		this.#sendName();
+	}
+
 	/** This brain's page in the Radius shell, once known (see `RadiusBrainConfig.shellPage`). */
 	get shellPage(): string | undefined {
 		return this.#shellPage;
+	}
+
+	/**
+	 * What a request to this brain's gateway on its own behalf needs (session sync, `plugins/sync`): the gateway, this
+	 * brain's server ID and a current access token, refreshed as the connection refreshes it. Rejects while not signed in.
+	 */
+	async syncAccess(): Promise<{ readonly gateway: string; readonly serverId: string; readonly token: string }> {
+		const config = await this.#currentConfig();
+		return { gateway: config.gateway, serverId: config.serverId, token: config.credential.access };
 	}
 
 	close(): void {
@@ -389,10 +428,10 @@ export class RadiusBrain {
 			this.#onStatus({ status: "connecting" });
 			config = await this.#freshConfig();
 			owner = await this.#owner(config);
-			name = (await readBrainIdentity(this.#directory))?.name;
+			name = this.#name;
 			if (this.#forwards && !this.#forwards.radiusOrigin && config.publicOrigin)
 				this.#forwards.radiusOrigin = config.publicOrigin;
-			this.#shellPage ??= config.shellPage;
+			this.#shellPage ??= config.shellPage && currentShellPage(config.shellPage);
 		} catch (error) {
 			this.#retry(error);
 			return;
@@ -405,7 +444,7 @@ export class RadiusBrain {
 		if (name !== undefined) url.searchParams.set("name", name);
 		const socket = new WebSocket(url, HOST_SUBPROTOCOLS, {
 			headers: { authorization: `Bearer ${config.credential.access}` },
-			maxPayload: 16 * 1024 * 1024 + DATA_HEADER_BYTES,
+			maxPayload: MAX_MESSAGE_BYTES + DATA_HEADER_BYTES,
 			handshakeTimeout: this.#handshakeTimeoutMs,
 		});
 		socket.binaryType = "nodebuffer";
@@ -444,6 +483,9 @@ export class RadiusBrain {
 			});
 			this.#reported = false;
 			this.#report();
+			// Radius has the name this connect carried; a rename during the handshake is sent now.
+			this.#radiusName = name;
+			this.#sendName();
 		});
 		// With this listener `ws` leaves a rejected handshake open; record why and abort it, which closes the socket.
 		socket.on("unexpected-response", (_request, response) => {
@@ -510,6 +552,28 @@ export class RadiusBrain {
 			.catch((error: unknown) => {
 				if (!this.#closed)
 					console.warn(`Radius: reporting shares failed (${error instanceof Error ? error.message : error})`);
+			});
+	}
+
+	#sendName(): void {
+		this.#naming = this.#naming
+			.then(async () => {
+				const name = this.#name;
+				if (name === undefined || name === this.#radiusName || this.#socket?.readyState !== WebSocket.OPEN) return;
+				const config = await this.#currentConfig();
+				const response = await fetch(new URL(`/v1/servers/${config.serverId}/name`, config.gateway), {
+					method: "PUT",
+					headers: { authorization: `Bearer ${config.credential.access}`, "content-type": "application/json" },
+					body: JSON.stringify({ name }),
+					signal: AbortSignal.any([this.#abort.signal, AbortSignal.timeout(30_000)]),
+				});
+				if (!response.ok) throw new Error(`${response.status}: ${(await response.text()).slice(0, 200)}`);
+				this.#radiusName = name;
+			})
+			// The next connect carries the name.
+			.catch((error: unknown) => {
+				if (!this.#closed)
+					console.warn(`Radius: sending the name failed (${error instanceof Error ? error.message : error})`);
 			});
 	}
 
@@ -680,7 +744,7 @@ export class RadiusBrain {
 	#remember(origin: string, shellOrigin: string, owner: Principal): void {
 		const shellPage =
 			SHELL_ORIGIN.test(shellOrigin) && this.#config
-				? `${shellOrigin}/pi/brains/${encodeURIComponent(owner.organization_id)}/${encodeURIComponent(this.#config.serverId)}`
+				? `${shellOrigin}/pi/${encodeURIComponent(owner.organization_id)}/${encodeURIComponent(this.#config.serverId)}`
 				: this.#shellPage;
 		const newOrigin = this.#forwards !== undefined && this.#forwards.radiusOrigin !== origin;
 		if (!newOrigin && shellPage === this.#shellPage) return;

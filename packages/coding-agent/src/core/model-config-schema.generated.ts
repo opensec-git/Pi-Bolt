@@ -649,7 +649,7 @@ export function modelsConfigSchema(): object {
 									supportsMidConvoEffort: {
 										type: "boolean",
 										description:
-											"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
+											"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages, openai-responses, and openai-codex-responses APIs.",
 										default: false,
 									},
 									supportsMaxOutputTokens: {
@@ -1738,7 +1738,7 @@ export function modelsConfigSchema(): object {
 												supportsMidConvoEffort: {
 													type: "boolean",
 													description:
-														"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
+														"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages, openai-responses, and openai-codex-responses APIs.",
 													default: false,
 												},
 												supportsMaxOutputTokens: {
@@ -2814,7 +2814,7 @@ export function modelsConfigSchema(): object {
 													supportsMidConvoEffort: {
 														type: "boolean",
 														description:
-															"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
+															"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages, openai-responses, and openai-codex-responses APIs.",
 														default: false,
 													},
 													supportsMaxOutputTokens: {

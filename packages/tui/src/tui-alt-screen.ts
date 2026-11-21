@@ -384,7 +384,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.requestRender();
 	}
 
-	override render(width: number): string[] {
+	override render(width: number): readonly string[] {
 		const changed = this.completeDocument();
 		if (!this.stopped) {
 			if (this.beforeViewportScroll && this.isFollowingOutput) this.trimHistoryAtEnd = true;
@@ -637,7 +637,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	scrollBy(lines: number): void {
 		this.scrollViewBy(this.getPrimaryScrollView(), lines);
-		this.requestRender();
+		this.requestViewRender();
 	}
 
 	private scrollViewBy(view: ScrollView, lines: number): number {
@@ -692,13 +692,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	scrollToTop(): void {
 		this.layoutWholeDocument();
 		this.getPrimaryScrollView().scrollToStart();
-		this.requestRender();
+		this.requestViewRender();
 	}
 
 	scrollToBottom(): void {
 		this.getPrimaryScrollView().scrollToEnd();
 		this.trimHistoryAtEnd = true;
-		this.requestRender();
+		this.requestViewRender();
 	}
 
 	private scrollToPrompt(direction: -1 | 1): void {
@@ -712,7 +712,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (!OSC133_PROMPT_START.test(lines[row] ?? "")) continue;
 			scrollView.scrollTo(row);
 			if (scrollView.isFollowingEnd) this.trimHistoryAtEnd = true;
-			this.requestRender();
+			this.requestViewRender();
 			return;
 		}
 	}
@@ -1213,7 +1213,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const primary = this.getPrimaryScrollView();
 		if (remaining !== 0 && !seen.has(primary)) this.scrollViewBy(primary, remaining);
 		this.updateScrollbarHover(event.x, event.y);
-		this.requestRender();
+		// Scrolling moves the viewport only. Reusing the previous component output keeps a wheel
+		// frame O(viewport); re-rendering a long transcript on every wheel event saturated a core.
+		this.requestViewRender();
 	}
 
 	private parseSgrMouseEvent(data: string): SgrMouseEvent | undefined {
@@ -1541,7 +1543,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		const point = this.getScrollSelectionPoint(scrollView, pointer.x, pointer.y);
 		if (point) this.updateSelectionFocus(point);
-		this.requestRender();
+		// Selection is painted onto the screen after layout, so it needs no new component output.
+		this.requestViewRender();
 	}
 
 	private stopSelectionAutoScroll(): void {
@@ -1986,13 +1989,14 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const view = this.getPrimaryScrollView();
 		const wasFollowing = view.isFollowingEnd;
 		let heightBeforeTrim: number | undefined;
+		let documentChanged = false;
 		if (
 			this.currentLayout &&
 			this.beforeViewportScroll &&
 			(width !== this.previousScreenWidth || height !== this.previousScreenHeight)
 		) {
 			if (wasFollowing) this.trimHistoryAtEnd = true;
-			else this.completeDocument();
+			else documentChanged = this.completeDocument();
 		}
 		if (
 			this.trimHistoryAtEnd &&
@@ -2009,9 +2013,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.trimHistoryAtEnd = false;
 			heightBeforeTrim = this.currentLayout && getScrollViewBox(this.currentLayout, view)?.children[0]?.rect.height;
 			this.onViewportFollowEnd();
+			documentChanged = true;
 		}
 		const root = this.layoutRoot ?? this.implicitScrollView;
-		let nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+		const requestViewRender = () => this.requestViewRender();
+		// Without a component change since the last frame (a scroll or selection frame), its output is reused: the frame
+		// then costs O(viewport). Completing or trimming the document above changed it.
+		const reusableOutput = this.contentChanged || documentChanged ? undefined : this.currentLayout?.renderCache;
+		this.contentChanged = false;
+		let nextLayout = renderLayoutFrame(root, width, height, requestViewRender, reusableOutput);
 		const primary = nextLayout.primaryScrollView ?? this.implicitScrollView;
 		if (this.onViewportFollowEnd && view === primary && !wasFollowing && view.isFollowingEnd) {
 			// A shrinking document can bring a detached viewport back to the end without a scroll event.
@@ -2029,10 +2039,11 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			(updateTail || !primary.isFollowingEnd || this.selectionPressActive || this.getSelectionBounds()) &&
 			this.updateViewportWindow(nextLayout, primary, 0)
 		) {
-			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+			// The window took in other rows of the document: nothing of the frame before can be reused.
+			nextLayout = renderLayoutFrame(root, width, height, requestViewRender);
 		}
 		if (this.refreshSearch(nextLayout)) {
-			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+			nextLayout = renderLayoutFrame(root, width, height, requestViewRender, nextLayout.renderCache);
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes. A row that is a row of the frame
 		// before (most of the screen, while a reply streams in) is resolved as that one was, and is that same string.
@@ -2113,11 +2124,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		let buffer = BEGIN_SYNCHRONIZED_OUTPUT;
 		if (fullRedraw) {
 			this.fullRedrawCount += 1;
-			const clearImages =
-				this.imageProtocol === "kitty" && hadUploadedKittyImages
-					? deleteAllKittyPlacements()
-					: this.deleteKittyImages();
-			buffer += `${clearImages}\x1b[2J`;
+			if (this.imageProtocol === "kitty" && hadUploadedKittyImages) {
+				// Kitty frees image data without placements on ED 2, which would break placement-only reuse.
+				// Every row is cleared with EL 2 below, so keep the uploads and skip the screen clear.
+				buffer += deleteAllKittyPlacements();
+			} else {
+				buffer += `${this.deleteKittyImages()}\x1b[2J`;
+			}
 		} else if (imagesNeedRedraw) {
 			if (this.imageProtocol === "iterm2") buffer += "\x1b[2J";
 			else if (this.imageProtocol === "kitty") buffer += deleteAllKittyPlacements();

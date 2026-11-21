@@ -103,6 +103,9 @@ describe("foreign browser requests", () => {
 			const page = await http(port, "/", { headers: { ...navigate, Cookie: device } });
 			assert.notEqual(page.status, 401, `${site} navigation with the cookie opens the app`);
 			assert.ok(cookieOf(page.headers, `p2_owner_${port}`), "and renews the owner's local session");
+			// A sidebar list's address is an app page too (`/list/<key>`).
+			const list = await http(port, "/list/folder%3AW251bGwsIi93Il0", { headers: { ...navigate, Cookie: device } });
+			assert.notEqual(list.status, 401, `${site} navigation to a list with the cookie opens the app`);
 			const signIn = await http(port, `/s/${session}`, { headers: navigate });
 			assert.equal(signIn.status, 401, `${site} navigation without a cookie signs in`);
 			assert.match(signIn.body, /if\(!location\.hash\)location\.replace\(location\.href\);/, "after one reload");
@@ -141,8 +144,8 @@ describe("foreign browser requests", () => {
 					const out = {};
 					const settle = (name, promise) => promise.then(() => (out[name] = "read"), () => (out[name] = "blocked"));
 					await settle("fetch", fetch(${JSON.stringify(`${p2}/owner/check`)}, { credentials: "include" }).then((r) => r.text()));
-					await settle("module", import(${JSON.stringify(`${p2}/__p2_web`)}));
-					await settle("source", fetch(${JSON.stringify(`${p2}/__p2_web`)}, { credentials: "include" }).then((r) => r.text()));
+					await settle("module", import(${JSON.stringify(`${p2}/__p2_tui`)}));
+					await settle("source", fetch(${JSON.stringify(`${p2}/__p2_tui`)}, { credentials: "include" }).then((r) => r.text()));
 					await fetch(${JSON.stringify(`${p2}/owner/logout-all`)}, { method: "POST", credentials: "include", mode: "no-cors" }).catch(() => {});
 					await fetch(${JSON.stringify(`${p2}/owner-token`)}, { credentials: "include", mode: "no-cors" }).catch(() => {});
 					out.socket = await new Promise((resolve) => {
@@ -203,7 +206,7 @@ describe("foreign browser requests", () => {
 				});
 				// The page's requests to p2: each carried the owner's cookie (SameSite does not separate ports), and p2
 				// authenticated none of them.
-				const paths = ["/owner/check", "/__p2_web", "/owner/logout-all", "/owner-token"];
+				const paths = ["/owner/check", "/__p2_tui", "/owner/logout-all", "/owner-token"];
 				for (const path of paths) {
 					const requests = [...seen.values()].filter((entry) => entry.url === `${p2}${path}`);
 					// (A module import sends no cookie cross-origin; the credentialed fetch of the same URL does.)

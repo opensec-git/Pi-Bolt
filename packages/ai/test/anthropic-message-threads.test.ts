@@ -797,6 +797,29 @@ describe("Anthropic message threads", () => {
 		expect(h.requests[0].betas).not.toContain(THREADS_BETA);
 	});
 
+	// #11987: Pi-Bolt keeps threads to the anthropic provider by default; another provider on the host opts in.
+	it("uses threads by default only for the anthropic provider on api.anthropic.com", async () => {
+		const alias = harness();
+		const aliasModel = { ...baseModel, provider: "anthropic-1-api" };
+		await say(alias, [user("first")], { model: aliasModel });
+		expect(alias.requests[0].body).not.toHaveProperty("thread");
+		expect(alias.requests[0].betas).not.toContain(THREADS_BETA);
+
+		const optedIn = harness();
+		const optedInModel = { ...aliasModel, compat: { ...baseModel.compat, supportsMessageThreads: true } };
+		const optedInMessages = [user("first")];
+		await say(optedIn, optedInMessages, { model: optedInModel });
+		optedInMessages.push(user("second"));
+		await say(optedIn, optedInMessages, { model: optedInModel });
+		expect(threadOf(optedIn.requests[0])).toEqual({ type: "create" });
+		expect(threadOf(optedIn.requests[1])).toEqual({ type: "continue", previous_message_id: "msg_1" });
+
+		const gateway = harness();
+		await say(gateway, [user("first")], { model: { ...baseModel, baseUrl: "https://gateway.example.com" } });
+		expect(gateway.requests[0].body).not.toHaveProperty("thread");
+		expect(gateway.requests[0].betas).not.toContain(THREADS_BETA);
+	});
+
 	it("matches Claude Code tool names across turns with OAuth", async () => {
 		const h = harness();
 		h.queue.push((request) =>

@@ -31,7 +31,7 @@ export class MouseRegion implements Component {
 		this.onMouse = onMouse;
 	}
 
-	render(width: number): string[] {
+	render(width: number): readonly string[] {
 		const lines = renderChildLines(this, this.child, width);
 		setSubtreeReportsChanges(this, reportsChanges(this.child));
 		if (isStableRender(this.child)) return lines;
