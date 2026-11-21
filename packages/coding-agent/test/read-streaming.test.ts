@@ -268,7 +268,8 @@ describe("read tool streaming", () => {
 	// #11956
 	it("rejects without an unhandled stream error when aborted while opening a local file", async () => {
 		const path = join(tempDir, "abort-on-open.txt");
-		writeFileSync(path, "line\n");
+		// Pi-Bolt reads a local file under 1 MB whole (readFile, no stream); one of 1 MB or more is opened and streamed.
+		writeFileSync(path, "line\n".repeat(256 * 1024));
 		const controller = new AbortController();
 		openHook.run = () => {
 			openHook.run = undefined;
