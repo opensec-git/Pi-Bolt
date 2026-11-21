@@ -28,10 +28,17 @@
  * request used is kept (messages compacted away or on a branch left are dropped).
  */
 
+import { registerSessionResourceCleanup } from "../session-resources.ts";
 import type { StreamOptions } from "../types.ts";
+
+/** Comma-prefixed JSON for one array item. A repeated tool result can share its quoted UTF-8 payload independently of its call ID. */
+export type EncodedItem = Blob | [Blob, ...Blob[]];
 
 /** A unit's conversion: the values it produced and what is needed to hand them out again. */
 interface Entry {
+	/** A single converted object can keep its bytes here instead of allocating a one-element bytes array. */
+	singleItem?: unknown;
+	singleBytes?: EncodedItem;
 	/** The unit's messages, in order (the array the converter passed; not changed afterwards). */
 	sources: readonly object[];
 	extra: unknown;
@@ -39,7 +46,7 @@ interface Entry {
 	meta: unknown;
 	items: unknown[];
 	/** The UTF-8 JSON of each item; made by request-body.ts when it first sends the item. */
-	bytes: (Blob | undefined)[] | undefined;
+	bytes: (EncodedItem | undefined)[] | undefined;
 }
 
 /** A value derived from one message, only read to convert it. */
@@ -61,9 +68,56 @@ interface Order<T> {
 	values: (T | undefined)[];
 }
 
-interface Table {
+/** Stage only the positions that differ. An in-flight conversion keeps its original order until it ends. */
+class RequestOrder<T> {
+	private readonly base: Order<T>;
+	private changes?: { at: number; source: object; value: T | undefined }[];
+	length = 0;
+
+	constructor(base: Order<T>) {
+		this.base = base;
+	}
+
+	take(source: object): T | undefined | false {
+		const at = this.length++;
+		if (this.base.sources[at] === source && settled(source)) return this.base.values[at];
+		this.set(at, source, undefined);
+		return false;
+	}
+
+	set(at: number, source: object, value: T | undefined): void {
+		if (this.base.sources[at] === source && this.base.values[at] === value) return;
+		this.changes ??= [];
+		this.changes.push({ at, source, value });
+	}
+
+	finish(exclusive: boolean): Order<T> {
+		const order = exclusive
+			? this.base
+			: {
+					sources: this.base.sources.slice(0, this.length),
+					values: this.base.values.slice(0, this.length),
+				};
+		if (this.changes) {
+			for (const { at, source, value } of this.changes) {
+				order.sources[at] = source;
+				order.values[at] = value;
+			}
+		}
+		order.sources.length = order.values.length = this.length;
+		return order;
+	}
+}
+
+interface CachedOrder {
+	readers: number;
 	units: Order<Entry>;
 	derived: Order<Derived>;
+}
+
+interface Table {
+	sessionId: string;
+	order: CachedOrder;
 	lastUse: number;
 }
 
@@ -89,42 +143,87 @@ function sameSources(a: readonly object[], b: readonly object[]): boolean {
  * serialized as before.
  */
 export class SentValues {
-	private readonly items: readonly unknown[];
 	private readonly entries: readonly Entry[];
-	private readonly indexes: readonly number[];
-	private next = 0;
+	private nextEntry = 0;
+	private nextItem = 0;
 	private last: Entry | undefined;
 	private lastIndex = 0;
 
-	constructor(items: readonly unknown[], entries: readonly Entry[], indexes: readonly number[]) {
-		this.items = items;
+	/** Construct a cursor over the nonempty units handed out by one request. */
+	constructor(entries: readonly Entry[]);
+	/** Read an explicit mapping of items to entry slots, as accepted by the public utility. */
+	constructor(items: readonly unknown[], entries: readonly Entry[], indexes: readonly number[]);
+	constructor(...args: [readonly Entry[]] | [readonly unknown[], readonly Entry[], readonly number[]]) {
+		if (args.length === 1) {
+			this.entries = args[0];
+			return;
+		}
+		const [items, entries, indexes] = args;
 		this.entries = entries;
-		this.indexes = indexes;
+		let next = 0;
+		this.bytes = (item) => {
+			let at = next;
+			if (at + 1 < items.length && items[at] !== item && items[at + 1] === item) at++;
+			if (at >= items.length || items[at] !== item) return undefined;
+			next = at + 1;
+			this.last = entries[at];
+			this.lastIndex = indexes[at];
+			return this.last.bytes?.[this.lastIndex] ?? null;
+		};
+		this.keep = (bytes) => {
+			if (!this.last) return;
+			this.last.bytes ??= new Array(this.last.items.length);
+			this.last.bytes[this.lastIndex] = bytes;
+			this.last = undefined;
+		};
 	}
 
 	/**
 	 * For the next item of the request: its bytes when it is a value the run handed out and was sent before, null
 	 * when it is one sent for the first time (then `keep` its bytes), undefined for any other item.
 	 */
-	bytes(item: unknown): Blob | null | undefined {
-		let at = this.next;
-		// One value skipped: a copy with a cache marker in its place.
-		if (at + 1 < this.items.length && this.items[at] !== item && this.items[at + 1] === item) at++;
-		if (at >= this.items.length || this.items[at] !== item) return undefined;
-		this.next = at + 1;
-		const entry = this.entries[at];
-		const index = this.indexes[at];
+	bytes(item: unknown): EncodedItem | null | undefined {
+		let position = this.nextEntry;
+		let index = this.nextItem;
+		let entry = this.entries[position];
+		if (!entry) return undefined;
+		if (entry.singleItem !== undefined && entry.singleItem === item) {
+			this.nextEntry = position + 1;
+			this.last = entry;
+			this.lastIndex = 0;
+			return entry.singleBytes ?? null;
+		}
+		if (entry.items[index] !== item) {
+			// A converter may replace one handed-out value with a copy carrying a cache marker.
+			// Look ahead without consuming the original until the request matches a later value.
+			if (++index === entry.items.length) {
+				entry = this.entries[++position];
+				index = 0;
+			}
+			if (!entry || entry.items[index] !== item) return undefined;
+		}
+		if (index + 1 === entry.items.length) {
+			this.nextEntry = position + 1;
+			this.nextItem = 0;
+		} else {
+			this.nextEntry = position;
+			this.nextItem = index + 1;
+		}
 		this.last = entry;
 		this.lastIndex = index;
-		return entry.bytes?.[index] ?? null;
+		return (entry.singleItem === undefined ? entry.bytes?.[index] : entry.singleBytes) ?? null;
 	}
 
 	/** The bytes of the item `bytes` returned null for. */
-	keep(bytes: Blob): void {
+	keep(bytes: EncodedItem): void {
 		const entry = this.last;
 		if (entry === undefined) return;
-		entry.bytes ??= new Array<Blob | undefined>(entry.items.length);
-		entry.bytes[this.lastIndex] = bytes;
+		if (entry.singleItem !== undefined) {
+			entry.singleBytes = bytes;
+		} else {
+			entry.bytes ??= new Array<EncodedItem | undefined>(entry.items.length);
+			entry.bytes[this.lastIndex] = bytes;
+		}
 		this.last = undefined;
 	}
 }
@@ -133,40 +232,16 @@ export class SentValues {
 export class RequestCacheRun {
 	readonly id: number;
 	private readonly table: Table;
-	/** The values handed out, in order, with their entries and indexes in them. */
-	private readonly handedItems: unknown[] = [];
+	/** Nonempty units handed out in request order. Each unit already owns its ordered items. */
 	private readonly handedEntries: Entry[] = [];
-	private readonly handedIndexes: number[] = [];
-	private ended = false;
+	private active?: { base: CachedOrder; units: RequestOrder<Entry>; derived: RequestOrder<Derived> };
 
 	constructor(table: Table) {
 		this.id = ++runs;
 		this.table = table;
-	}
-
-	/** What this run asked for, in order; the table's lists for the next run once it ends. */
-	private readonly units: Order<Entry> = { sources: [], values: [] };
-	private readonly derived: Order<Derived> = { sources: [], values: [] };
-
-	/**
-	 * For the next place of `order`: what the previous run kept there for `source`, or undefined (convert, and keep
-	 * the result). False when nothing may be kept (the message is not settled, or the previous run had another one
-	 * there): convert without keeping.
-	 */
-	private slot<T>(previous: Order<T>, order: Order<T>, source: object): T | undefined | false {
-		const position = order.sources.length;
-		order.sources.push(source);
-		order.values.push(undefined);
-		if (previous.sources[position] !== source || !settled(source)) return false;
-		return previous.values[position];
-	}
-
-	private hand(entry: Entry): void {
-		for (let i = 0; i < entry.items.length; i++) {
-			this.handedItems.push(entry.items[i]);
-			this.handedEntries.push(entry);
-			this.handedIndexes.push(i);
-		}
+		const base = table.order;
+		base.readers++;
+		this.active = { base, units: new RequestOrder(base.units), derived: new RequestOrder(base.derived) };
 	}
 
 	/**
@@ -177,22 +252,25 @@ export class RequestCacheRun {
 	 * messages) that are put into the request as they are and that nothing changes afterwards.
 	 */
 	unit<M>(sources: readonly object[], extra: unknown, out: unknown[], convert: (out: unknown[]) => M): M {
-		if (sources.length === 0) return convert(out);
-		const order = this.units;
-		const position = order.sources.length;
-		let entry = this.slot(this.table.units, order, sources[0]);
+		if (!this.active || sources.length === 0) return convert(out);
+		const order = this.active.units;
+		const position = order.length;
+		let entry = order.take(sources[0]);
 		for (let i = 1; entry !== false && i < sources.length; i++) {
-			if (!settled(sources[i])) entry = false;
+			if (!settled(sources[i])) {
+				order.set(position, sources[0], undefined);
+				entry = false;
+			}
 		}
 		// Nothing to keep: converted straight into the request.
 		if (entry === false) return convert(out);
 		if (entry !== undefined && entry.extra === extra && sameSources(entry.sources, sources)) {
 			stats.units++;
-			order.values[position] = entry;
-			this.hand(entry);
+			if (entry.items.length > 0) this.handedEntries.push(entry);
 			for (let i = 0; i < entry.items.length; i++) out.push(entry.items[i]);
 			return entry.meta as M;
 		}
+		if (entry !== undefined) order.set(position, sources[0], undefined);
 		const items: unknown[] = [];
 		const meta = convert(items);
 		let keep = true;
@@ -201,9 +279,17 @@ export class RequestCacheRun {
 			if (typeof item !== "object" || item === null) keep = false;
 		}
 		if (keep) {
-			const kept: Entry = { sources, extra, meta, items, bytes: undefined };
-			order.values[position] = kept;
-			this.hand(kept);
+			const kept: Entry = {
+				sources,
+				extra,
+				meta,
+				items,
+				bytes: undefined,
+				singleItem: items.length === 1 ? items[0] : undefined,
+				singleBytes: undefined,
+			};
+			order.set(position, sources[0], kept);
+			if (items.length > 0) this.handedEntries.push(kept);
 		}
 		for (let i = 0; i < items.length; i++) out.push(items[i]);
 		return meta;
@@ -214,30 +300,36 @@ export class RequestCacheRun {
 	 * message): `make` returns it, and the same object is returned while the message and `extra` are the same.
 	 */
 	derive<T extends object>(source: object, extra: unknown, make: () => T): T {
-		const order = this.derived;
-		const position = order.sources.length;
-		const slot = this.slot(this.table.derived, order, source);
+		if (!this.active) return make();
+		const order = this.active.derived;
+		const position = order.length;
+		const slot = order.take(source);
 		if (slot && slot.extra === extra) {
 			stats.derived++;
-			order.values[position] = slot;
 			return slot.value as T;
 		}
+		if (slot) order.set(position, source, undefined);
 		const value = make();
-		if (slot !== false) order.values[position] = { extra, value };
+		if (slot !== false) order.set(position, source, { extra, value });
 		return value;
 	}
 
 	/** The values this run handed out, for request-body.ts; a new reader on every call. */
 	sentValues(): SentValues {
-		return new SentValues(this.handedItems, this.handedEntries, this.handedIndexes);
+		return new SentValues(this.handedEntries);
 	}
 
 	/** Call once the request's messages are converted (also when it failed): its lists are the next run's. */
 	end(): void {
-		if (this.ended) return;
-		this.ended = true;
-		this.table.units = this.units;
-		this.table.derived = this.derived;
+		const active = this.active;
+		if (!active) return;
+		this.active = undefined;
+		const base = active.base;
+		const exclusive = --base.readers === 0;
+		// Another reader still needs the published version. Only that overlap requires a copy.
+		const units = active.units.finish(exclusive);
+		const derived = active.derived.finish(exclusive);
+		this.table.order = exclusive ? base : { readers: 0, units, derived };
 	}
 }
 
@@ -285,7 +377,11 @@ export function beginRequestCache(
 	if (table) {
 		tables.delete(key);
 	} else {
-		table = { units: { sources: [], values: [] }, derived: { sources: [], values: [] }, lastUse: 0 };
+		table = {
+			sessionId: conversation,
+			order: { readers: 0, units: { sources: [], values: [] }, derived: { sources: [], values: [] } },
+			lastUse: 0,
+		};
 		if (tables.size >= MAX_TABLES) {
 			const oldest = tables.keys().next().value;
 			if (oldest !== undefined) tables.delete(oldest);
@@ -297,10 +393,13 @@ export function beginRequestCache(
 	return run;
 }
 
-/** Forgets every cached conversion: the next request of each conversation converts every message. */
-export function clearRequestCache(): void {
-	tables.clear();
+/** Release the message references for one finished session, or for every session when called without an ID. */
+export function clearRequestCache(sessionId?: string): void {
+	if (sessionId === undefined) tables.clear();
+	else for (const [key, table] of tables) if (table.sessionId === sessionId) tables.delete(key);
 }
+
+registerSessionResourceCleanup(clearRequestCache, "request-cache");
 
 /** Turns the cache off (every request converts everything) or on again, without forgetting anything. For tests. */
 export function setRequestCacheEnabled(enabled: boolean): void {

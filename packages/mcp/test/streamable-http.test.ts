@@ -143,6 +143,48 @@ describe("consumeSseStream", () => {
 		controller.close();
 	});
 
+	it("dispatches fragmented UTF-8 fields at the byte limit and at EOF", async () => {
+		const data = "é𐐷".repeat(256);
+		const line = `data: ${data}`;
+		const bytes = new TextEncoder().encode(`\uFEFFid: cursor\r\nretry: 20\r\n${line}\r\n\r\n${line}`);
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				for (let i = 0; i < bytes.length; i++) controller.enqueue(bytes.subarray(i, i + 1));
+				controller.close();
+			},
+		});
+		const events: SseEvent[] = [];
+		const retries: number[] = [];
+		await consumeSseStream(stream, {
+			maxEventBytes: Buffer.byteLength(line),
+			onRetry: (ms) => retries.push(ms),
+			onEvent: (event) => events.push(event),
+		});
+		expect(events).toEqual([{ id: "cursor", data }, { data }]);
+		expect(retries).toEqual([20]);
+	});
+
+	it("counts UTF-8 bytes of an unfinished line and cancels on overflow", async () => {
+		const encoder = new TextEncoder();
+		let cancelled = false;
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(encoder.encode("id: "));
+				for (let i = 0; i < 5; i++) controller.enqueue(encoder.encode("é"));
+				controller.enqueue(encoder.encode("\n"));
+				controller.close();
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+		await expect(consumeSseStream(stream, { maxEventBytes: 13, onEvent: () => {} })).rejects.toThrow(
+			"MCP SSE event exceeds 13 bytes",
+		);
+		expect(cancelled).toBe(true);
+		expect(stream.locked).toBe(false);
+	});
+
 	it("rejects events whose data lines exceed the limit without a blank line", async () => {
 		const encoder = new TextEncoder();
 		let sent = 0;

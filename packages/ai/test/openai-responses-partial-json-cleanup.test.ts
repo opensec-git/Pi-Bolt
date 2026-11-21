@@ -32,20 +32,24 @@ async function* createFunctionCallEvents(argumentsJson: string): AsyncIterable<R
 			id: "fc_test",
 			call_id: "call_test",
 			name: "edit",
-			arguments: "",
+			arguments: '{"path":"REA',
 		},
 	} as ResponseStreamEvent;
 	yield {
 		type: "response.function_call_arguments.delta",
-		delta: '{"path":"README.md"',
+		delta: 'DME.md"',
 	} as ResponseStreamEvent;
 	yield {
 		type: "response.function_call_arguments.delta",
-		delta: ',"content":"updated"}',
+		delta: ',"content":"up',
 	} as ResponseStreamEvent;
 	yield {
 		type: "response.function_call_arguments.done",
-		arguments: argumentsJson,
+		arguments: '{"path":"README.md","content":"updated"}',
+	} as ResponseStreamEvent;
+	yield {
+		type: "response.function_call_arguments.done",
+		arguments: '{"replacement":true}',
 	} as ResponseStreamEvent;
 	yield {
 		type: "response.output_item.done",
@@ -81,6 +85,12 @@ describe("openai responses partialJson cleanup", () => {
 		const output = createOutput(model);
 		const stream = new AssistantMessageEventStream();
 		const pushSpy = vi.spyOn(stream, "push");
+		const partials: object[] = [];
+		stream.forwardTo((event) => {
+			if (event.type !== "toolcall_start" && event.type !== "toolcall_delta") return;
+			const block = event.partial.content[event.contentIndex];
+			if (block?.type === "toolCall") partials.push(block.arguments);
+		});
 		const argumentsJson = '{"path":"README.md","content":"updated"}';
 
 		await processResponsesStream(createFunctionCallEvents(argumentsJson), output, stream, model);
@@ -95,6 +105,17 @@ describe("openai responses partialJson cleanup", () => {
 		expect("partialJson" in persistedToolCall).toBe(false);
 
 		const emittedEvents = pushSpy.mock.calls.map(([event]) => event as AssistantMessageEvent);
+		expect(emittedEvents.filter((event) => event.type === "toolcall_delta").map((event) => event.delta)).toEqual([
+			'DME.md"',
+			',"content":"up',
+			'dated"}',
+		]);
+		expect(partials).toEqual([
+			{ path: "REA" },
+			{ path: "README.md" },
+			{ path: "README.md", content: "up" },
+			{ path: "README.md", content: "updated" },
+		]);
 		const toolCallEnd = emittedEvents.find((event) => event.type === "toolcall_end");
 		expect(toolCallEnd).toBeDefined();
 		if (!toolCallEnd || toolCallEnd.type !== "toolcall_end") {
@@ -105,28 +126,31 @@ describe("openai responses partialJson cleanup", () => {
 	});
 
 	// #10897
-	it("marks malformed final arguments instead of keeping the parsed prefix", async () => {
-		const model: Model<"openai-responses"> = {
-			id: "gpt-5-mini",
-			name: "GPT-5 Mini",
-			api: "openai-responses",
-			provider: "openai",
-			baseUrl: "https://api.openai.com/v1",
-			reasoning: true,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 400000,
-			maxTokens: 128000,
-		};
-		const output = createOutput(model);
-		const stream = new AssistantMessageEventStream();
-		const argumentsJson = '{"path":"README.md","content":"updated","mode":.5}';
+	it.each([undefined, { skipToolArgumentPreviews: true }])(
+		"marks malformed final arguments with options %j",
+		async (options) => {
+			const model: Model<"openai-responses"> = {
+				id: "gpt-5-mini",
+				name: "GPT-5 Mini",
+				api: "openai-responses",
+				provider: "openai",
+				baseUrl: "https://api.openai.com/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 400000,
+				maxTokens: 128000,
+			};
+			const output = createOutput(model);
+			const stream = new AssistantMessageEventStream(options);
+			const argumentsJson = '{"path":"README.md","content":"updated","mode":.5}';
 
-		await processResponsesStream(createFunctionCallEvents(argumentsJson), output, stream, model);
+			await processResponsesStream(createFunctionCallEvents(argumentsJson), output, stream, model);
 
-		const toolCall = output.content[0];
-		if (!toolCall || toolCall.type !== "toolCall") throw new Error("Expected toolCall block");
-		expect(toolCall.arguments).toEqual({});
-		expect(toolCall.argumentsError?.endsWith(`Received arguments:\n${argumentsJson}`)).toBe(true);
-	});
+			const toolCall = output.content[0];
+			if (!toolCall || toolCall.type !== "toolCall") throw new Error("Expected toolCall block");
+			expect(toolCall.arguments).toEqual({});
+			expect(toolCall.argumentsError?.endsWith(`Received arguments:\n${argumentsJson}`)).toBe(true);
+		},
+	);
 });

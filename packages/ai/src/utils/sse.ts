@@ -18,15 +18,28 @@ export interface SseDecoder {
 	skipLeadingNewline: boolean;
 }
 
+// Factory states can keep already-scanned pieces while exposing the same enumerable, writable rest string.
+// Text assigned by a caller must still be scanned, since it can contain line endings.
+const pendingLines = new WeakMap<SseDecoder, { fragments: string[]; assignedRest: string }>();
+
 export function createSseDecoder(options: { stripLineBom?: boolean } = {}): SseDecoder {
-	return {
+	const pending = { fragments: [] as string[], assignedRest: "" };
+	const state: SseDecoder = {
 		event: null,
 		data: [],
 		raw: [],
 		stripLineBom: options.stripLineBom ?? false,
-		rest: "",
+		get rest() {
+			return pending.assignedRest || pending.fragments.join("");
+		},
+		set rest(text) {
+			pending.fragments.length = 0;
+			pending.assignedRest = text;
+		},
 		skipLeadingNewline: false,
 	};
+	pendingLines.set(state, pending);
+	return state;
 }
 
 function flushSseEvent(state: SseDecoder): ServerSentEvent | null {
@@ -46,7 +59,12 @@ function flushSseEvent(state: SseDecoder): ServerSentEvent | null {
 	return event;
 }
 
-function decodeSseLine(line: string, state: SseDecoder): ServerSentEvent | null {
+function decodeSseLine(line: string, state: SseDecoder, fragments: string[]): ServerSentEvent | null {
+	if (fragments.length > 0) {
+		fragments.push(line);
+		line = fragments.join("");
+		fragments.length = 0;
+	}
 	if (state.stripLineBom && line.charCodeAt(0) === 0xfeff) {
 		line = line.slice(1);
 	}
@@ -80,7 +98,7 @@ function decodeSseLine(line: string, state: SseDecoder): ServerSentEvent | null 
  * for the next call. Lines end at "\r\n", "\r" or "\n"; a "\r" at the end ends its line at once, and a "\n" that starts
  * the next piece is then skipped. The next "\r" and "\n" are each searched for once per occurrence: searching the rest
  * of the buffer for both after every line, and slicing that rest off, made decoding a read quadratic in the number of
- * events it carried.
+ * events it carried. Unfinished lines are joined only once, when a line ending or EOF arrives.
  *
  * With `final` (the end of the stream), the text after the last line end is decoded as a line, and an event that the
  * stream ends without a blank line after is yielded too.
@@ -91,35 +109,36 @@ export function* decodeSseText(state: SseDecoder, text: string, final: boolean):
 		state.skipLeadingNewline = false;
 		if (text.charCodeAt(0) === 0x0a) lineStart = 1;
 	}
-	let buffer = text;
-	if (state.rest.length > 0) {
-		buffer = state.rest + text.slice(lineStart);
+	const pending = pendingLines.get(state);
+	const fragments = pending?.fragments ?? [];
+	const rest = pending?.assignedRest ?? state.rest;
+	if (rest.length > 0) {
+		text = rest + text.slice(lineStart);
 		lineStart = 0;
 		state.rest = "";
 	}
-
-	let carriageReturn = buffer.indexOf("\r", lineStart);
-	let newline = buffer.indexOf("\n", lineStart);
+	let carriageReturn = text.indexOf("\r", lineStart);
+	let newline = text.indexOf("\n", lineStart);
 	while (carriageReturn !== -1 || newline !== -1) {
 		const lineEnd =
 			carriageReturn === -1 ? newline : newline === -1 ? carriageReturn : Math.min(carriageReturn, newline);
 		let next = lineEnd + 1;
 		if (lineEnd === carriageReturn) {
 			if (newline === next) next += 1;
-			else if (next === buffer.length) state.skipLeadingNewline = !final;
+			else if (next === text.length) state.skipLeadingNewline = !final;
 		}
-		const event = decodeSseLine(buffer.slice(lineStart, lineEnd), state);
+		const event = decodeSseLine(text.slice(lineStart, lineEnd), state, fragments);
 		if (event) {
 			yield event;
 		}
 		lineStart = next;
-		if (carriageReturn !== -1 && carriageReturn < next) carriageReturn = buffer.indexOf("\r", next);
-		if (newline !== -1 && newline < next) newline = buffer.indexOf("\n", next);
+		if (carriageReturn !== -1 && carriageReturn < next) carriageReturn = text.indexOf("\r", next);
+		if (newline !== -1 && newline < next) newline = text.indexOf("\n", next);
 	}
 
 	if (final) {
-		if (lineStart < buffer.length) {
-			const event = decodeSseLine(buffer.slice(lineStart), state);
+		if (lineStart < text.length || fragments.length > 0) {
+			const event = decodeSseLine(text.slice(lineStart), state, fragments);
 			if (event) {
 				yield event;
 			}
@@ -128,8 +147,14 @@ export function* decodeSseText(state: SseDecoder, text: string, final: boolean):
 		if (trailingEvent) {
 			yield trailingEvent;
 		}
-	} else if (lineStart < buffer.length) {
-		state.rest = lineStart === 0 ? buffer : buffer.slice(lineStart);
+	} else if (lineStart < text.length) {
+		const tail = text.slice(lineStart);
+		if (pending) {
+			pending.assignedRest = "";
+			fragments.push(tail);
+		} else {
+			state.rest = tail;
+		}
 	}
 }
 

@@ -45,4 +45,31 @@ describe("OpenAI Responses message ID conversion", () => {
 		expect(messageIds).toEqual(["msg_pi_1", "msg_pi_1_1"]);
 		expect(new Set(messageIds).size).toBe(messageIds.length);
 	});
+	it("keeps same-model text signatures and discards foreign signatures, including in sparse histories", () => {
+		const model = getModel("openai-codex", "gpt-6.1-sol");
+		const signature = JSON.stringify({ v: 1, id: "saved_id", phase: "commentary" });
+		const content: AssistantMessage["content"] = [{ type: "text", text: "visible", textSignature: signature }];
+		const reply: AssistantMessage = {
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage,
+			stopReason: "stop",
+			timestamp: 0,
+			content,
+		};
+		const sparse = new Array<AssistantMessage["content"][number]>(2);
+		sparse[1] = content[0]!;
+		const input = convertResponsesMessages(
+			model,
+			normalizeContext({ messages: [reply, { ...reply, model: "foreign" }, { ...reply, content: sparse }] }),
+			new Set(),
+		);
+		expect(input).toMatchObject([
+			{ id: "saved_id", phase: "commentary" },
+			{ id: "msg_pi_1", phase: undefined },
+			{ id: "saved_id", phase: "commentary" },
+		]);
+	});
 });

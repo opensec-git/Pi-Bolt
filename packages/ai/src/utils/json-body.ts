@@ -14,10 +14,12 @@
  * The array, not the request body, carries the toJSON: SDKs copy the body (`{ ...params }`, `const { betas, ...body } =
  * params`) before they serialize it, and those copies keep the array but not a property that is not enumerable.
  *
- * Strings are cached by value. Serializations in the same task (one request body, read synchronously) make one
+ * Strings are cached by value within their session, and closing a session releases its escaped text. Serializations
+ * in the same task (one request body, read synchronously) make one
  * generation; a string that the latest generation did not use is kept for one more, then dropped. So the cache holds
  * about one request's long strings, and two conversations that take turns still reuse theirs.
  */
+import { registerSessionResourceCleanup } from "../session-resources.ts";
 
 const { rawJSON, isRawJSON } = JSON as unknown as {
 	rawJSON?: (text: string) => unknown;
@@ -27,9 +29,32 @@ const { rawJSON, isRawJSON } = JSON as unknown as {
 /** Shorter strings are cheap to escape again; caching them would cost more in entries than it saves. */
 const MIN_CACHED_LENGTH = 1024;
 
-let current = new Map<string, unknown>();
-let previous = new Map<string, unknown>();
+type Generation = Map<string | undefined, Map<string, unknown>>;
+const sessionOf = new WeakMap<unknown[], string>();
+let current: Generation = new Map();
+let previous: Generation = new Map();
 let generationOpen = false;
+
+registerSessionResourceCleanup((sessionId, retainedStrings) => {
+	if (sessionId === undefined) {
+		current.clear();
+		previous.clear();
+	} else {
+		const latest = current.get(sessionId);
+		const last = previous.get(sessionId);
+		current.delete(sessionId);
+		previous.delete(sessionId);
+		if (retainedStrings && (latest || last)) {
+			const kept = new Map<string, unknown>();
+			for (const text of retainedStrings()) {
+				if (text.length < MIN_CACHED_LENGTH) continue;
+				const raw = latest?.get(text) ?? last?.get(text);
+				if (raw !== undefined) kept.set(text, raw);
+			}
+			if (kept.size) current.set(sessionId, kept);
+		}
+	}
+}, "request-cache");
 
 function startGeneration(): void {
 	if (generationOpen) return;
@@ -41,13 +66,21 @@ function startGeneration(): void {
 	});
 }
 
-function cachedString(value: string, toRaw: (text: string) => unknown): unknown {
-	let raw = current.get(value);
-	if (raw === undefined) {
-		raw = previous.get(value) ?? toRaw(JSON.stringify(value));
-		current.set(value, raw);
-	}
-	return raw;
+function stringEncoder(sessionId: string | undefined, toRaw: (text: string) => unknown): (value: string) => unknown {
+	let values = current.get(sessionId);
+	const last = previous.get(sessionId);
+	return (value) => {
+		if (!values) {
+			values = new Map();
+			current.set(sessionId, values);
+		}
+		let raw = values.get(value);
+		if (raw === undefined) {
+			raw = last?.get(value) ?? toRaw(JSON.stringify(value));
+			values.set(value, raw);
+		}
+		return raw;
+	};
 }
 
 /**
@@ -55,9 +88,9 @@ function cachedString(value: string, toRaw: (text: string) => unknown): unknown 
  * objects are copied; anything JSON.stringify treats specially (toJSON, boxed primitives, class instances) is left as
  * it is, as is a cycle (JSON.stringify then throws for it as before).
  */
-function substitute(value: unknown, toRaw: (text: string) => unknown, ancestors: Set<object>): unknown {
+function substitute(value: unknown, encode: (text: string) => unknown, ancestors: Set<object>): unknown {
 	if (typeof value === "string") {
-		return value.length >= MIN_CACHED_LENGTH ? cachedString(value, toRaw) : value;
+		return value.length >= MIN_CACHED_LENGTH ? encode(value) : value;
 	}
 	// A raw JSON value already in the messages is a frozen null-prototype object: copied, it would become an ordinary one.
 	if (value === null || typeof value !== "object" || ancestors.has(value) || isRawJSON?.(value)) {
@@ -66,7 +99,7 @@ function substitute(value: unknown, toRaw: (text: string) => unknown, ancestors:
 	if (Array.isArray(value)) {
 		return typeof (value as { toJSON?: unknown }).toJSON === "function"
 			? value
-			: substituteItems(value, toRaw, ancestors);
+			: substituteItems(value, encode, ancestors);
 	}
 	const proto = Object.getPrototypeOf(value);
 	if ((proto !== Object.prototype && proto !== null) || typeof (value as { toJSON?: unknown }).toJSON === "function") {
@@ -79,7 +112,7 @@ function substitute(value: unknown, toRaw: (text: string) => unknown, ancestors:
 	ancestors.add(value);
 	const out: Record<string, unknown> = {};
 	for (const key of keys) {
-		out[key] = substitute(record[key], toRaw, ancestors);
+		out[key] = substitute(record[key], encode, ancestors);
 	}
 	ancestors.delete(value);
 	return out;
@@ -87,13 +120,13 @@ function substitute(value: unknown, toRaw: (text: string) => unknown, ancestors:
 
 function substituteItems(
 	items: readonly unknown[],
-	toRaw: (text: string) => unknown,
+	encode: (text: string) => unknown,
 	ancestors: Set<object>,
 ): unknown[] {
 	ancestors.add(items);
 	const out = new Array<unknown>(items.length);
 	for (let i = 0; i < items.length; i++) {
-		out[i] = substitute(items[i], toRaw, ancestors);
+		out[i] = substitute(items[i], encode, ancestors);
 	}
 	ancestors.delete(items);
 	return out;
@@ -107,7 +140,7 @@ export function cachedArrayToJSON(this: unknown[]): unknown {
 	try {
 		if (!rawJSON) return this;
 		startGeneration();
-		return substituteItems(this, rawJSON, new Set());
+		return substituteItems(this, stringEncoder(sessionOf.get(this), rawJSON), new Set());
 	} catch {
 		// JSON.stringify serializes what toJSON returns without calling it again: the array as it is.
 		return this;
@@ -119,24 +152,25 @@ export function cachedArrayToJSON(this: unknown[]): unknown {
  * by defining a non-enumerable toJSON on the array. Does nothing to anything but an extensible plain array without a
  * toJSON (an onPayload hook may return a frozen one). Never throws.
  */
-export function cacheJsonSerialization(items: unknown): void {
-	if (
-		!rawJSON ||
-		!isRawJSON ||
-		!Array.isArray(items) ||
-		Object.getPrototypeOf(items) !== Array.prototype ||
-		!Object.isExtensible(items) ||
-		Object.hasOwn(items, "toJSON")
-	) {
+export function cacheJsonSerialization(items: unknown, sessionId?: string): void {
+	if (!rawJSON || !isRawJSON || !Array.isArray(items) || Object.getPrototypeOf(items) !== Array.prototype) {
 		return;
 	}
 	try {
-		Object.defineProperty(items, "toJSON", {
-			value: cachedArrayToJSON,
-			configurable: true,
-			writable: true,
-			enumerable: false,
-		});
+		const descriptor = Object.getOwnPropertyDescriptor(items, "toJSON");
+		if (descriptor) {
+			if (descriptor.value !== cachedArrayToJSON) return;
+		} else {
+			if (!Object.isExtensible(items)) return;
+			Object.defineProperty(items, "toJSON", {
+				value: cachedArrayToJSON,
+				configurable: true,
+				writable: true,
+				enumerable: false,
+			});
+		}
+		if (sessionId === undefined) sessionOf.delete(items);
+		else sessionOf.set(items, sessionId);
 	} catch {
 		// Not cached; serialized as before.
 	}

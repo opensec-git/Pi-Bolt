@@ -13,7 +13,12 @@ let procEnvCache: Map<string, string> | null = null;
  * must not depend on process.env having been patched.
  */
 function getBunSandboxEnvValue(name: string): string | undefined {
-	if (typeof process === "undefined" || !process.versions?.bun || Object.keys(process.env).length > 0) {
+	if (
+		typeof process === "undefined" ||
+		!process.versions?.bun ||
+		Object.prototype.propertyIsEnumerable.call(process.env, "PATH") ||
+		Object.keys(process.env).length > 0
+	) {
 		return undefined;
 	}
 

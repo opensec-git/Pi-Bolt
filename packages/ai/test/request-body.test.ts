@@ -74,6 +74,82 @@ describe("jsonBodyParts", () => {
 		}
 	});
 
+	it("shares large tool text across call IDs while preserving every byte on edits and reordering", async () => {
+		const text = long('line\n "\ud800 é', 12000);
+		const first = { role: "tool", content: text, tool_call_id: "first" };
+		const second = { role: "tool", content: text, tool_call_id: 'id with "quotes"' };
+		const body = { messages: [first, second] };
+		const parts = jsonBodyParts(body, "messages", "repeated-tool")!;
+		expect(await new Blob(parts).text()).toBe(JSON.stringify(body));
+		const payloads = parts.filter((p) => p.size > 4096);
+		expect(payloads).toHaveLength(2);
+		expect(payloads[0]).toBe(payloads[1]);
+		first.content += "changed";
+		body.messages.reverse();
+		await expectSame(body, "messages", "repeated-tool");
+		await expectSame(
+			{
+				messages: [
+					{ ...second, name: "read" },
+					{ content: text, role: "tool", tool_call_id: "other" },
+				],
+			},
+			"messages",
+		);
+	});
+
+	it("reuses matching byte ranges and sends exact JSON across edits, insertions and eviction", async () => {
+		const original = `${"a".repeat(4094)}🪴${long('text "漢\\\n\ud800', 24000)}`;
+		const tool = (content: string, id: string) => ({ role: "tool", content, tool_call_id: id });
+		const messages = [tool(original, "base")];
+		const first = jsonBodyParts({ messages }, "messages", "edited-tool")!;
+		const baseBytes = first.find((part) => part.size > 16384)!;
+		const slice = vi.spyOn(baseBytes, "slice");
+		const position = 13001;
+		for (const edited of [
+			`x${original.slice(1)}`,
+			`${original.slice(0, position)}追加${original.slice(position)}`,
+			original.slice(0, position) + original.slice(position + 731),
+			`${original.slice(0, -6)}🪴`,
+		]) {
+			slice.mockClear();
+			messages.push(tool(edited, 'quoted "id"'));
+			await expectSame({ messages }, "messages", "edited-tool");
+			expect(slice).toHaveBeenCalled();
+		}
+		for (let i = 0; i < 10; i++) messages.push(tool(String.fromCharCode(65 + i).repeat(24000), String(i)));
+		messages.push(tool("\u0000".repeat(40000), "escaped"), tool(original, "revisit"));
+		await expectSame({ messages }, "messages", "edited-tool");
+		messages.reverse();
+		await expectSame({ messages }, "messages", "edited-tool");
+	});
+
+	it("preserves exact JSON across variable-width header edits and split surrogate pairs", async () => {
+		const rest = long('漢字\n"\\\ud800', 23000);
+		for (const boundary of ["x", "\ud800", "\udc00", "🪴"]) {
+			const prefix = `${"a".repeat(255)}\ud800`;
+			const suffix = boundary + rest;
+			const messages = [{ role: "tool", content: prefix + suffix, tool_call_id: "read" }];
+			const conversation = `header-edit-${boundary}`;
+			await expectSame({ messages }, "messages", conversation);
+			for (const head of ["", "short💡", `\u0000"\\\n${prefix}`, `${prefix}x`, `${prefix}\udc02`]) {
+				messages[0]!.content = head + suffix;
+				await expectSame({ messages }, "messages", conversation);
+			}
+			messages[0]!.content = `${prefix}${boundary}changed${rest.slice(7)}`;
+			await expectSame({ messages }, "messages", conversation);
+		}
+	});
+
+	it("encodes large and edited tool results when the runtime has no global Buffer", async () => {
+		const message = { role: "tool", content: long('λ "\n', 32000), tool_call_id: "id" };
+		const body = { messages: [message, { ...message, content: `${message.content}次` }] };
+		vi.stubGlobal("Buffer", undefined);
+		const parts = jsonBodyParts(body, "messages", "browser-tools");
+		vi.unstubAllGlobals();
+		expect(await new Blob(parts).text()).toBe(JSON.stringify(body));
+	});
+
 	it("serializes only the items that are new or changed", async () => {
 		const messages: Record<string, unknown>[] = [];
 		for (let i = 0; i < 20; i++) messages.push({ role: "user", content: [{ type: "text", text: long(`m${i} `) }] });
@@ -186,6 +262,8 @@ describe("jsonBodyParts", () => {
 		// An item's own toJSON gets its index as the key.
 		expect(await encode({ messages: [{ toJSON: (key: string) => key }] }, "messages", "c")).toBeUndefined();
 		expect(await encode({ messages: [new Date(0)] }, "messages", "c")).toBeUndefined();
+		const callable = Object.assign(() => 0, { toJSON: (key: string) => key });
+		expect(await encode({ messages: [null, callable] }, "messages", "c")).toBeUndefined();
 		// A toJSON on the array or the body, an array that is not plain, no array.
 		const withToJSON = Object.assign([...items], { toJSON: () => [] });
 		expect(await encode({ messages: withToJSON }, "messages", "c")).toBeUndefined();

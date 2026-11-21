@@ -1,13 +1,14 @@
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamMistral } from "../src/api/mistral-conversations.ts";
-import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
+import { streamSimple as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { processResponsesStream } from "../src/api/openai-responses-shared.ts";
 import { stream as streamPiMessages } from "../src/api/pi-messages.ts";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "../src/providers/faux.ts";
-import type { AssistantMessage, AssistantMessageEvent, Model, TranscriptContext } from "../src/types.ts";
+import type { AssistantMessage, AssistantMessageEvent, Model, StreamOptions, TranscriptContext } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { StreamingJsonParser, ToolCallArgumentsStream } from "../src/utils/streaming-json.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 import { allocatedBytes, collectGarbage } from "./memory-helpers.ts";
 
@@ -190,13 +191,18 @@ function* responsesEvents(deltas: readonly string[], text: string): Generator<Re
 type Path = {
 	readonly name: string;
 	/** Stream one `write` call whose argument text arrives as `deltas`. */
-	readonly stream: (deltas: readonly string[], args: object, text: string) => AssistantMessageEventStream;
+	readonly stream: (
+		deltas: readonly string[],
+		args: object,
+		text: string,
+		options?: Pick<StreamOptions, "skipToolArgumentPreviews">,
+	) => AssistantMessageEventStream;
 };
 
 const PATHS: readonly Path[] = [
 	{
 		name: "anthropic-messages",
-		stream: (deltas) =>
+		stream: (deltas, _args, _text, options) =>
 			streamAnthropic(
 				{
 					...baseModel,
@@ -207,12 +213,12 @@ const PATHS: readonly Path[] = [
 					baseUrl: "https://api.anthropic.com",
 				},
 				context,
-				{ apiKey: "sk-ant-test", fetch: sseFetch(() => anthropicEvents(deltas)) },
+				{ ...options, apiKey: "sk-ant-test", fetch: sseFetch(() => anthropicEvents(deltas)) },
 			),
 	},
 	{
 		name: "openai-completions",
-		stream: (deltas) =>
+		stream: (deltas, _args, _text, options) =>
 			streamOpenAICompletions(
 				{
 					...baseModel,
@@ -223,12 +229,12 @@ const PATHS: readonly Path[] = [
 					baseUrl: "https://api.openai.com/v1",
 				},
 				context,
-				{ apiKey: "sk-test", fetch: sseFetch(() => chatEvents(deltas, false)) },
+				{ ...options, apiKey: "sk-test", fetch: sseFetch(() => chatEvents(deltas, false)) },
 			),
 	},
 	{
 		name: "openai-responses",
-		stream: (deltas, _args, text) => {
+		stream: (deltas, _args, text, options) => {
 			const output: AssistantMessage = {
 				role: "assistant",
 				content: [],
@@ -246,7 +252,7 @@ const PATHS: readonly Path[] = [
 				stopReason: "pending",
 				timestamp: 0,
 			};
-			const events = new AssistantMessageEventStream();
+			const events = new AssistantMessageEventStream(options);
 			const model = {
 				...baseModel,
 				id: "gpt-test",
@@ -273,7 +279,7 @@ const PATHS: readonly Path[] = [
 	},
 	{
 		name: "mistral-conversations",
-		stream: (deltas) =>
+		stream: (deltas, _args, _text, options) =>
 			streamMistral(
 				{
 					...baseModel,
@@ -284,12 +290,12 @@ const PATHS: readonly Path[] = [
 					baseUrl: "https://api.mistral.ai",
 				},
 				context,
-				{ apiKey: "test", fetch: sseFetch(() => chatEvents(deltas, true)) },
+				{ ...options, apiKey: "test", fetch: sseFetch(() => chatEvents(deltas, true)) },
 			),
 	},
 	{
 		name: "pi-messages",
-		stream: (deltas, args) =>
+		stream: (deltas, args, _text, options) =>
 			streamPiMessages(
 				{
 					...baseModel,
@@ -300,17 +306,17 @@ const PATHS: readonly Path[] = [
 					baseUrl: "https://example.test/v1",
 				},
 				context,
-				{ apiKey: "test", fetch: sseFetch(() => piMessagesEvents(deltas, args)) },
+				{ ...options, apiKey: "test", fetch: sseFetch(() => piMessagesEvents(deltas, args)) },
 			),
 	},
 	{
 		name: "faux",
-		stream: (_deltas, args) => {
+		stream: (_deltas, args, _text, options) => {
 			const faux = fauxProvider({ tokenSize: { min: 8, max: 8 } });
 			faux.setResponses([
 				fauxAssistantMessage([fauxToolCall("write", args as never, { id: "call_1" })], { stopReason: "toolUse" }),
 			]);
-			return faux.provider.streamSimple!(faux.getModel(), context, {}) as AssistantMessageEventStream;
+			return faux.provider.streamSimple!(faux.getModel(), context, options) as AssistantMessageEventStream;
 		},
 	},
 ];
@@ -338,6 +344,45 @@ async function consume(
 }
 
 describe.each(PATHS)("$name tool-call argument streaming", (path) => {
+	it("can skip partial argument snapshots while preserving raw deltas and final arguments", async () => {
+		const { args, text } = writeCall(300);
+		const pieces = deltasOf(text, 32);
+		const deltas: string[] = [];
+		const snapshot = vi.spyOn(StreamingJsonParser.prototype, "snapshot");
+		try {
+			const unread = path.stream(pieces, args, text, { skipToolArgumentPreviews: true });
+			unread.forwardTo((event) => {
+				if (event.type === "toolcall_delta") deltas.push(event.delta);
+			});
+			expect((await unread.result()).content[0]).toMatchObject({ arguments: args });
+			expect(snapshot).not.toHaveBeenCalled();
+		} finally {
+			snapshot.mockRestore();
+		}
+		expect(deltas.join("")).toBe(text);
+
+		const observed = path.stream(pieces, args, text);
+		const observedDeltas: string[] = [];
+		const previews: (PropertyDescriptor | undefined)[] = [];
+		observed.forwardTo((event) => {
+			if (event.type !== "toolcall_delta") return;
+			observedDeltas.push(event.delta);
+			const block = event.partial.content[event.contentIndex];
+			if (block?.type === "toolCall") previews.push(Object.getOwnPropertyDescriptor(block, "arguments"));
+		});
+		expect((await observed.result()).content[0]).toMatchObject({ arguments: args });
+		expect(observedDeltas).toEqual(deltas);
+		const reference = new ToolCallArgumentsStream();
+		expect(previews).toEqual(
+			deltas.map((delta) => ({
+				value: reference.append(delta),
+				enumerable: true,
+				configurable: true,
+				writable: true,
+			})),
+		);
+	});
+
 	it("shows growing partial arguments, keeps stream state off every partial, and finishes with the exact arguments", async () => {
 		const { args, text } = writeCall(5_000);
 		let shown = -1;

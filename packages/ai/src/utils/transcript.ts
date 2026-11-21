@@ -106,9 +106,15 @@ export function getCurrentSystemPrompt(messages: TranscriptMessages): string {
  * system message leads, and every later system message is dropped.
  */
 export function collapseSystemMessages(context: TranscriptContext): TranscriptContext {
-	const head = getCurrentSystemMessage(context.messages);
-	const messages = context.messages.filter((message) => message.role !== "system");
-	return { messages: head ? [head, ...messages] : messages } as TranscriptContext;
+	const system: SystemMessage[] = [];
+	const messages = context.messages.filter((message) => {
+		if (message.role !== "system") return true;
+		system.push(message);
+		return false;
+	});
+	const head = getCurrentSystemMessage(system);
+	if (head) messages.unshift(head);
+	return { messages } as TranscriptContext;
 }
 
 /** Keep later system messages in place when the model accepts them; otherwise collapse them. */

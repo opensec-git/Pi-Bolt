@@ -55,6 +55,7 @@ import { ToolCallArgumentsStream } from "../utils/streaming-json.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import {
 	getDeclaredTools,
+	getInitialSystemMessage,
 	resolveTranscript,
 	resolveTranscriptTools,
 	type TranscriptContext,
@@ -335,8 +336,9 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 	context: TranscriptContext,
 	options?: OpenAICompletionsOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
-	const normalizedContext = resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages);
+	const stream = new AssistantMessageEventStream(options);
+	const compat = getCompat(model);
+	const normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages);
 
 	(async () => {
 		const output: AssistantMessage = {
@@ -369,9 +371,8 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 		let cache: RequestCacheRun | undefined;
 		try {
 			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
-			const compat = getCompat(model);
 			const grammarToolInputProperties = createGrammarToolInputProperties(
-				getDeclaredTools(normalizedContext.messages),
+				compat.supportsOpenAIGrammarTools ? getDeclaredTools(normalizedContext.messages) : undefined,
 				compat.supportsOpenAIGrammarTools,
 			);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
@@ -541,7 +542,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						input:
 							customInputProperty !== undefined
 								? customInput(customInputProperty)
-								: { kind: "json", arguments: new ToolCallArgumentsStream() },
+								: { kind: "json", arguments: new ToolCallArgumentsStream(stream) },
 					});
 					if (streamIndex !== undefined) {
 						toolCallBlocksByIndex.set(streamIndex, block);
@@ -569,6 +570,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				}
 				if (toolCall.custom && !toolCall.function && state.input.kind !== "custom") {
 					const customInputProperty = grammarToolInputProperties.get(block.name) ?? "input";
+					state.input.arguments.endPreview();
 					block.arguments = { [customInputProperty]: "" };
 					state.input = customInput(customInputProperty);
 				}
@@ -576,6 +578,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			};
 
 			for await (const chunk of iterateOpenAIStream(openaiStream, response, client)) {
+				// Let iterators consume the previous chunk's events before changing their shared partial message.
 				await options?.onProviderStreamEvent?.(chunk, model);
 				if (!chunk || typeof chunk !== "object") continue;
 
@@ -688,7 +691,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 							const input = state.input;
 							if (toolCall.function?.arguments && input.kind === "json") {
 								delta = toolCall.function.arguments;
-								block.arguments = input.arguments.append(delta);
+								input.arguments.appendTo(block, delta);
 							} else if (toolCall.custom?.input && input.kind === "custom") {
 								delta =
 									appendGrammarToolInputJsonDelta(input.buffer, input.property, toolCall.custom.input) ?? "";
@@ -821,25 +824,26 @@ function createClient(
 	});
 }
 
+/** The context has already been resolved for this model. A collapsed transcript stores all tools in its head. */
+function getCompletionsTranscriptTools(context: TranscriptContext, compat: ResolvedOpenAICompletionsCompat) {
+	if (!compat.supportsMidConvoSystemMessages) {
+		const head = getInitialSystemMessage(context.messages);
+		return { requestTools: head?.toolsAdded ?? [], foldedSystemMessages: head ? 1 : 0 };
+	}
+	return resolveTranscriptTools(context.messages, compat.supportsMidConvoToolAdditions ? "additions" : "none");
+}
+
 function buildParams(
 	model: Model<"openai-completions">,
 	context: TranscriptContext,
-	options?: OpenAICompletionsOptions,
-	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
-	cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env),
-	grammarToolInputProperties: ReadonlyMap<string, string> = createGrammarToolInputProperties(
-		getDeclaredTools(context.messages),
-		compat.supportsOpenAIGrammarTools,
-	),
+	options: OpenAICompletionsOptions | undefined,
+	compat: ResolvedOpenAICompletionsCompat,
+	cacheRetention: CacheRetention,
+	grammarToolInputProperties: ReadonlyMap<string, string>,
 	cache?: RequestCacheRun,
 ) {
-	const transcriptTools = resolveTranscriptTools(
-		context.messages,
-		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true
-			? "additions"
-			: "none",
-	);
-	const messages = convertMessages(model, context, compat, {
+	const transcriptTools = getCompletionsTranscriptTools(context, compat);
+	const messages = convertResolvedMessages(model, context, compat, transcriptTools.foldedSystemMessages, {
 		grammarToolInputProperties,
 		cache,
 	});
@@ -1233,6 +1237,17 @@ export function convertMessages(
 	options?: ConvertCompletionsMessagesOptions,
 ): ChatCompletionMessageParam[] {
 	const normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages);
+	const tools = getCompletionsTranscriptTools(normalizedContext, compat);
+	return convertResolvedMessages(model, normalizedContext, compat, tools.foldedSystemMessages, options);
+}
+
+function convertResolvedMessages(
+	model: Model<"openai-completions">,
+	normalizedContext: TranscriptContext,
+	compat: ResolvedOpenAICompletionsCompat,
+	foldedSystemMessages: number,
+	options?: ConvertCompletionsMessagesOptions,
+): ChatCompletionMessageParam[] {
 	const params: ChatCompletionMessageParam[] = [];
 
 	const normalizeToolCallId = (id: string): string => {
@@ -1283,12 +1298,6 @@ export function convertMessages(
 		if (!cache || unitSources.length === 0 || unitSources.includes(undefined)) return convert(params);
 		return cache.unit(unitSources as Message[], extra, params, convert as (out: unknown[]) => M);
 	};
-	const transcriptTools = resolveTranscriptTools(
-		normalizedContext.messages,
-		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true
-			? "additions"
-			: "none",
-	);
 	const instructionRole = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
 
 	let lastRole: string | null = null;
@@ -1307,7 +1316,7 @@ export function convertMessages(
 
 		if (msg.role === "system") {
 			// transformMessages keeps system messages in order, so their position matches the transcript.
-			const addedTools = systemIndex++ >= transcriptTools.foldedSystemMessages ? (msg.toolsAdded ?? []) : [];
+			const addedTools = systemIndex++ >= foldedSystemMessages ? (msg.toolsAdded ?? []) : [];
 			if (addedTools.length > 0) {
 				const kimiToolMessage: KimiToolSystemMessageParam = {
 					role: "system",

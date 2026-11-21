@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type AnthropicOptions, stream } from "../src/api/anthropic-messages.ts";
@@ -227,6 +228,101 @@ afterEach(() => {
 });
 
 describe("Anthropic message threads", () => {
+	it("rechecks saved text after edits, reordering, settings changes and editable hooks", async () => {
+		const run = async (immutableMessages: boolean) => {
+			const h = harness();
+			const messages = Array.from({ length: 319 }, (_, i) => user(`saved ${i}`));
+			for (let i = 0; i < 9; i++) {
+				if (i === 2) messages[13] = user("saved 13");
+				if (i === 8) messages[0] = user("edited first message");
+				if (i === 3) messages[50] = user("changed");
+				if (i === 4) [messages[15], messages[16]] = [messages[16], messages[15]];
+				messages.push(user(`next ${i}`));
+				await say(h, messages, {
+					systemPrompt: i < 5 ? "First setting" : "Second setting",
+					options: { immutableMessages, onPayload: i === 6 ? (payload) => payload : undefined },
+				});
+			}
+			return h.requests.map((r) => r.body);
+		};
+		const cached = await run(true);
+		expect(cached.map((body) => body.thread?.type)).toEqual([
+			"create",
+			"continue",
+			"continue",
+			"create",
+			"create",
+			"create",
+			"continue",
+			"continue",
+			"create",
+		]);
+		expect(cached).toEqual(await run(false));
+	});
+
+	it("verifies the same thread when switching between immutable conversion and editable payload hooks", async () => {
+		const h = harness();
+		const messages = [user("saved"), user("prompt")];
+		const lengths: number[] = [];
+		for (const hook of [false, false, true, false, true]) {
+			await say(h, messages, {
+				options: { immutableMessages: true, onPayload: hook ? (value) => value : undefined },
+			});
+			lengths.push(h.requests.at(-1)!.body.messages.length);
+			messages.push(user("again"));
+		}
+		expect(h.requests.map((r) => threadOf(r)?.type)).toEqual([
+			"create",
+			"continue",
+			"continue",
+			"continue",
+			"continue",
+		]);
+		expect(lengths).toEqual([2, 1, 1, 1, 1]);
+	});
+
+	it("starts a new thread when a response hook edited the payload that was already sent", async () => {
+		const h = harness();
+		const messages = [user("first")];
+		const shared = { role: "user", content: "sent" };
+		const options: AnthropicOptions = {
+			onPayload(payload) {
+				const body = payload as WireBody;
+				return { ...body, messages: [shared, ...body.messages.slice(1)] };
+			},
+			onResponse() {
+				shared.content = "edited";
+			},
+		};
+		await say(h, messages, { options });
+		messages.push(user("second"));
+		await say(h, messages, { options });
+		expect(h.requests.map((r) => threadOf(r)?.type)).toEqual(["create", "create"]);
+		expect(h.requests.map((r) => r.body.messages[0].content)).toEqual(["sent", "edited"]);
+	});
+
+	it("records the history accepted by a retried request", async () => {
+		const h = harness();
+		const messages = [user("first")];
+		const shared = { role: "user", content: "first attempt" };
+		const options: AnthropicOptions = {
+			maxRetries: 1,
+			onPayload(payload) {
+				const body = payload as WireBody;
+				return { ...body, messages: [shared, ...body.messages.slice(1)] };
+			},
+		};
+		h.queue.push(() => {
+			shared.content = "retry";
+			return errorResponse(429, "retry", undefined, { "retry-after-ms": "1" });
+		});
+		await say(h, messages, { options });
+		messages.push(user("second"));
+		await say(h, messages, { options });
+		expect(h.requests.map((r) => threadOf(r)?.type)).toEqual(["create", "create", "continue"]);
+		expect(h.requests[1].body.messages[0].content).toBe("retry");
+	});
+
 	it("creates a thread, then continues it with only the new messages", async () => {
 		const h = harness();
 		const messages = [user("first")];
@@ -272,6 +368,163 @@ describe("Anthropic message threads", () => {
 			role: "user",
 			content: [{ type: "tool_result", tool_use_id: "toolu_1" }],
 		});
+	});
+
+	it.each([
+		[{ cache_control: "before" }, { cache_control: "after" }],
+		[{ content: "before" }, { content: [{ type: "text", text: "before" }] }],
+	])("starts a new thread for a changed tool argument named like message metadata", async (before, after) => {
+		const h = harness();
+		h.queue.push((request) =>
+			reply(request, { id: "tool-reply", toolCalls: [{ id: "call", name: "lookup", input: before }] }),
+		);
+		const messages = [user("inspect")];
+		const first = await say(h, messages);
+		messages[1] = {
+			...first,
+			content: first.content.map((block) => (block.type === "toolCall" ? { ...block, arguments: after } : block)),
+		};
+		messages.push(toolResult("call", "lookup"));
+		await say(h, messages);
+		expect(threadOf(h.requests[1])).toEqual({ type: "create" });
+		expect(h.requests[1].body.messages[1].content).toContainEqual({
+			type: "tool_use",
+			id: "call",
+			name: "lookup",
+			input: after,
+		});
+	});
+
+	it.each([false, true])(
+		"continues a thread across immutable-mode changes after starting with %s",
+		async (initial) => {
+			const h = harness();
+			const messages = Array.from({ length: 320 }, (_, i) => user(`saved ${i} ${"x".repeat(500)}`));
+			for (const [i, immutableMessages] of [initial, !initial, initial, !initial, initial, !initial].entries()) {
+				messages.push(user("again"));
+				await say(h, messages, { systemPrompt: i < 3 ? "First" : "Second", options: { immutableMessages } });
+			}
+			expect(h.requests.map((r) => r.body.thread?.type)).toEqual([
+				"create",
+				"continue",
+				"continue",
+				"create",
+				"continue",
+				"continue",
+			]);
+			for (const request of h.requests.filter((r) => r.body.thread?.type === "continue")) {
+				expect(request.body.messages).toHaveLength(1);
+			}
+		},
+	);
+
+	it("reads a tool argument's current JSON before deciding which history to send", async () => {
+		const seed = harness();
+		seed.queue.push((request) =>
+			reply(request, { id: "initial-call", toolCalls: [{ id: "call", name: "lookup", input: { path: "a" } }] }),
+		);
+		const messages = [user("inspect")];
+		const assistant = await say(seed, messages);
+		let path = "first";
+		messages[1] = {
+			...assistant,
+			content: assistant.content.map((block) =>
+				block.type === "toolCall"
+					? {
+							...block,
+							arguments: {
+								get path() {
+									return path;
+								},
+							},
+						}
+					: block,
+			),
+		};
+		messages.push(toolResult("call", "lookup"));
+		const h = harness();
+		for (const next of ["first", "first", "second"]) {
+			path = next;
+			messages.push(user("again"));
+			await say(h, messages, { options: { immutableMessages: true } });
+		}
+		expect(h.requests.map((r) => r.body.thread?.type)).toEqual(["create", "continue", "create"]);
+		expect(h.requests[2].body.messages[1].content).toContainEqual({
+			type: "tool_use",
+			id: "call",
+			name: "lookup",
+			input: { path: "second" },
+		});
+	});
+
+	it("keeps tool-result requests identical when cached file or image content is replaced", async () => {
+		async function replay(immutableMessages: boolean) {
+			const seed = harness();
+			seed.queue.push((request) =>
+				reply(request, { id: "tool-reply", toolCalls: [{ id: "call", name: "lookup", input: { path: "a" } }] }),
+			);
+			const messages = [user("inspect")];
+			const options = { immutableMessages };
+			await say(seed, messages, { options });
+			const h = harness();
+			const resultIndex = messages.length;
+			const result = toolResult("call", "lookup");
+			const image = { type: "image" as const, mimeType: "image/png", data: "YQ==" };
+			messages.push({ ...result, content: [{ type: "text", text: "a".repeat(500) }, image] });
+			for (let i = 0; i < 5; i++) {
+				if (i === 3 || i === 4) {
+					messages[resultIndex] = {
+						...result,
+						content: [
+							{ type: "text", text: "b".repeat(500) },
+							{ ...image, data: i === 3 ? "YQ==" : "Yg==" },
+						],
+					};
+				}
+				messages.push(user("again"));
+				await say(h, messages, { options, model: { ...baseModel, input: ["text", "image"] } });
+			}
+			return h.requests.map((request) => request.body);
+		}
+		const cached = await replay(true);
+		expect(cached.map((body) => body.thread?.type)).toEqual(["create", "continue", "continue", "create", "create"]);
+		expect(cached).toEqual(await replay(false));
+	});
+
+	it("continues across a moving cache marker on a large text block", async () => {
+		const h = harness();
+		const messages = [user("x".repeat(2048))];
+		await say(h, messages);
+		messages.push(user("second"));
+		await say(h, messages);
+		expect(threadOf(h.requests[1])).toEqual({ type: "continue", previous_message_id: "msg_1" });
+	});
+
+	it.each([
+		[
+			"literal fingerprint marker",
+			"x".repeat(2048),
+			"\0h" + createHash("sha256").update("x".repeat(2048)).digest("hex"),
+		],
+		["medium text marker", "x".repeat(384), `\0h${createHash("sha256").update("x".repeat(384)).digest("hex")}`],
+		["medium unpaired surrogate", `${"x".repeat(383)}\ud800`, `${"x".repeat(383)}\ud801`],
+		["unpaired surrogate", "x".repeat(2047) + "\ud800", "x".repeat(2047) + "\ud801"],
+	])("detects a changed %s in extension-provided history", async (_name, before, after) => {
+		const h = harness();
+		const messages = [user("first")];
+		let text = before;
+		const options: AnthropicOptions = {
+			onPayload(payload) {
+				const body = payload as WireBody;
+				return { ...body, messages: [{ role: "user", content: text }, ...body.messages.slice(1)] };
+			},
+		};
+		await say(h, messages, { options });
+		text = after;
+		messages.push(user("second"));
+		await say(h, messages, { options });
+		expect(threadOf(h.requests[1])).toEqual({ type: "create" });
+		expect(h.requests[1].body.messages[0].content).toBe(after);
 	});
 
 	it("continues when the effort level changes between turns", async () => {
@@ -343,6 +596,23 @@ describe("Anthropic message threads", () => {
 		await say(h, messages);
 		await turn(h, messages);
 		expect(threadOf(h.requests[1])).toEqual({ type: "create" });
+	});
+
+	it("checks the history when the runtime has no native hash module", async () => {
+		const builtin = vi.spyOn(process, "getBuiltinModule").mockReturnValue(undefined);
+		try {
+			const h = harness();
+			const messages = [user("first")];
+			await say(h, messages);
+			messages.push(user("second"));
+			await say(h, messages);
+			messages[0] = user("edited first message");
+			messages.push(user("third"));
+			await say(h, messages);
+			expect(h.requests.map((request) => threadOf(request)?.type)).toEqual(["create", "continue", "create"]);
+		} finally {
+			builtin.mockRestore();
+		}
 	});
 
 	it.each([

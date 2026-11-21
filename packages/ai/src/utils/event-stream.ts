@@ -1,6 +1,6 @@
-import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
+import type { AssistantMessage, AssistantMessageEvent, StreamOptions } from "../types.ts";
 
-class FifoQueue<T> {
+export class FifoQueue<T> {
 	private incoming: T[] = [];
 	private outgoing: T[] = [];
 
@@ -113,8 +113,17 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 export class AssistantMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	readonly #startedAt = Date.now();
 	readonly #startedAtMonotonic = performance.now();
+	#finalizers?: Set<() => void>;
+	/** @internal Whether streamed JSON arguments may wait until completion. */
+	readonly skipToolArgumentPreviews: boolean;
 
-	constructor() {
+	readonly #skipTextDeltas: boolean;
+	readonly #coalesceTextDeltas: boolean;
+	#lastTextAt = -Infinity;
+	#pendingText?: Extract<AssistantMessageEvent, { type: "text_delta" | "thinking_delta" }>;
+	#textTimer?: ReturnType<typeof setTimeout>;
+
+	constructor(options?: Pick<StreamOptions, "skipToolArgumentPreviews" | "skipTextDeltas" | "coalesceTextDeltas">) {
 		super(
 			(event) => event.type === "done" || event.type === "error",
 			(event) => {
@@ -126,17 +135,68 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 				throw new Error("Unexpected event type for final result");
 			},
 		);
+		this.skipToolArgumentPreviews = options?.skipToolArgumentPreviews === true;
+		this.#skipTextDeltas = options?.skipTextDeltas === true;
+		this.#coalesceTextDeltas = options?.coalesceTextDeltas === true;
 	}
 
 	override push(event: AssistantMessageEvent): void {
-		if (event.type === "done") this.#time(event.message);
-		else if (event.type === "error") this.#time(event.error);
+		if (event.type === "text_delta" || event.type === "thinking_delta") {
+			if (this.#skipTextDeltas || this.done) return;
+			if (this.#coalesceTextDeltas) {
+				const now = performance.now();
+				if (
+					this.#pendingText &&
+					(event.type !== this.#pendingText.type || event.contentIndex !== this.#pendingText.contentIndex)
+				)
+					this.#flushText();
+				// Deliver isolated updates immediately. A burst can share a notification within a fraction of a TUI frame.
+				const wait = 4 - (now - this.#lastTextAt);
+				if (wait > 0 || this.#pendingText) {
+					this.#pendingText = { ...event, delta: (this.#pendingText?.delta ?? "") + event.delta };
+					if (wait <= 0) this.#flushText();
+					else this.#textTimer ??= setTimeout(() => this.#flushText(), wait);
+					return;
+				}
+				this.#lastTextAt = now;
+			}
+		} else if (this.#pendingText) this.#flushText();
+		if (event.type === "done" || event.type === "error") {
+			this.#finalize();
+			this.#time(event.type === "done" ? event.message : event.error);
+		}
 		super.push(event);
 	}
 
+	#flushText(): void {
+		if (!this.#pendingText) return;
+		clearTimeout(this.#textTimer);
+		this.#textTimer = undefined;
+		const pending = this.#pendingText;
+		this.#pendingText = undefined;
+		this.#lastTextAt = performance.now();
+		super.push(pending);
+	}
+
 	override end(result?: AssistantMessage): void {
+		if (this.#pendingText) this.#flushText();
+		this.#finalize();
 		if (result !== undefined) this.#time(result);
 		super.end(result);
+	}
+
+	/** @internal Release an open content block before a terminal event reaches consumers. */
+	onFinalize(finalizer: () => void): () => void {
+		this.#finalizers ??= new Set();
+		const finalizers = this.#finalizers;
+		finalizers.add(finalizer);
+		return () => finalizers.delete(finalizer);
+	}
+
+	#finalize(): void {
+		if (!this.#finalizers) return;
+		for (const finalize of this.#finalizers) finalize();
+		this.#finalizers = undefined;
 	}
 
 	#time(message: AssistantMessage): void {

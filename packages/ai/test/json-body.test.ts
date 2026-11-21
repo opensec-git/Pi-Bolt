@@ -2,8 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimple as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { streamSimple as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { streamSimple as streamOpenAIResponses } from "../src/api/openai-responses.ts";
+import { cleanupSessionResources, clearSessionRequestCaches } from "../src/session-resources.ts";
 import type { Api, FetchFunction, Model, TranscriptContext } from "../src/types.ts";
-import { cacheJsonSerialization } from "../src/utils/json-body.ts";
+import { cachedArrayToJSON, cacheJsonSerialization } from "../src/utils/json-body.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 const long = (seed: string, length = 5000) => seed.repeat(Math.ceil(length / seed.length)).slice(0, length);
@@ -44,6 +45,42 @@ function sample(): unknown[] {
 }
 
 describe("cacheJsonSerialization", () => {
+	it("keeps the encodings of surviving strings through compaction", () => {
+		const items = [long("omitted"), long("retained")];
+		cacheJsonSerialization(items, "chat");
+		const before = cachedArrayToJSON.call(items) as unknown[];
+		clearSessionRequestCaches("chat", () => [items[1]]);
+		const after = cachedArrayToJSON.call(items) as unknown[];
+		expect(after[0]).not.toBe(before[0]);
+		expect(after[1]).toBe(before[1]);
+		expect(JSON.stringify(after)).toBe(JSON.stringify([...items]));
+	});
+
+	it("releases both generations for the closed session and preserves other sessions' encoded text", async () => {
+		const closed = [long("old tool output")];
+		const live = [long("live tool output")];
+		cacheJsonSerialization(closed, "closed");
+		cacheJsonSerialization(live, "live");
+		const first = (items: string[]) => (cachedArrayToJSON.call(items) as unknown[])[0];
+		const oldValue = first(closed);
+		const liveValue = first(live);
+		await Promise.resolve();
+		const current = [long("latest tool output")];
+		cacheJsonSerialization(current, "closed");
+		const currentValue = first(current);
+		cleanupSessionResources("closed");
+		expect(first(closed)).not.toBe(oldValue);
+		expect(first(current)).not.toBe(currentValue);
+		expect(first(live)).toBe(liveValue);
+		const anonymous = [long("anonymous tool output")];
+		cacheJsonSerialization(anonymous);
+		const anonymousValue = first(anonymous);
+		cleanupSessionResources();
+		expect(first(live)).not.toBe(liveValue);
+		expect(first(anonymous)).not.toBe(anonymousValue);
+		expect(JSON.stringify(closed)).toBe(JSON.stringify([...closed]));
+	});
+
 	it("serializes byte-identically to JSON.stringify: first seen, then cached, then from the cache", () => {
 		const plain = sample();
 		const cached = sample();

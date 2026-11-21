@@ -34,6 +34,7 @@
  */
 
 import type { JsonValue, ToolCall } from "../types.ts";
+import type { AssistantMessageEventStream } from "./event-stream.ts";
 import { parseToolCallArguments } from "./json-parse.ts";
 
 type JsonContainer = { [key: string]: JsonValue } | JsonValue[];
@@ -120,14 +121,22 @@ export class StreamingJsonParser {
 	#snapshot: JsonValue | undefined = undefined;
 	/** Changes of the piece being read. */
 	#changes: OpenChange[] = [];
+	readonly #reportChanges: boolean;
+
+	/** Readers that only take snapshots can skip building a change list and paths for every piece. */
+	constructor(options?: { reportChanges?: boolean }) {
+		this.#reportChanges = options?.reportChanges ?? true;
+	}
 
 	/**
 	 * Read the next piece of text; returns the changes it made, in order. Costs time linear in `text.length`.
 	 */
 	append(text: string): readonly JsonChange[] {
 		this.#credit += CREDIT_PER_APPEND + CREDIT_PER_CHARACTER * text.length;
-		this.#changes = [];
-		if (this.#string !== undefined) this.#string.change = undefined;
+		if (this.#reportChanges) {
+			this.#changes = [];
+			if (this.#string !== undefined) this.#string.change = undefined;
+		}
 		let index = 0;
 		while (index < text.length && !this.#done) {
 			const open = this.#string;
@@ -263,7 +272,7 @@ export class StreamingJsonParser {
 
 	/** The path of a value at `slot` in the innermost open container, when its changes are reported. */
 	#reportedPath(slot: Slot | undefined): JsonPath | undefined {
-		if (slot === undefined) return undefined;
+		if (!this.#reportChanges || slot === undefined) return undefined;
 		if (slot.kind === "root") return [];
 		const frame = this.#stack.at(-1)!;
 		if (!frame.reportsInside) return undefined;
@@ -444,27 +453,53 @@ export class StreamingJsonParser {
 	}
 }
 
+// Bound the extra bookkeeping even for streams with a different piece size on every delta.
+const MAX_PENDING_SIZE_RUNS = 32_768;
+
 /**
  * The arguments of one streaming tool call: the raw text, for the one full parse when the call ends, and a
- * `StreamingJsonParser` for the partial arguments in between. Providers keep one per call in their own stream state,
- * never on the content block, so the raw text never reaches partial messages or transcripts.
+ * `StreamingJsonParser` for plain JSON previews. A caller that only needs raw deltas can skip the previews. If the
+ * stream ends before the call does, its final message still gets the same partial value as a normal stream.
  */
 export class ToolCallArgumentsStream {
-	#text = "";
-	#parser = new StreamingJsonParser();
+	#parsedText = "";
+	#pending = "";
+	// Replay the original pieces on interruption to reproduce the preview parser's per-delta copy budget.
+	// Runs of equal sizes (including any number of empty deltas) use one pair of numbers.
+	#earlierRuns?: number[];
+	#pieceSize = 0;
+	#pieceCount = 0;
+	#parser?: StreamingJsonParser;
 	#snapshot: JsonValue | undefined = undefined;
 	#arguments: ToolCall["arguments"] = {};
+	readonly #rawDeltaStream?: AssistantMessageEventStream;
+	#unregister?: () => void;
+
+	constructor(stream?: AssistantMessageEventStream) {
+		if (stream?.skipToolArgumentPreviews) this.#rawDeltaStream = stream;
+	}
 
 	/** The raw argument text received so far. */
 	get text(): string {
-		return this.#text;
+		return this.#parsedText + this.#pending;
 	}
 
 	/** Append a piece of argument text; returns the partial arguments, a new object whenever they changed. */
 	append(delta: string): ToolCall["arguments"] {
-		this.#text += delta;
-		this.#parser.append(delta);
-		return this.#partial();
+		if (this.#pieceCount) this.#partial();
+		this.#parsedText += delta;
+		this.#parsePiece(delta);
+		return this.#arguments;
+	}
+
+	/** Append a provider delta, updating the ordinary arguments property when previews are enabled. */
+	appendTo(block: ToolCall, delta: string): void {
+		if (this.#rawDeltaStream) {
+			this.#track(block, this.#rawDeltaStream);
+			this.#queue(delta);
+		} else {
+			block.arguments = this.append(delta);
+		}
 	}
 
 	/**
@@ -472,30 +507,106 @@ export class ToolCallArgumentsStream {
 	 * `delta`; otherwise starts over with `text`. Either way returns the partial arguments of `text`.
 	 */
 	replace(text: string): { readonly delta: string | undefined; readonly arguments: ToolCall["arguments"] } {
-		if (text.startsWith(this.#text)) {
-			const delta = text.slice(this.#text.length);
-			return { delta, arguments: delta === "" ? this.#partial() : this.append(delta) };
-		}
-		this.#text = "";
-		this.#parser = new StreamingJsonParser();
-		return { delta: undefined, arguments: this.append(text) };
+		return { delta: this.#replaceText(text), arguments: this.#partial() };
+	}
+
+	/** Replace a live block's text and return the missing suffix, if the previous text was a prefix. */
+	replaceFor(block: ToolCall, text: string): string | undefined {
+		const delta = this.#replaceText(text);
+		if (this.#rawDeltaStream) this.#track(block, this.#rawDeltaStream);
+		else block.arguments = this.#partial();
+		return delta;
 	}
 
 	/** The final arguments: one full parse of the complete text, which reports malformed arguments. */
 	finish(): Pick<ToolCall, "arguments" | "argumentsError"> {
-		return parseToolCallArguments(this.#text);
+		this.endPreview();
+		return parseToolCallArguments(this.text);
+	}
+
+	/** The provider has supplied authoritative arguments or switched this call to another input format. */
+	endPreview(): void {
+		this.#unregister?.();
+		this.#unregister = undefined;
+	}
+
+	#replaceText(text: string): string | undefined {
+		const previous = this.text;
+		if (text.startsWith(previous)) {
+			const delta = text.slice(previous.length);
+			if (delta) this.#queue(delta);
+			return delta;
+		}
+		// If a consumer retained a preview, preserve identity even across two malformed, non-object roots.
+		if (this.#parser) {
+			this.#partial();
+			this.#parser = new StreamingJsonParser({ reportChanges: false });
+		}
+		this.#parsedText = "";
+		this.#pending = "";
+		this.#earlierRuns = undefined;
+		this.#pieceCount = 0;
+		this.#queue(text);
+		return undefined;
+	}
+
+	#queue(delta: string): void {
+		if (this.#pieceSize !== delta.length) {
+			if (this.#earlierRuns?.length === 2 * MAX_PENDING_SIZE_RUNS) this.#partial();
+			if (this.#pieceCount) {
+				this.#earlierRuns ??= [];
+				this.#earlierRuns.push(this.#pieceSize, this.#pieceCount);
+			}
+			this.#pieceSize = delta.length;
+			this.#pieceCount = 0;
+		}
+		this.#pending += delta;
+		this.#pieceCount++;
+	}
+
+	#track(block: ToolCall, stream: AssistantMessageEventStream): void {
+		// A provider can terminate without toolcall_end, including with an error referring to a different message.
+		this.#unregister ??= stream.onFinalize(() => {
+			block.arguments = this.#partial();
+			this.endPreview();
+		});
 	}
 
 	#partial(): ToolCall["arguments"] {
+		if (!this.#pieceCount) return this.#arguments;
+		let offset = 0;
+		if (this.#earlierRuns) {
+			for (let i = 0; i < this.#earlierRuns.length; i += 2) {
+				offset = this.#readRun(offset, this.#earlierRuns[i]!, this.#earlierRuns[i + 1]!);
+			}
+			this.#earlierRuns = undefined;
+		}
+		this.#readRun(offset, this.#pieceSize, this.#pieceCount);
+		this.#parsedText += this.#pending;
+		this.#pending = "";
+		this.#pieceCount = 0;
+		return this.#arguments;
+	}
+
+	#readRun(offset: number, size: number, count: number): number {
+		for (let i = 0; i < count; i++) {
+			this.#parsePiece(this.#pending.slice(offset, offset + size));
+			offset += size;
+		}
+		return offset;
+	}
+
+	#parsePiece(delta: string): void {
+		this.#parser ??= new StreamingJsonParser({ reportChanges: false });
+		this.#parser.append(delta);
 		const snapshot = this.#parser.snapshot();
-		if (snapshot === this.#snapshot) return this.#arguments;
+		if (snapshot === this.#snapshot) return;
 		this.#snapshot = snapshot;
 		// Tool arguments are an object; any other partial value shows as no arguments yet.
 		this.#arguments =
 			typeof snapshot === "object" && snapshot !== null && !Array.isArray(snapshot)
 				? (snapshot as ToolCall["arguments"])
 				: {};
-		return this.#arguments;
 	}
 }
 

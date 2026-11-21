@@ -1,5 +1,6 @@
+import { setImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { completeSimple } from "../src/compat.ts";
+import { completeSimple, streamSimple } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
 
 const mockState = vi.hoisted(() => ({
@@ -90,6 +91,36 @@ describe("openai-completions provider stream events", () => {
 
 		expect(message.content).toEqual([{ type: "text", text: "hello" }]);
 		expect(events).toEqual([firstChunk, finalChunk]);
+	});
+
+	it("waits for the raw observer before publishing text or dispatching the next chunk", async () => {
+		const first = { choices: [{ index: 0, delta: { content: "a" } }] };
+		const second = { choices: [{ index: 0, delta: { content: "b" }, finish_reason: "stop" }] };
+		mockState.chunks = [first, second];
+		const order: string[] = [];
+
+		const stream = streamSimple(
+			openRouterModel(),
+			{ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] },
+			{
+				apiKey: "test",
+				onProviderStreamEvent: async (chunk) => {
+					if (chunk === first) {
+						order.push("first observer started");
+						await setImmediate();
+						order.push("first observer finished");
+					} else {
+						order.push("second observer");
+					}
+				},
+			},
+		);
+		stream.forwardTo((event) => {
+			if (event.type === "text_delta") order.push(event.delta);
+		});
+
+		expect((await stream.result()).stopReason).toBe("stop");
+		expect(order).toEqual(["first observer started", "first observer finished", "a", "second observer", "b"]);
 	});
 
 	// Regression test for #9980.

@@ -1387,7 +1387,7 @@ describe("openai-codex streaming", () => {
 		});
 		await streamResult.result();
 	});
-	it("forwards auto transport and raw provider events from streamSimple", async () => {
+	it.each(["text", "mixed binary", "mixed error"])("keeps raw %s provider events in arrival order", async (frames) => {
 		const token = mockToken();
 		const sentBodies: unknown[] = [];
 		const providerEvents: unknown[] = [];
@@ -1455,8 +1455,25 @@ describe("openai-codex streaming", () => {
 				];
 				queueMicrotask(() => {
 					for (const event of events) {
-						this.dispatch("message", { data: JSON.stringify(event) });
+						const text = JSON.stringify(event);
+						if (frames !== "text" && event.type === "response.output_text.delta") {
+							const data = new Blob([text]);
+							this.dispatch("message", {
+								data: {
+									async arrayBuffer() {
+										await new Promise<void>((resolve) => setTimeout(resolve, 5));
+										return data.arrayBuffer();
+									},
+								},
+							});
+						} else if (frames !== "text" && event.type === "response.output_item.done") {
+							this.dispatch("message", { data: new TextEncoder().encode(text) });
+						} else {
+							this.dispatch("message", { data: text });
+						}
 					}
+					if (frames === "mixed error") this.dispatch("error", { message: "closed after completion" });
+					if (frames !== "text") this.dispatch("close", { code: 1000, wasClean: true });
 				});
 			}
 
@@ -1980,7 +1997,7 @@ describe("openai-codex streaming", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("falls back to SSE when a websocket is idle before the first event", async () => {
+	it.each(["silent", "pending Blob"])("falls back to SSE on a %s socket timeout", async (frame) => {
 		vi.useFakeTimers();
 		const token = mockToken();
 		const sentBodies: unknown[] = [];
@@ -2029,6 +2046,9 @@ describe("openai-codex streaming", () => {
 
 			send(data: string): void {
 				sentBodies.push(JSON.parse(data));
+				if (frame === "pending Blob") {
+					queueMicrotask(() => this.dispatch("message", { data: { arrayBuffer: () => new Promise(() => {}) } }));
+				}
 			}
 
 			close(): void {
@@ -3083,13 +3103,18 @@ describe("openai-codex request reuse", () => {
 	});
 
 	/** A WebSocket that answers every request with an empty completed response `resp_<n>`. */
-	function stubWebSocket(sent: Array<{ input: unknown[]; previous_response_id?: string }>): void {
+	function stubWebSocket(sent: Array<{ input: unknown[]; previous_response_id?: string }>) {
+		let closeFromPeer = () => {};
 		class MockWebSocket {
 			static OPEN = 1;
 			readyState = MockWebSocket.OPEN;
 			private listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			constructor(_url: string, _protocols?: unknown) {
+				closeFromPeer = () => {
+					this.readyState = 3;
+					this.dispatch("close", { code: 1000 });
+				};
 				queueMicrotask(() => this.dispatch("open", {}));
 			}
 
@@ -3128,7 +3153,225 @@ describe("openai-codex request reuse", () => {
 			}
 		}
 		vi.stubGlobal("WebSocket", MockWebSocket);
+		return () => closeFromPeer();
 	}
+
+	it("releases the idle expiry timer when the server closes and reconnects with full history", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+			const closeFromPeer = stubWebSocket(sent);
+			const baseTimers = vi.getTimerCount();
+			const request = () =>
+				streamOpenAICodexResponses(model, normalizeContext({ messages: turn(1) }), {
+					apiKey: mockToken(),
+					sessionId: "peer-close",
+					transport: "websocket-cached",
+				}).result();
+			expect((await request()).stopReason).toBe("stop");
+			expect(vi.getTimerCount()).toBe(baseTimers + 1);
+			closeFromPeer();
+			expect(vi.getTimerCount()).toBe(baseTimers);
+			expect((await request()).stopReason).toBe("stop");
+			expect(sent[1]).toEqual(sent[0]);
+			closeFromPeer();
+			expect(vi.getTimerCount()).toBe(baseTimers);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps one idle cache entry when two connections start together", async () => {
+		vi.useFakeTimers();
+		try {
+			const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+			stubWebSocket(sent);
+			const start = vi.getTimerCount();
+			const request = () =>
+				streamOpenAICodexResponses(model, normalizeContext({ messages: turn(1) }), {
+					apiKey: mockToken(),
+					sessionId: "concurrent-open",
+					transport: "websocket-cached",
+				}).result();
+			const replies = await Promise.all([request(), request()]);
+			expect(replies.map((reply) => reply.stopReason)).toEqual(["stop", "stop"]);
+			expect(sent.map((frame) => frame.previous_response_id)).toEqual([undefined, undefined]);
+			expect(vi.getTimerCount()).toBe(start + 1);
+			await request();
+			expect(sent[2].previous_response_id).toBe("resp_1");
+			closeOpenAICodexWebSocketSessions("concurrent-open");
+			expect(vi.getTimerCount()).toBe(start);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+	it("starts a full request when a shared tool schema changes after sending", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const schema = Type.Object({ path: Type.String({ description: "original" }) });
+		for (const description of ["original", "edited", "edited"]) {
+			Object.assign(schema.properties.path, { description });
+			await streamOpenAICodexResponses(
+				model,
+				normalizeContext({
+					messages: turn(1),
+					tools: [{ name: "lookup", description: "Lookup", parameters: schema }],
+				}),
+				{ apiKey: mockToken(), sessionId: "schema", transport: "websocket-cached" },
+			).result();
+		}
+		expect(sent.map((r) => r.previous_response_id)).toEqual([undefined, undefined, "resp_2"]);
+	});
+
+	it("replays without consuming or replacing the conversation's continuation", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		for (const replay of [false, true, false]) {
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+				apiKey: mockToken(),
+				sessionId: "replay",
+				transport: "websocket-cached",
+				disableContinuation: replay,
+			}).result();
+		}
+		expect(sent.map((r) => r.previous_response_id)).toEqual([undefined, undefined, "resp_1"]);
+	});
+
+	it.each(["input", "instructions"])("remembers the %s that a payload hook actually sent", async (field) => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const shared = { role: "user", content: "original" };
+		const payload = { instructions: "original", input: [shared] };
+		for (const text of ["original", "edited", "edited"]) {
+			if (field === "input") shared.content = text;
+			else payload.instructions = text;
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+				apiKey: mockToken(),
+				sessionId: "mutable-hook",
+				transport: "websocket-cached",
+				onPayload: () => payload,
+			}).result();
+		}
+		expect(sent[1].previous_response_id).toBeUndefined();
+		expect(sent[1]).toMatchObject(
+			field === "input" ? { input: [{ content: "edited" }] } : { instructions: "edited" },
+		);
+		expect(sent[2].previous_response_id).toBe("resp_2");
+	});
+
+	it.each([
+		{
+			name: "a marker in the instructions",
+			payload: { instructions: "\0pi-codex-ws-input", input: [] },
+			wire: { instructions: "\0pi-codex-ws-input" },
+		},
+		{
+			name: "a root serializer",
+			payload: { input: [], toJSON: (key: string) => ({ input: [key] }) },
+			wire: { input: [""] },
+		},
+		{
+			name: "an array serializer",
+			payload: { input: Object.assign([], { toJSON: (key: string) => [key] }) },
+			wire: { input: ["input"] },
+		},
+		{
+			name: "an explicit response id",
+			payload: { previous_response_id: "external", input: [] },
+			wire: { previous_response_id: "external" },
+		},
+	])("preserves $name and restarts automatic continuation afterwards", async ({ payload, wire }) => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		for (const value of [{ input: [] }, payload, { input: [] }, { input: [] }]) {
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+				apiKey: mockToken(),
+				sessionId: "custom-frame",
+				transport: "websocket-cached",
+				onPayload: () => value,
+			}).result();
+		}
+		expect(sent).toHaveLength(4);
+		expect(sent[1]).toMatchObject(wire);
+		expect(sent[2].previous_response_id).toBeUndefined();
+		expect(sent[3].previous_response_id).toBe("resp_3");
+	});
+
+	it("keeps a detached history when a hook removes itself during its callback", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const item = { role: "user", content: "original" };
+		const options: NonNullable<Parameters<typeof streamOpenAICodexResponses>[2]> = {
+			apiKey: mockToken(),
+			sessionId: "self-removing-hook",
+			transport: "websocket-cached",
+		};
+		for (const text of ["original", "edited", "edited"]) {
+			item.content = text;
+			options.onPayload = () => {
+				options.onPayload = undefined;
+				return { input: [item] };
+			};
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), options).result();
+		}
+		expect(sent.map((r) => r.previous_response_id)).toEqual([undefined, undefined, "resp_2"]);
+	});
+
+	it("runs input and metadata serializers in frame property order", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		let read = false;
+		const payload = {
+			instructions: { toJSON: () => (read ? "too late" : "before") },
+			input: [
+				{
+					toJSON: () => {
+						read = true;
+						return "message";
+					},
+				},
+			],
+			user: { toJSON: () => (read ? "after" : "too early") },
+		};
+		await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+			apiKey: mockToken(),
+			sessionId: "serializer-order",
+			transport: "websocket-cached",
+			onPayload: () => payload,
+		}).result();
+		expect(sent[0]).toMatchObject({ instructions: "before", input: ["message"], user: "after" });
+	});
+
+	it("sends a full frame when a hook changes a raw number beyond JS integer precision", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const { rawJSON } = JSON as unknown as { rawJSON: (text: string) => unknown };
+		for (const n of ["9007199254740993", "9007199254740992", "9007199254740992"]) {
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+				apiKey: mockToken(),
+				sessionId: "raw",
+				transport: "websocket-cached",
+				onPayload: () => ({ input: [rawJSON(n)] }),
+			}).result();
+		}
+		expect(sent.map((r) => r.previous_response_id)).toEqual([undefined, undefined, "resp_2"]);
+	});
+
+	it("serializes a hook item's toJSON at its full conversation index", async () => {
+		const sent: Array<{ input: unknown[]; previous_response_id?: string }> = [];
+		stubWebSocket(sent);
+		const item = { toJSON: (key: string) => key };
+		for (const input of [[undefined], [undefined, item], [undefined, item]]) {
+			await streamOpenAICodexResponses(model, normalizeContext({ messages: turn(0) }), {
+				apiKey: mockToken(),
+				sessionId: "item-serializer",
+				transport: "websocket-cached",
+				onPayload: () => ({ input }),
+			}).result();
+		}
+		expect(sent.map((r) => r.input)).toEqual([[null], ["1"], []]);
+		expect(sent.map((r) => r.previous_response_id)).toEqual([undefined, "resp_1", "resp_2"]);
+	});
 
 	it.each([
 		{ name: "the same message objects, converted once and reused", edit: undefined, delta: true },

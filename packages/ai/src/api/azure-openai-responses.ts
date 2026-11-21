@@ -9,14 +9,13 @@ import { getIdentityHeaders } from "../utils/identity.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
-import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
+import { getDeclaredTools, resolveTranscript } from "../utils/transcript.ts";
 import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
-	convertResponsesMessages,
+	convertResolvedResponsesInput,
 	convertResponsesTools,
-	getResponsesToolSupport,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
 import { iterateOpenAIStream } from "./openai-sse.ts";
@@ -45,7 +44,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 	context: TranscriptContext,
 	options?: AzureOpenAIResponsesOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = resolveTranscript(context, model.compat?.supportsMidConvoSystemMessages);
 
 	// Start async processing
@@ -79,7 +78,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			}
 			const client = createClient(model, apiKey, options);
 			const grammarToolInputProperties = createGrammarToolInputProperties(
-				getDeclaredTools(normalizedContext.messages),
+				model.compat?.supportsOpenAIGrammarTools ? getDeclaredTools(normalizedContext.messages) : undefined,
 				model.compat?.supportsOpenAIGrammarTools ?? false,
 			);
 			// Everything buildParams's conversion reads besides the messages: the model and its compat settings.
@@ -194,23 +193,12 @@ function buildParams(
 	context: TranscriptContext,
 	options: AzureOpenAIResponsesOptions | undefined,
 	deploymentName: string,
-	grammarToolInputProperties: ReadonlyMap<string, string> = createGrammarToolInputProperties(
-		getDeclaredTools(context.messages),
-		model.compat?.supportsOpenAIGrammarTools ?? false,
-	),
+	grammarToolInputProperties: ReadonlyMap<string, string>,
 	cache?: RequestCacheRun,
 ) {
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
 	const supportsToolSearch = model.compat?.supportsToolSearch ?? false;
-	const transcriptTools = resolveTranscriptTools(
-		context.messages,
-		getResponsesToolSupport({
-			supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
-			supportsAdditionalTools,
-			supportsToolSearch,
-		}),
-	);
-	const messages = convertResponsesMessages(model, context, AZURE_TOOL_CALL_PROVIDERS, {
+	const { input: messages, requestTools } = convertResolvedResponsesInput(model, context, AZURE_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
 		supportsAdditionalTools,
@@ -239,8 +227,8 @@ function buildParams(
 		params.temperature = options?.temperature;
 	}
 
-	if (transcriptTools.requestTools.length > 0) {
-		params.tools = convertResponsesTools(transcriptTools.requestTools, {
+	if (requestTools.length > 0) {
+		params.tools = convertResponsesTools(requestTools, {
 			supportsStrictMode: model.compat?.supportsStrictMode ?? true,
 			supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
 		});
