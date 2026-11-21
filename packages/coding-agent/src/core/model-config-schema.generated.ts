@@ -703,7 +703,7 @@ export function modelsConfigSchema(): object {
 									supportsMessageThreads: {
 										type: "boolean",
 										description:
-											"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+											"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
 									},
 									allowedFallbackModels: {
 										type: "array",
@@ -1792,7 +1792,7 @@ export function modelsConfigSchema(): object {
 												supportsMessageThreads: {
 													type: "boolean",
 													description:
-														"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+														"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
 												},
 												allowedFallbackModels: {
 													type: "array",
@@ -2868,7 +2868,7 @@ export function modelsConfigSchema(): object {
 													supportsMessageThreads: {
 														type: "boolean",
 														description:
-															"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+															"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
 													},
 													allowedFallbackModels: {
 														type: "array",
