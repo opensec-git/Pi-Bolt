@@ -311,7 +311,9 @@ export interface ImageLineExtent {
 export function getImageLineExtent(line: string): ImageLineExtent | undefined {
 	const kittyStart = line.indexOf(KITTY_PREFIX);
 	if (kittyStart !== -1) {
-		const controls = /\x1b_G([^;]*);/.exec(line)?.[1] ?? "";
+		// The control data of the first image command: up to its first ";" (none without one).
+		const controlsEnd = line.indexOf(";", kittyStart + KITTY_PREFIX.length);
+		const controls = controlsEnd === -1 ? "" : line.slice(kittyStart + KITTY_PREFIX.length, controlsEnd);
 		const columnValue = /(?:^|,)c=(\d+)(?:,|$)/.exec(controls)?.[1];
 		const columns =
 			columnValue === undefined
