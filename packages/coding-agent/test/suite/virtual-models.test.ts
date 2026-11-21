@@ -338,8 +338,9 @@ describe("AgentSession virtual models", () => {
 
 		await harness.session.prompt("hello");
 
-		// One per request, one between the turns, and one for the compaction check after the run.
-		expect(projections).toHaveBeenCalledTimes(4);
+		// One per request and one between the turns. The compaction check after the run reads the cached projection
+		// (peekSessionProjection) without copying it.
+		expect(projections).toHaveBeenCalledTimes(3);
 	});
 
 	it("stores router state on the branch and passes it to later requests", async () => {
