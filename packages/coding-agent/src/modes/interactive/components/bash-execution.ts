@@ -123,6 +123,16 @@ export class BashExecutionComponent extends Container {
 		return this.content;
 	}
 
+	/**
+	 * As upstream, which mounts its container once and fills whatever the field holds: the next updates fill `container`,
+	 * and the row keeps drawing the container mounted at construction, with what it held last.
+	 */
+	set contentContainer(container: Container) {
+		// (Upstream filled the mounted container with the output received so far: so does this, first.)
+		if (this.displayDirty) this.updateDisplay();
+		this.content = container;
+	}
+
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,

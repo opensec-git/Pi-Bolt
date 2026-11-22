@@ -79,6 +79,10 @@ export class ToolExecutionComponent extends Container {
 	private rendererState: any = {};
 	/** Only image-bearing rows retain image children and the inputs needed to reuse their converted PNG data. */
 	private images?: Array<{ component: Image; spacer: Spacer; data: string; mimeType: string; widthCells: number }>;
+	/** Arrays an extension assigned to `imageComponents` / `imageSpacers`, until the next updateDisplay() (#339). */
+	private assignedImages?: { components?: readonly Image[]; spacers?: readonly Spacer[] };
+	/** An extension assigned one of upstream's shell fields (#339): compact() would make the shell again without it. */
+	private partsAssigned = false;
 	private toolName: string;
 	private toolCallId: string;
 	private args: any;
@@ -183,6 +187,16 @@ export class ToolExecutionComponent extends Container {
 		return unused.box;
 	}
 
+	/**
+	 * As upstream: the next display updates fill `box`, and the Box mounted at construction stays the one the row draws,
+	 * with what it held last (upstream mounts its Box once, and its updateDisplay() fills whatever the field holds).
+	 */
+	set contentBox(box: Box) {
+		const shell = this.assignShell();
+		if (shell.kind === "default") shell.container = box;
+		else this.unusedParts().box = box;
+	}
+
 	/** The fallback shell's Text, for a tool without renderers: its name, arguments and output. */
 	get contentText(): Text {
 		const shell = this.mountedShell();
@@ -190,6 +204,16 @@ export class ToolExecutionComponent extends Container {
 		const unused = this.unusedParts();
 		unused.text ??= new Text("", 1, 1, pendingBg);
 		return unused.text;
+	}
+
+	/**
+	 * As upstream: the next display updates write into `text`, and the row keeps drawing the Text mounted at construction
+	 * (inside `contentTextRegion`), with what it held last.
+	 */
+	set contentText(text: Text) {
+		const shell = this.assignShell();
+		if (shell.kind === "fallback") shell.text = text;
+		else this.unusedParts().text = text;
 	}
 
 	/** The MouseRegion around `contentText`: a left click on a result expands or collapses it. */
@@ -202,6 +226,13 @@ export class ToolExecutionComponent extends Container {
 		return unused.region;
 	}
 
+	/** As upstream, where nothing reads the field after construction: only what it reads changes, not what is drawn. */
+	set contentTextRegion(region: MouseRegion) {
+		const shell = this.assignShell();
+		if (shell.kind === "fallback") shell.region = region;
+		else this.unusedParts().region = region;
+	}
+
 	/** The self-rendered shell's Container: the call and result components, framed by the tool itself. */
 	get selfRenderContainer(): Container {
 		const shell = this.mountedShell();
@@ -211,20 +242,59 @@ export class ToolExecutionComponent extends Container {
 		return unused.container;
 	}
 
+	/**
+	 * As upstream, which draws a self-rendered row from the field: a self-rendered row draws `container` from now on,
+	 * routes its clicks to it, and its display updates fill it.
+	 */
+	set selfRenderContainer(container: Container) {
+		const shell = this.assignShell();
+		if (shell.kind !== "self") {
+			this.unusedParts().container = container;
+			return;
+		}
+		shell.container = container;
+		reportRenderChange(this);
+	}
+
 	/** The images drawn under the result, in order; each comes after its spacer (imageSpacers). */
 	get imageComponents(): readonly Image[] {
-		return this.images?.map((image) => image.component) ?? NO_IMAGE_PARTS;
+		return this.assignedImages?.components ?? this.images?.map((image) => image.component) ?? NO_IMAGE_PARTS;
+	}
+
+	/**
+	 * As upstream until the next display update, which makes the images again from the result: a self-rendered row draws
+	 * these (upstream draws it from the fields), a default or fallback row its mounted children. Unlike upstream, that
+	 * update takes away the images it mounted, not the assigned ones (upstream would leave its own mounted and draw them
+	 * twice), and it does not take an assigned component as one to reuse.
+	 */
+	set imageComponents(components: readonly Image[]) {
+		this.assignShell();
+		this.assignedImages = { ...this.assignedImages, components };
+		reportRenderChange(this);
 	}
 
 	/** The spacer above each image (imageComponents). */
 	get imageSpacers(): readonly Spacer[] {
-		return this.images?.map((image) => image.spacer) ?? NO_IMAGE_PARTS;
+		return this.assignedImages?.spacers ?? this.images?.map((image) => image.spacer) ?? NO_IMAGE_PARTS;
+	}
+
+	/** As imageComponents. */
+	set imageSpacers(spacers: readonly Spacer[]) {
+		this.assignShell();
+		this.assignedImages = { ...this.assignedImages, spacers };
+		reportRenderChange(this);
 	}
 
 	/** The shell mounted on this row, made again first if compact() let go of it. */
 	private mountedShell(): ToolShell {
 		this.thaw();
 		return this.shell ?? this.addShell();
+	}
+
+	/** mountedShell(), for a setter: the row keeps its shell from now on (compact() would make it again without the part). */
+	private assignShell(): ToolShell {
+		this.partsAssigned = true;
+		return this.mountedShell();
 	}
 
 	private unusedParts(): UnusedShellParts {
@@ -365,6 +435,7 @@ export class ToolExecutionComponent extends Container {
 			this.isPartial ||
 			this.argsPending ||
 			this.images !== undefined ||
+			this.partsAssigned ||
 			this.shell?.kind === "self" ||
 			last === undefined ||
 			!last.current
@@ -442,7 +513,20 @@ export class ToolExecutionComponent extends Container {
 			const container = this.shell.container;
 			const parts = [renderChildLines(this, container, width)];
 			let reports = reportsChanges(container);
-			if (this.images) {
+			let images = this.images !== undefined;
+			if (this.assignedImages) {
+				const components = this.imageComponents;
+				const spacers = this.imageSpacers;
+				images = components.length > 0;
+				// (Arrays an extension made: drawn as upstream draws them, skipping holes.)
+				for (let i = 0; i < components.length; i++) {
+					const spacer = spacers[i];
+					const component = components[i];
+					if (spacer) parts.push(renderChildLines(this, spacer, width));
+					if (component) parts.push(renderChildLines(this, component, width));
+					if (component && !reportsChanges(component)) reports = false;
+				}
+			} else if (this.images) {
 				for (const { component, spacer } of this.images) {
 					parts.push(renderChildLines(this, spacer, width), renderChildLines(this, component, width));
 					if (!reportsChanges(component)) reports = false;
@@ -465,7 +549,7 @@ export class ToolExecutionComponent extends Container {
 				lines.push(...parts[i]!);
 			}
 			this.selfRenderParts = parts;
-			this.selfRenderLines = contentLines.length === 0 && !this.images ? this.emptyLines : lines;
+			this.selfRenderLines = contentLines.length === 0 && !images ? this.emptyLines : lines;
 			return this.selfRenderLines;
 		}
 
@@ -562,6 +646,7 @@ export class ToolExecutionComponent extends Container {
 			hasContent = true;
 		}
 
+		this.assignedImages = undefined;
 		const previousImages = this.images;
 		if (previousImages) {
 			for (const { component, spacer } of previousImages) {

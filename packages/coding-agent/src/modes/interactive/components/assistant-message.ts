@@ -160,6 +160,8 @@ export class AssistantMessageComponent extends Container {
 	private contentIsStale = false;
 	/** Thinking runs a click showed (false) or hid (true), by run index; made on first use (thinkingVisibilityOverrides). */
 	private visibilityOverrides?: Map<number, boolean>;
+	/** An extension assigned `contentContainer` (#339): compact() would mount a container of its own instead. */
+	private contentAssigned = false;
 	/** The children's lines with the prompt markers added, and the lines they were added to. */
 	private markedShared?: { from: string[]; lines: string[] };
 	/** renderLive()'s lines: the children's live lines with the prompt markers added, and what they were made from. */
@@ -226,12 +228,29 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	/**
+	 * As upstream, which mounts its container once and fills whatever the field holds: the next updates fill `container`,
+	 * and the message keeps drawing the container mounted at construction, with what it held last.
+	 */
+	set contentContainer(container: Container) {
+		// (Upstream filled the mounted container at the last update: so does this, first.)
+		this.thaw();
+		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
+		this.contentAssigned = true;
+		this.content = container;
+	}
+
+	/**
 	 * Whether a thinking run is hidden (true) or shown (false), by run index, where a click (or an extension) overrode the
 	 * setting; updateContent() draws it. For extensions that open and close thinking runs (#339).
 	 */
 	get thinkingVisibilityOverrides(): Map<number, boolean> {
 		this.visibilityOverrides ??= new Map();
 		return this.visibilityOverrides;
+	}
+
+	/** As upstream: the next updates draw from `overrides`, and the setting clears it. */
+	set thinkingVisibilityOverrides(overrides: Map<number, boolean>) {
+		this.visibilityOverrides = overrides;
 	}
 
 	override invalidate(): void {
@@ -380,6 +399,7 @@ export class AssistantMessageComponent extends Container {
 			this.compacted !== undefined ||
 			this.isStreaming ||
 			this.contentIsStale ||
+			this.contentAssigned ||
 			this.lastMessage === undefined ||
 			last?.live === undefined ||
 			!last.current

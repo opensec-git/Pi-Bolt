@@ -115,6 +115,35 @@ describe("AssistantMessageComponent upstream surface (#339)", () => {
 		expect(component.isCompacted()).toBe(false);
 		expect(transcript.render(60)).toEqual(before);
 	});
+	// #339: upstream mounts its container once and fills whatever the field holds.
+	test("an assigned contentContainer is filled by the next updates; the message keeps drawing the mounted one", () => {
+		const component = new AssistantMessageComponent(assistantMessage("First reply."));
+		const message = component as unknown as UpstreamAssistant;
+		const transcript = new Container();
+		transcript.addChild(component);
+		const before = transcript.render(60).slice();
+		const replacement = new Container();
+		message.contentContainer = replacement;
+		expect(message.contentContainer).toBe(replacement);
+		message.updateContent(assistantMessage("Second reply."));
+		expect(rows(replacement.children, 60)).toContain("Second reply.");
+		expect(transcript.render(60)).toEqual(before);
+		// The assigned container is kept: compact() does not mount one of its own.
+		expect(component.compact()).toBe(false);
+	});
+
+	// #339
+	test("an assigned thinkingVisibilityOverrides is what updateContent() draws from", () => {
+		const component = new AssistantMessageComponent(assistantMessage("The answer."), true);
+		const message = component as unknown as UpstreamAssistant;
+		const overrides = new Map([[0, false]]);
+		message.thinkingVisibilityOverrides = overrides;
+		expect(message.thinkingVisibilityOverrides).toBe(overrides);
+		message.updateContent(message.lastMessage!);
+		expect(text(component.render(60))).toContain("Weighing the options.");
+		component.setHideThinkingBlock(true);
+		expect(overrides.size).toBe(0);
+	});
 });
 
 describe("BashExecutionComponent upstream surface (#339)", () => {
@@ -138,6 +167,25 @@ describe("BashExecutionComponent upstream surface (#339)", () => {
 		expect(bash.command).toBe("echo hi");
 		expect(bash.colorKey).toBe("bashMode");
 		expect(rows(bash.contentContainer.children, 60)).toContain("second line");
+	});
+
+	// #339
+	test("an assigned contentContainer is filled by the next updates; the row keeps drawing the mounted one", () => {
+		const component = new BashExecutionComponent("echo hi", ui);
+		const bash = component as unknown as UpstreamBash;
+		const frame = new Container();
+		frame.addChild(component);
+		component.appendOutput("before\n");
+		const replacement = new Container();
+		bash.contentContainer = replacement;
+		expect(bash.contentContainer).toBe(replacement);
+		const drawn = text(frame.render(60));
+		expect(drawn).toContain("before");
+		component.appendOutput("after\n");
+		// (Read through the field, which applies the output received since the last frame, as upstream has it at once.)
+		expect(bash.contentContainer).toBe(replacement);
+		expect(rows(replacement.children, 60)).toContain("after");
+		expect(text(frame.render(60))).not.toContain("after");
 	});
 
 	// #339

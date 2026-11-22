@@ -274,3 +274,158 @@ describe("ToolExecutionComponent upstream surface (#339)", () => {
 		}
 	});
 });
+
+describe("ToolExecutionComponent upstream fields assigned (#339)", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+	afterEach(() => {
+		resetCapabilitiesCache();
+	});
+
+	// #339: upstream mounts its Box once and fills whatever the field holds.
+	test("an assigned contentBox is filled by the next updates; the row keeps drawing the mounted Box", () => {
+		const component = row(definition());
+		const tool = upstream(component);
+		const width = 60;
+		const mounted = tool.contentBox;
+		const before = component.render(width).slice();
+		const replacement = new Box(1, 1);
+		tool.contentBox = replacement;
+		expect(tool.contentBox).toBe(replacement);
+		expect(component.children).toContain(mounted);
+		expect(component.children).not.toContain(replacement);
+
+		component.setExpanded(true);
+		expect(text(replacement.render(width))).toContain("result expanded");
+		expect(component.render(width)).toEqual(before);
+		expect(text(component.render(width))).toContain("result collapsed");
+	});
+
+	// #339
+	test("a row with an assigned part keeps it: compact() leaves it as it is", () => {
+		const component = new ToolExecutionComponent(
+			"bash",
+			"call-1",
+			{ command: "seq 1 3" },
+			{ compactable: true },
+			withBuiltInRenderers("bash", undefined),
+			ui,
+			"/tmp",
+		);
+		component.updateResult({ content: [{ type: "text", text: "1\n2\n3" }], isError: false, durationMs: 5 });
+		const replacement = new Box(1, 1);
+		upstream(component).contentBox = replacement;
+		component.render(60);
+		expect(component.compact()).toBe(false);
+		expect(upstream(component).contentBox).toBe(replacement);
+	});
+
+	// #339
+	test("an assigned contentText takes the next updates; the row keeps drawing the mounted Text", () => {
+		const component = row(undefined);
+		const tool = upstream(component);
+		const width = 60;
+		const replacement = new Text("", 1, 1);
+		tool.contentText = replacement;
+		expect(tool.contentText).toBe(replacement);
+		component.updateResult({ content: [{ type: "text", text: "newer output" }], isError: false });
+		expect(text(replacement.render(width))).toContain("newer output");
+		const drawn = text(component.render(width));
+		expect(drawn).toContain("line 2");
+		expect(drawn).not.toContain("newer output");
+	});
+
+	// #339: upstream never reads the field after construction.
+	test("an assigned contentTextRegion is what the field reads; the row draws and routes as before", () => {
+		const component = row(undefined);
+		const tool = upstream(component);
+		const width = 60;
+		const mounted = tool.contentTextRegion;
+		const before = component.render(width).slice();
+		const replacement = new MouseRegion(new Text("never drawn", 0, 0), () => undefined);
+		tool.contentTextRegion = replacement;
+		expect(tool.contentTextRegion).toBe(replacement);
+		expect(component.children).toContain(mounted);
+		expect(component.render(width)).toEqual(before);
+		const result = component.handleMouse(mouse("click", 2, width, before.length));
+		expect(result?.handled).toBe(true);
+		expect(result && "target" in result ? result.target?.component : undefined).toBe(mounted);
+		expect(tool.expanded).toBe(true);
+	});
+
+	// #339: upstream draws a self-rendered row from the field.
+	test("an assigned selfRenderContainer is drawn, clicked and filled by the next updates", () => {
+		const component = row(definition("self"));
+		const tool = upstream(component);
+		const width = 60;
+		component.render(width);
+		const replacement = new Container();
+		replacement.addChild(new Text("drawn by the extension", 0, 0));
+		tool.selfRenderContainer = replacement;
+		expect(tool.selfRenderContainer).toBe(replacement);
+		let lines = component.render(width);
+		expect(lines).toEqual(["", ...replacement.render(width)]);
+		expect(text(lines)).not.toContain("probe call");
+
+		component.invalidate();
+		lines = component.render(width);
+		expect(text(replacement.render(width))).toContain("result collapsed");
+		expect(lines).toEqual(["", ...replacement.render(width)]);
+		const resultRow = lines.findIndex((line) => stripAnsi(line).includes("result collapsed"));
+		expect(component.handleMouse(mouse("click", resultRow, width, lines.length))?.handled).toBe(true);
+		expect(text(component.render(width))).toContain("result expanded");
+	});
+
+	// #339
+	test("assigned parts a row does not use are what the fields read, and are not drawn", () => {
+		const component = row(definition());
+		const tool = upstream(component);
+		const width = 60;
+		const before = component.render(width).slice();
+		const text1 = new Text("unused text", 0, 0);
+		const container = new Container();
+		container.addChild(new Text("unused container", 0, 0));
+		tool.contentText = text1;
+		tool.selfRenderContainer = container;
+		expect(tool.contentText).toBe(text1);
+		expect(tool.selfRenderContainer).toBe(container);
+		expect(component.render(width)).toEqual(before);
+	});
+
+	// #339: upstream draws a self-rendered row's images from the fields, and makes them again at the next update.
+	test("assigned image arrays are drawn by a self-rendered row until the next update", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const component = row(definition("self"));
+		const tool = upstream(component);
+		const width = 60;
+		const before = component.render(width).slice();
+		const picture = new Text("an extension's picture", 0, 0) as unknown as Image;
+		const gap = new Text("an extension's gap", 0, 0) as unknown as Spacer;
+		tool.imageComponents = [picture];
+		tool.imageSpacers = [gap];
+		expect(tool.imageComponents).toEqual([picture]);
+		expect(tool.imageSpacers).toEqual([gap]);
+		const lines = component.render(width);
+		expect(lines.slice(0, before.length)).toEqual(before);
+		expect(lines.slice(before.length).map((line) => stripAnsi(line).trimEnd())).toEqual([
+			"an extension's gap",
+			"an extension's picture",
+		]);
+
+		component.updateResult({ content: [{ type: "image", data: PNG, mimeType: "image/png" }], isError: false });
+		expect(tool.imageComponents).toHaveLength(1);
+		expect(tool.imageComponents[0]).toBeInstanceOf(Image);
+		expect(text(component.render(width))).not.toContain("an extension's");
+	});
+
+	// #339: a default-shell row draws its mounted children, as upstream.
+	test("assigned image arrays are not drawn by a default-shell row", () => {
+		const component = row(definition());
+		const tool = upstream(component);
+		const width = 60;
+		const before = component.render(width).slice();
+		tool.imageComponents = [new Text("not drawn", 0, 0) as unknown as Image];
+		expect(component.render(width)).toEqual(before);
+	});
+});
