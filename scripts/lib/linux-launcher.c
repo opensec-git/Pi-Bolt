@@ -3,44 +3,13 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <limits.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/auxv.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 #include "linux-hot-pages.h"
-
-#ifndef __NR_cachestat
-#define __NR_cachestat 451
-#endif
-
-struct page_cache_range {
-    uint64_t offset;
-    uint64_t length;
-};
-
-struct page_cache_stat {
-    uint64_t cached;
-    uint64_t dirty;
-    uint64_t writeback;
-    uint64_t evicted;
-    uint64_t recently_evicted;
-};
-
-// Whether every page of a range is in the page cache already. On a warm cache this one
-// call per range replaces the range's WILLNEED requests, which cost about 0.1 ms for
-// pages that need no reading. False where the kernel cannot tell (cachestat came in
-// Linux 6.5): the range is then requested as before.
-static int range_cached(int fd, off_t offset, off_t length, off_t page) {
-    struct page_cache_range range = {(uint64_t)offset, (uint64_t)length};
-    struct page_cache_stat stat;
-    if (syscall(__NR_cachestat, fd, &range, &stat, 0) != 0)
-        return 0;
-    return stat.cached >= (uint64_t)((offset + length + page - 1) / page - offset / page);
-}
 
 static void read_ahead(const char *target) {
     int fd = open(target, O_RDONLY | O_CLOEXEC);
@@ -50,10 +19,7 @@ static void read_ahead(const char *target) {
     if (fstat(fd, &info) == 0 && info.st_size == trained_size) {
         // The kernel may limit a WILLNEED request to the device's read-ahead window.
         const off_t piece = 128 * 1024;
-        const off_t page = sysconf(_SC_PAGESIZE);
         for (size_t i = 0; i < sizeof(ranges) / sizeof(ranges[0]); i++) {
-            if (page > 0 && range_cached(fd, ranges[i][0], ranges[i][1], page))
-                continue;
             const off_t end = ranges[i][0] + ranges[i][1];
             for (off_t at = ranges[i][0]; at < end; at += piece) {
                 off_t len = end - at < piece ? end - at : piece;
