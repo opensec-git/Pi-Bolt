@@ -344,6 +344,12 @@ Pi gives an extension its own modules by the names above, wherever a copy of the
   TypeScript jiti compiles and the JavaScript the runtime loads as it is (an ES module of a `"type": "module"` package, a
   `.mjs`, a `.cjs`, a required CommonJS file), in `node_modules` or not, with `import`, `import()` and `require()`. A copy
   npm or bun installed beside the extension is not loaded.
+- **Their subpaths:** Pi gives the ones its own modules are: `@earendil-works/pi-ai/compat`, `/models`, `/oauth`,
+  `/providers/all`, `/session-resources`, `/bun-oauth` and `/bedrock-provider`, and
+  `@earendil-works/pi-coding-agent/pi-ai-extension-view`. Any other subpath (`@earendil-works/pi-ai/providers/<name>`,
+  `/api/<name>`, `/utils/<name>`, `/lazy-oauth`, `/lazy-bedrock-provider`, `@earendil-works/pi-coding-agent/rpc-entry`) comes
+  from the copy installed beside the module, and fails to load where there is none. Its module is then not Pi's, and the
+  modules it imports from its own package are not Pi's either.
 - **`typebox` and `@sinclair/typebox`** are packages of their own, which a library may need in another version. A module jiti
   compiles gets Pi's. JavaScript the runtime loads as it is gets the copy installed beside it, when there is one, and Pi's when
   there is none.

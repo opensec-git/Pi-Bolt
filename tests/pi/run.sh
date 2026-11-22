@@ -156,6 +156,37 @@ else
 	grep -m3 "sdk-libs\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
 	status=1
 fi
+# #331: a library that imports pi-ai and one of the subpaths Pi has (session-resources) gets both from Pi, not the root from Pi
+# and the subpath from the copy beside it. A subpath Pi does not give (utils/*) comes from that copy.
+ai="$sdk/node_modules/@earendil-works/pi-ai"
+mkdir -p "$ai/utils"
+printf '{"name": "@earendil-works/pi-ai", "version": "0.0.1", "type": "module", "exports": {".": "./index.js", "./session-resources": "./session-resources.js", "./utils/*": "./utils/*.js"}}\n' >"$ai/package.json"
+for module in index session-resources utils/retry; do printf 'export const Origin = "0.0.1";\n' >"$ai/$module.js"; done
+sub="$sdk/node_modules/sub-lib"
+mkdir -p "$sub"
+printf '{"name": "sub-lib", "type": "module", "main": "index.js"}\n' >"$sub/package.json"
+cat >"$sub/index.js" <<'JS'
+import * as root from "@earendil-works/pi-ai";
+import * as resources from "@earendil-works/pi-ai/session-resources";
+import * as retry from "@earendil-works/pi-ai/utils/retry";
+export const origins = [root, resources, retry].map((module) => module.Origin ?? "pi").join(",");
+JS
+cat >"$own/subpaths.ts" <<'TS'
+import { origins } from "sub-lib";
+export default function () {
+	console.log(`sdk-subpaths: ${origins}`);
+	process.exit(0);
+}
+TS
+out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+	"$PI" -ne -e "$own/subpaths.ts" --offline --no-session -p hi 2>&1 </dev/null)
+if grep -q "^sdk-subpaths: pi,pi,0.0.1$" <<<"$out"; then
+	echo "PASS a library gets pi-ai and the subpaths Pi has from Pi, other subpaths from disk (#331)"
+else
+	echo "FAIL a library gets pi-ai and the subpaths Pi has from Pi, other subpaths from disk (#331)"
+	grep -m3 "sdk-subpaths\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+	status=1
+fi
 # (A require() cannot wait for Pi's modules to load: one before any import gets them too.)
 cat >"$sdk/local/require-first.ts" <<'TS'
 import { createRequire } from "node:module";
