@@ -224,6 +224,16 @@ ask() { exit 99; }
 ''')
         self.assertFalse(self.paseo.exists())
 
+    def test_yes_without_paseo_adds_nothing(self):
+        (self.bin / "paseo").unlink()
+        output = self.run_offer(setup='''
+# Make detection deterministic even when the test host has Paseo installed.
+command() { return 1; }
+''')
+        self.assertIn("Paseo is not installed here: nothing added", output)
+        self.assertFalse(self.paseo.exists())
+        self.assertFalse((self.root / "runtime.log").exists())
+
     def test_home_detects_desktop_paseo_without_cli(self):
         self.paseo.mkdir()
         self.run_offer(choice="", setup='''

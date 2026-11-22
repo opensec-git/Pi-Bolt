@@ -79,7 +79,7 @@
 
 <h3 id="paseo">Paseo<a class="anchor" href="#paseo" aria-label="Link to this section">#</a></h3>
 <p>The shell installer offers to add Pi-Bolt as a separate provider when it detects Paseo. Set <code>PIBOLT_PASEO=yes</code>
-  to add it without asking, or <code>PIBOLT_PASEO=no</code> to skip; unattended installs skip it by default. It uses the
+  to add it without asking where Paseo is installed, or <code>PIBOLT_PASEO=no</code> to skip; unattended installs skip it by default. It uses the
   installed command's full path in <code>${PASEO_HOME:-$HOME/.paseo}/config.json</code> and leaves an existing
   <code>pi-bolt</code> provider unchanged. It does not reload or restart Paseo: run <code>paseo reload</code> for that home
   afterward. Uninstalling Pi-Bolt leaves Paseo's configuration in place.</p>

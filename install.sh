@@ -35,8 +35,9 @@
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none. They are installed at the versions the release pins (its extensions.txt, covered by the
 #                    signed checksums), and only if the registry's tarball has the pinned integrity.
-#   PIBOLT_PASEO     yes or no: whether to add Pi-Bolt as a Paseo provider. Without it, asks when Paseo is detected and a
-#                    terminal is available; unattended installs skip it. Uses ${PASEO_HOME:-$HOME/.paseo}/config.json,
+#   PIBOLT_PASEO     yes or no: whether to add Pi-Bolt as a Paseo provider, where Paseo is installed (its home folder or the
+#                    paseo command). Without it, asks when Paseo is detected and a terminal is available; unattended installs
+#                    skip it. Uses ${PASEO_HOME:-$HOME/.paseo}/config.json,
 #                    preserves existing providers, and does not reload or restart Paseo. The npm launcher skips this step.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh), from 0.6.0. A
@@ -1315,10 +1316,14 @@ offer_paseo() {
 	*) printf '  %sPIBOLT_PASEO must be yes or no: Paseo configuration unchanged%s\n' "$dim" "$reset"; return 0 ;;
 	esac
 	[ "$choice" != no ] || return 0
+	[ -n "$choice" ] || has_tty || return 0
+	# Only where Paseo is installed, PIBOLT_PASEO=yes too: one set for every machine leaves no Paseo home where there is none.
+	if [ ! -d "${PASEO_HOME:-$HOME/.paseo}" ] && ! command -v paseo >/dev/null 2>&1; then
+		[ -z "$choice" ] || printf '  %sPIBOLT_PASEO is yes, and Paseo is not installed here: nothing added to it%s\n' "$dim" "$reset"
+		return 0
+	fi
 	config="${PASEO_HOME:-$HOME/.paseo}/config.json"
 	if [ -z "$choice" ]; then
-		has_tty || return 0
-		[ -d "${PASEO_HOME:-$HOME/.paseo}" ] || command -v paseo >/dev/null 2>&1 || return 0
 		ask '\nAdd Pi-Bolt as a Paseo provider in %s? [Y/n] ' "$(tilde "$config")"
 		case "$answer" in n | N | no | NO) return 0 ;; esac
 	fi
