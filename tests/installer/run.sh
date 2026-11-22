@@ -14,7 +14,8 @@
 #   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
 #   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz through a
 #     tar that reads it itself; an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead;
-#     where that cannot be downloaded either, nothing is installed and nothing is left;
+#     where that cannot be downloaded either, nothing is installed and nothing is left; stopped as it unpacks, it leaves
+#     neither xz nor tar running, nor any of the download;
 #   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
@@ -156,6 +157,39 @@ if [ -n "$real_xz" ]; then
 	if ! installed && [ -z "$left" ] && grep -q "download failed: .*/$NAME.tar.gz" <<<"$out"; then
 		pass "xz fails and no .tar.gz: nothing installed, nothing left"; else
 		fail "xz fails and no .tar.gz: nothing installed, nothing left"; printf '%s\n%s\n' "$out" "$left"; fi
+fi
+
+# (Stopped with TERM while it unpacks, through an xz that decodes slowly: xz and tar are stopped too, and nothing of the
+# download is left in the installation's folder.)
+cat >"$WORK/slow-unxz.py" <<'PY'
+import lzma, sys, time
+decoder = lzma.LZMADecompressor()
+with open(sys.argv[1], "rb") as archive:
+    while chunk := archive.read(1 << 16):
+        sys.stdout.buffer.write(decoder.decompress(chunk))
+        time.sleep(0.02)
+PY
+stub slowxz xz "if [ \"\$1\" = --version ]; then echo 'xz (XZ Utils) 5.8.4'; exit 0; fi
+for file; do :; done
+exec python3 '$WORK/slow-unxz.py' \"\$file\""
+rm -rf "${WORK:?}/home" && mkdir -p "$WORK/home"
+env HOME="$WORK/home" SHELL=/bin/sh PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port/good" PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+	PIBOLT_YES=1 PIBOLT_INSTALL="$WORK/home/inst" PIBOLT_BIN_DIR="$WORK/home/bin" PATH="$WORK/slowxz:$PATH" \
+	sh "$ROOT/install.sh" </dev/null >"$WORK/stopped.log" 2>&1 &
+installer=$!
+for _ in $(seq 600); do grep -q '^extracting' "$WORK/stopped.log" && break; sleep 0.1; done
+sleep 1
+kill -TERM "$installer" 2>/dev/null || true
+wait "$installer" 2>/dev/null || true
+sleep 0.5
+left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 -name '.download.*' 2>/dev/null)
+still=$(pgrep -f "$WORK/home/inst" || true)
+if grep -q '^extracting' "$WORK/stopped.log" && ! installed && [ -z "$left" ] && [ -z "$still" ]; then
+	pass "stopped while it unpacks: xz and tar stopped, nothing of the download left"; else
+	fail "stopped while it unpacks: xz and tar stopped, nothing of the download left"
+	cat "$WORK/stopped.log"; printf 'left: %s\nrunning: %s\n' "$left" "$still"
+	# shellcheck disable=SC2086 # process IDs
+	[ -z "$still" ] || kill $still 2>/dev/null || true
 fi
 
 # (OpenSSL 1.1 as openssl, OpenSSL 3 as openssl3: openssl3 checks the signature.) #323

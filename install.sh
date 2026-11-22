@@ -544,33 +544,35 @@ xz_unpacker() {
 	else return 1; fi
 }
 
-# unpack FILE: unpacks FILE (in $TMP) into $TMP. False if tar or the decompressor failed: a pipeline's status is tar's only,
-# and tar can end well on what xz wrote before it failed.
-unpack() {
+# extract FILE: unpacks FILE (in $TMP) with the bar moving. False, with nothing of it left, unless it unpacked and holds the
+# build's executable. tar is started with & itself, so that $PIDS is tar and the installer's traps stop it (a function started
+# with & is a shell of its own, which a kill does not pass on to what it runs); xz, before it in the pipeline, then ends at its
+# next write. A pipeline's status is tar's only, and tar can end well on what xz wrote before it failed: xz's failure is a file,
+# written before tar can end (the pipe stays open until the shell that runs xz has written it).
+extract() {
+	rm -f "$TMP/unxz.failed"
 	case "$1:$(xz_unpacker || true)" in
 	*.tar.xz:xz)
-		rm -f "$TMP/unxz.failed"
 		# (-T0 decodes the blocks of a release's archive in parallel: XZ Utils from 5.4; earlier ones take it and use one thread.)
-		{ xz -T0 -dc "$TMP/$1" || : >"$TMP/unxz.failed"; } | tar -C "$TMP" -xf - || return 1
-		[ ! -e "$TMP/unxz.failed" ]
+		{ xz -T0 -dc "$TMP/$1" || : >"$TMP/unxz.failed"; } | tar -C "$TMP" -xf - &
+		PIDS=$!
 		;;
-	*.tar.xz:*) tar -C "$TMP" -xf "$TMP/$1" ;;
-	*) tar -C "$TMP" -xzf "$TMP/$1" ;;
+	*.tar.xz:*)
+		tar -C "$TMP" -xf "$TMP/$1" &
+		PIDS=$!
+		;;
+	*)
+		tar -C "$TMP" -xzf "$TMP/$1" &
+		PIDS=$!
+		;;
 	esac
-}
-
-# extract FILE: unpacks FILE (in $TMP) with the bar moving. False, with nothing of it left, unless it unpacked and holds the
-# build's executable.
-extract() {
-	unpack "$1" &
-	PIDS=$!
 	draw_progress "$step" 10000 "${dim}extracting$reset"
 	while [ -t 1 ] && running; do
 		step=$((step + 1))
 		draw_progress "$step" 10000 "${dim}extracting$reset"
 		sleep 0.08
 	done
-	all_succeeded && [ -f "$TMP/$NAME/pi" ] && return 0
+	all_succeeded && [ ! -e "$TMP/unxz.failed" ] && [ -f "$TMP/$NAME/pi" ] && return 0
 	rm -rf "${TMP:?}/$NAME"
 	return 1
 }
@@ -580,7 +582,8 @@ npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_V
 
 # start_download URL FINAL SIZE RANGES: starts fetching into $TMP/part.N in the background, the process IDs in $PIDS. A big file
 # from a server that sends parts comes in PIBOLT_CONNECTIONS parts at once (default 4): over a long distance, one connection
-# is limited by the round trip and several are faster.
+# is limited by the round trip and several are faster. (curl itself in the background, with net_curl's timeout, not the
+# function: a kill of the shell a function runs in does not reach curl.)
 start_download() {
 	PIDS=""
 	rm -f "$TMP"/part.*
@@ -592,12 +595,15 @@ start_download() {
 			from=$((n * chunk))
 			to=$((from + chunk - 1))
 			[ "$to" -lt "$3" ] || to=$(($3 - 1))
-			net_curl -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
+			curl --connect-timeout 8 -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
 			PIDS="$PIDS $!"
 			n=$((n + 1))
 		done
+	elif command -v curl >/dev/null 2>&1; then
+		curl --connect-timeout 8 -fsSL --retry 2 -o "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		PIDS=$!
 	else
-		fetch "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		wget -q -O "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
 		PIDS=$!
 	fi
 }
@@ -605,6 +611,14 @@ start_download() {
 running() {
 	for pid in $PIDS; do kill -0 "$pid" 2>/dev/null && return 0; done
 	return 1
+}
+
+# Stops what runs in the background (the processes in $PIDS, the signature's download, the plan) and waits for every process
+# the installer started, so that nothing writes into the download folder as it is removed (xz before tar in a pipeline ends at
+# its next write once tar is stopped).
+stop_background() {
+	kill $PIDS $SIG_PID ${plan_pid:-} 2>/dev/null || true
+	wait 2>/dev/null || true
 }
 
 all_succeeded() { # true if every process in $PIDS succeeded
@@ -847,9 +861,10 @@ install_release() {
 	TMP="$(mktemp -d "$INSTALL/.download.XXXXXX" 2>/dev/null || mktemp -d)"
 	PIDS=""
 	SIG_PID=""
-	# (Whatever ends the script, a failed step too, takes the download with it.)
-	trap 'kill $PIDS $SIG_PID 2>/dev/null || true; rm -rf "$TMP"' EXIT
-	trap 'kill $PIDS $SIG_PID 2>/dev/null || true; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
+	# (Whatever ends the script, a failed step too, takes the download with it: what runs in the background is stopped, and
+	# waited for, so that nothing writes into the folder as it is removed.)
+	trap 'stop_background; rm -rf "$TMP"' EXIT
+	trap 'stop_background; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
 	[ -t 1 ] && printf '%s[?25l' "$ESC"
 	if [ ! -t 1 ]; then
 		# Not a terminal (a log, CI): plain lines instead of an animated bar.
