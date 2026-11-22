@@ -98,7 +98,7 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 	if (!hasAnsi && !hasTabs) {
 		let result = "";
 		let width = 0;
-		for (const { segment } of getGraphemeSegmenter().segment(text)) {
+		for (const segment of graphemesOf(text)) {
 			const w = graphemeWidth(segment);
 			if (width + w > maxWidth) {
 				break;
@@ -145,7 +145,7 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 			end++;
 		}
 
-		for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
+		for (const segment of graphemesOf(text.slice(i, end))) {
 			const w = graphemeWidth(segment);
 			if (width + w > maxWidth) {
 				return { text: result, width };
@@ -224,23 +224,63 @@ function isStandaloneGraphemeRun(text: string): boolean {
 }
 
 /**
- * Segment a run that contains complex units. A standalone unit whose neighbours are standalone too
- * is its own cluster, since no grapheme rule joins two standalone units. Only the stretches between
- * such units go through Intl.Segmenter; cutting there is safe because both cut edges are boundaries.
+ * Whether a code point outside the BMP forms a grapheme cluster on its own between standalone units: pictographs and
+ * emoji, without the emoji modifiers (which extend the emoji before them) and the regional indicators (which pair).
+ * Only a joiner, a variation selector or a modifier can join such an emoji to its neighbours, and none of those is
+ * standalone. test/standalone-graphemes.test.ts checks every code point against Intl.Segmenter.
+ */
+function isStandalonePictograph(codePoint: number): boolean {
+	return (
+		(codePoint >= 0x1f300 && codePoint <= 0x1f3fa) ||
+		(codePoint >= 0x1f400 && codePoint <= 0x1f64f) ||
+		(codePoint >= 0x1f680 && codePoint <= 0x1f6ff) ||
+		(codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
+		(codePoint >= 0x1fa70 && codePoint <= 0x1faff)
+	);
+}
+
+/** Code units of the standalone character at `index`: 1 (a standalone unit), 2 (a standalone pictograph) or 0. */
+function standaloneLength(text: string, index: number): number {
+	const code = text.charCodeAt(index);
+	if (isStandaloneGraphemeUnit(code)) return 1;
+	// High surrogates of U+1F000..U+1FBFF.
+	if (code >= 0xd83c && code <= 0xd83e && isStandalonePictograph(text.codePointAt(index)!)) return 2;
+	return 0;
+}
+
+/** Whether the text before `index` is empty or ends with a standalone character. */
+function standaloneBefore(text: string, index: number): boolean {
+	if (index === 0) return true;
+	const code = text.charCodeAt(index - 1);
+	if (isStandaloneGraphemeUnit(code)) return true;
+	return code >= 0xdc00 && code <= 0xdfff && index >= 2 && standaloneLength(text, index - 2) === 2;
+}
+
+/**
+ * Segment a run that contains complex units. A standalone character whose neighbours are standalone too is its own
+ * cluster, since no grapheme rule joins two standalone characters. Only the stretches between such characters go
+ * through Intl.Segmenter; cutting there is safe because both cut edges are boundaries. A reply with an emoji in it then
+ * never needs Intl.Segmenter, whose first use loads ICU's data.
  */
 function* segmentGraphemes(text: string): Generator<string> {
-	const standalone = (index: number) =>
-		index < 0 || index >= text.length || isStandaloneGraphemeUnit(text.charCodeAt(index));
 	let complexStart = -1;
-	for (let i = 0; i < text.length; i++) {
-		if (standalone(i) && standalone(i - 1) && standalone(i + 1)) {
+	let i = 0;
+	while (i < text.length) {
+		const length = standaloneLength(text, i);
+		if (
+			length > 0 &&
+			standaloneBefore(text, i) &&
+			(i + length === text.length || standaloneLength(text, i + length) > 0)
+		) {
 			if (complexStart >= 0) {
 				for (const { segment } of getGraphemeSegmenter().segment(text.slice(complexStart, i))) yield segment;
 				complexStart = -1;
 			}
-			yield text[i]!;
-		} else if (complexStart < 0) {
-			complexStart = i;
+			yield length === 1 ? text[i]! : text.slice(i, i + 2);
+			i += length;
+		} else {
+			if (complexStart < 0) complexStart = i;
+			i++;
 		}
 	}
 	if (complexStart >= 0) {
@@ -255,6 +295,11 @@ function* segmentGraphemes(text: string): Generator<string> {
  */
 function graphemesOf(text: string): Iterable<string> {
 	return isStandaloneGraphemeRun(text) ? text : segmentGraphemes(text);
+}
+
+/** graphemesOf as an array. Exported for its test. */
+export function graphemesOfForTest(text: string): string[] {
+	return [...graphemesOf(text)];
 }
 
 // Widths of single non-ASCII BMP characters; bounded by the 64K code units.
@@ -365,7 +410,7 @@ export function visibleWidth(str: string): number {
 
 	// Calculate width
 	let width = 0;
-	for (const { segment } of getGraphemeSegmenter().segment(clean)) {
+	for (const segment of graphemesOf(clean)) {
 		width += graphemeWidth(segment);
 	}
 
@@ -1153,10 +1198,6 @@ export function getActiveBackgroundAnsi(text: string): string {
 	return tracker.getActiveBackgroundCode();
 }
 
-function* graphemeSegments(text: string): Generator<string> {
-	for (const { segment } of getGraphemeSegmenter().segment(text)) yield segment;
-}
-
 /**
  * Split text into words while keeping ANSI codes attached. `widths`, if given, gets each token's visible width where it is
  * known without measuring it again (printable ASCII and ANSI codes only: one column a character), and -1 elsewhere.
@@ -1240,7 +1281,7 @@ function splitIntoTokensWithAnsi(text: string, widths?: number[]): string[] {
 				start = runEnd;
 			}
 		} else {
-			for (const segment of graphemeSegments(chunk)) {
+			for (const segment of graphemesOf(chunk)) {
 				const segmentIsSpace = segment === " ";
 				if (!segmentIsSpace && cjkBreakRegex.test(segment)) {
 					flushCurrent();
@@ -1805,7 +1846,7 @@ function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): s
 				currentWidth += count;
 			}
 		} else {
-			for (const { segment } of getGraphemeSegmenter().segment(chunk)) {
+			for (const segment of graphemesOf(chunk)) {
 				const cells = visibleWidth(segment);
 				if (currentWidth + cells > width) finishRow();
 				currentLine += segment;
@@ -1955,7 +1996,7 @@ export function truncateToWidth(
 	const hasTabs = text.includes("\t");
 
 	if (!hasAnsi && !hasTabs) {
-		for (const { segment } of getGraphemeSegmenter().segment(text)) {
+		for (const segment of graphemesOf(text)) {
 			const width = graphemeWidth(segment);
 			if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
 				result += segment;
@@ -2010,7 +2051,7 @@ export function truncateToWidth(
 				end++;
 			}
 
-			for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
+			for (const segment of graphemesOf(text.slice(i, end))) {
 				const width = graphemeWidth(segment);
 				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
 					if (pendingAnsi) {
