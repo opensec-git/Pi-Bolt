@@ -706,10 +706,9 @@ describe("resolveCliModel", () => {
 });
 
 describe("default model selection", () => {
-	test("openai defaults stay GPT-6.1 Sol in Pi-Bolt", () => {
-		expect(defaultModelPerProvider.openai).toBe("gpt-6.1-sol");
-		expect(defaultModelPerProvider.azure).toBe("gpt-6.1-sol");
-		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.1-sol");
+	test("openai defaults track current models", () => {
+		expect(defaultModelPerProvider.openai).toBe("gpt-6.2-sol");
+		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.2-sol");
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {

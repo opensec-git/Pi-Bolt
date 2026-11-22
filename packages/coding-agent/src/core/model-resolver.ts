@@ -14,10 +14,9 @@ export const defaultModelPerProvider: Partial<Record<KnownProvider, string>> = {
 	"amazon-bedrock": "us.anthropic.claude-opus-5-5",
 	"ant-ling": "Ring-2.6-1T",
 	anthropic: "claude-opus-5-5",
-	// Pi-Bolt keeps GPT-6.1 Sol as the default where Pi 1.6.0 changed it to GPT-6.2 Sol.
-	openai: "gpt-6.1-sol",
-	azure: "gpt-6.1-sol",
-	"openai-codex": "gpt-6.1-sol",
+	openai: "gpt-6.2-sol",
+	azure: "gpt-6.2-sol",
+	"openai-codex": "gpt-6.2-sol",
 	radius: "balanced",
 	nvidia: "nvidia/nemotron-3.5-super-vl-120b-a12b",
 	deepseek: "deepseek-v4-pro",
