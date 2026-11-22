@@ -246,10 +246,8 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 		// Gateways that drop unknown request fields would silently turn a `continue` into a request
 		// without the earlier conversation, so the default is limited to Anthropic's own endpoint.
 		// Widen or remove this restriction once proxies generally forward the `thread` field.
-		// Pi-Bolt: only the anthropic provider, as before Pi 1.6.0 (#11987 widened it to any provider on the host).
 		supportsMessageThreads:
-			model.compat?.supportsMessageThreads ??
-			(model.provider === "anthropic" && hostMatches(hostOf(model.baseUrl), "api.anthropic.com")),
+			model.compat?.supportsMessageThreads ?? hostMatches(hostOf(model.baseUrl), "api.anthropic.com"),
 	};
 }
 
