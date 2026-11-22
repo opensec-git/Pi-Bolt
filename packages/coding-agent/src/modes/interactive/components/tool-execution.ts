@@ -58,9 +58,6 @@ interface UnusedShellParts {
 
 const pendingBg = (text: string) => theme.bg("toolPendingBg", text);
 
-/** What `imageComponents` and `imageSpacers` read for a row without images: nothing is added to it. */
-const NO_IMAGE_PARTS: readonly never[] = Object.freeze([]);
-
 export class ToolExecutionComponent extends Container {
 	private shell?: ToolShell;
 	/**
@@ -79,8 +76,11 @@ export class ToolExecutionComponent extends Container {
 	private rendererState: any = {};
 	/** Only image-bearing rows retain image children and the inputs needed to reuse their converted PNG data. */
 	private images?: Array<{ component: Image; spacer: Spacer; data: string; mimeType: string; widthCells: number }>;
-	/** Arrays an extension assigned to `imageComponents` / `imageSpacers`, until the next updateDisplay() (#339). */
-	private assignedImages?: { components?: readonly Image[]; spacers?: readonly Spacer[] };
+	/**
+	 * Upstream's `imageComponents` and `imageSpacers` (#339): made from `images` when an extension first reads or assigns
+	 * them, kept until the next updateDisplay() makes the images again, as upstream's are.
+	 */
+	private imageFields?: { components: Image[]; spacers: Spacer[] };
 	/** An extension assigned one of upstream's shell fields (#339): compact() would make the shell again without it. */
 	private partsAssigned = false;
 	private toolName: string;
@@ -256,33 +256,49 @@ export class ToolExecutionComponent extends Container {
 		reportRenderChange(this);
 	}
 
-	/** The images drawn under the result, in order; each comes after its spacer (imageSpacers). */
-	get imageComponents(): readonly Image[] {
-		return this.assignedImages?.components ?? this.images?.map((image) => image.component) ?? NO_IMAGE_PARTS;
+	/**
+	 * The images drawn under the result, in order; each comes after its spacer (imageSpacers). The same array until the
+	 * next display update, as upstream's field: a self-rendered row draws what it holds then, also after an extension
+	 * changed it (upstream draws that row from the fields), a default or fallback row its mounted children.
+	 */
+	get imageComponents(): Image[] {
+		return this.upstreamImageFields().components;
 	}
 
 	/**
-	 * As upstream until the next display update, which makes the images again from the result: a self-rendered row draws
-	 * these (upstream draws it from the fields), a default or fallback row its mounted children. Unlike upstream, that
+	 * As upstream until the next display update, which makes the images again from the result. Unlike upstream, that
 	 * update takes away the images it mounted, not the assigned ones (upstream would leave its own mounted and draw them
 	 * twice), and it does not take an assigned component as one to reuse.
 	 */
-	set imageComponents(components: readonly Image[]) {
+	set imageComponents(components: Image[]) {
 		this.assignShell();
-		this.assignedImages = { ...this.assignedImages, components };
+		this.upstreamImageFields().components = components;
 		reportRenderChange(this);
 	}
 
-	/** The spacer above each image (imageComponents). */
-	get imageSpacers(): readonly Spacer[] {
-		return this.assignedImages?.spacers ?? this.images?.map((image) => image.spacer) ?? NO_IMAGE_PARTS;
+	/** The spacer above each image (imageComponents), the same array until the next display update. */
+	get imageSpacers(): Spacer[] {
+		return this.upstreamImageFields().spacers;
 	}
 
 	/** As imageComponents. */
-	set imageSpacers(spacers: readonly Spacer[]) {
+	set imageSpacers(spacers: Spacer[]) {
 		this.assignShell();
-		this.assignedImages = { ...this.assignedImages, spacers };
+		this.upstreamImageFields().spacers = spacers;
 		reportRenderChange(this);
+	}
+
+	private upstreamImageFields(): { components: Image[]; spacers: Spacer[] } {
+		if (this.imageFields === undefined) {
+			const images = this.images ?? [];
+			this.imageFields = {
+				components: images.map((image) => image.component),
+				spacers: images.map((image) => image.spacer),
+			};
+			// (A self-rendered row draws them from now on, and changes to the arrays are not reported.)
+			if (this.shell?.kind === "self") reportRenderChange(this);
+		}
+		return this.imageFields;
 	}
 
 	/** The shell mounted on this row, made again first if compact() let go of it. */
@@ -514,17 +530,18 @@ export class ToolExecutionComponent extends Container {
 			const parts = [renderChildLines(this, container, width)];
 			let reports = reportsChanges(container);
 			let images = this.images !== undefined;
-			if (this.assignedImages) {
-				const components = this.imageComponents;
-				const spacers = this.imageSpacers;
+			const fields = this.imageFields;
+			if (fields) {
+				const { components, spacers } = fields;
 				images = components.length > 0;
-				// (Arrays an extension made: drawn as upstream draws them, skipping holes.)
+				// Upstream's fields, which an extension read or assigned: drawn as upstream draws them, skipping holes. An
+				// extension may change the arrays at any time, which nothing reports: rendered again on every frame.
+				reports = false;
 				for (let i = 0; i < components.length; i++) {
 					const spacer = spacers[i];
 					const component = components[i];
 					if (spacer) parts.push(renderChildLines(this, spacer, width));
 					if (component) parts.push(renderChildLines(this, component, width));
-					if (component && !reportsChanges(component)) reports = false;
 				}
 			} else if (this.images) {
 				for (const { component, spacer } of this.images) {
@@ -648,7 +665,7 @@ export class ToolExecutionComponent extends Container {
 			hasContent = true;
 		}
 
-		this.assignedImages = undefined;
+		this.imageFields = undefined;
 		const previousImages = this.images;
 		if (previousImages) {
 			for (const { component, spacer } of previousImages) {

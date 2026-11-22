@@ -32,8 +32,8 @@ interface UpstreamToolRow {
 	contentText: Text;
 	contentTextRegion: MouseRegion;
 	selfRenderContainer: Container;
-	imageComponents: readonly Image[];
-	imageSpacers: readonly Spacer[];
+	imageComponents: Image[];
+	imageSpacers: Spacer[];
 	expanded: boolean;
 	hideComponent: boolean;
 }
@@ -208,6 +208,57 @@ describe("ToolExecutionComponent upstream surface (#339)", () => {
 			const children = component.children;
 			expect(children.indexOf(tool.imageComponents[i]!)).toBe(children.indexOf(tool.imageSpacers[i]!) + 1);
 		}
+	});
+
+	// #339: upstream's image fields are arrays of the row's own, the same until the next update.
+	test("imageComponents and imageSpacers are the same mutable arrays until the next update", () => {
+		setCapabilities({ images: "kitty", trueColor: true, hyperlinks: true });
+		const withoutImages = upstream(row(definition()));
+		const empty = withoutImages.imageComponents;
+		expect(withoutImages.imageComponents).toBe(empty);
+		expect(withoutImages.imageSpacers).toBe(withoutImages.imageSpacers);
+		expect(upstream(row(definition())).imageComponents).not.toBe(empty);
+		expect(() => empty.push(new Text("x", 0, 0) as unknown as Image)).not.toThrow();
+
+		const component = row(definition());
+		const tool = upstream(component);
+		component.updateResult({ content: [{ type: "image", data: PNG, mimeType: "image/png" }], isError: false });
+		const components = tool.imageComponents;
+		const spacers = tool.imageSpacers;
+		expect(tool.imageComponents).toBe(components);
+		expect(tool.imageSpacers).toBe(spacers);
+		expect(components).toHaveLength(1);
+		component.setExpanded(true);
+		expect(tool.imageComponents).not.toBe(components);
+		expect(tool.imageComponents[0]).toBe(components[0]);
+	});
+
+	// #339: upstream draws a self-rendered row's images from its fields.
+	test("what an extension adds to a self-rendered row's image arrays is drawn, until the next update", () => {
+		const component = row(definition("self"));
+		const tool = upstream(component);
+		const width = 60;
+		// In a container, which renders a row again only when told of a change: changing the arrays tells nobody.
+		const frame = new Container();
+		frame.addChild(component);
+		const before = frame.render(width).slice();
+		const components = tool.imageComponents;
+		const spacers = tool.imageSpacers;
+		expect(frame.render(width)).toEqual(before);
+		spacers.push(new Text("an added gap", 0, 0) as unknown as Spacer);
+		components.push(new Text("an added picture", 0, 0) as unknown as Image);
+		const lines = frame.render(width);
+		expect(lines.slice(before.length).map((line) => stripAnsi(line).trimEnd())).toEqual([
+			"an added gap",
+			"an added picture",
+		]);
+		component.setExpanded(true);
+		expect(text(frame.render(width))).not.toContain("an added");
+
+		const defaultRow = row(definition());
+		const unchanged = defaultRow.render(width).slice();
+		upstream(defaultRow).imageComponents.push(new Text("not drawn", 0, 0) as unknown as Image);
+		expect(defaultRow.render(width)).toEqual(unchanged);
 	});
 
 	// #339
