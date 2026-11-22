@@ -38,7 +38,8 @@ export class BashExecutionComponent extends Container {
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
 	private expanded = false;
-	private contentContainer: Container;
+	/** The rows between the borders: the command, its output and the status (updateDisplay()). */
+	private content: Container;
 	/** `dim` marks `!!` commands, whose output is excluded from the model context. */
 	private readonly colorKey: "dim" | "bashMode";
 	private outputPad: number;
@@ -57,8 +58,8 @@ export class BashExecutionComponent extends Container {
 		this.addChild(new DynamicBorder(borderColor));
 
 		// Content container (holds dynamic content between borders)
-		this.contentContainer = new Container();
-		this.addChild(this.contentContainer);
+		this.content = new Container();
+		this.addChild(this.content);
 
 		this.loader = new Loader(
 			ui,
@@ -113,6 +114,15 @@ export class BashExecutionComponent extends Container {
 		return super.renderShared(width);
 	}
 
+	/**
+	 * The rows between the borders, with all output received so far, as upstream Pi builds them in appendOutput(): rebuilt
+	 * now if output arrived since the last render. For extensions that read or restyle the rows (#339).
+	 */
+	get contentContainer(): Container {
+		if (this.displayDirty) this.updateDisplay();
+		return this.content;
+	}
+
 	setComplete(
 		exitCode: number | undefined,
 		cancelled: boolean,
@@ -150,25 +160,25 @@ export class BashExecutionComponent extends Container {
 		const hiddenLineCount = availableLines.length - previewLogicalLines.length;
 
 		// Rebuild content container
-		this.contentContainer.clear();
+		this.content.clear();
 
 		// Command header
 		const header = new Text(theme.fg(this.colorKey, theme.bold(`$ ${this.command}`)), this.outputPad, 0);
-		this.contentContainer.addChild(header);
+		this.content.addChild(header);
 
 		// Output
 		if (availableLines.length > 0) {
 			if (this.expanded) {
 				// Show all lines
 				const displayText = availableLines.map((line) => theme.fg("muted", line)).join("\n");
-				this.contentContainer.addChild(new Text(`\n${displayText}`, this.outputPad, 0));
+				this.content.addChild(new Text(`\n${displayText}`, this.outputPad, 0));
 			} else {
 				// Use shared visual truncation utility with width-aware caching
 				const styledOutput = previewLogicalLines.map((line) => theme.fg("muted", line)).join("\n");
 				const styledInput = `\n${styledOutput}`;
 				let cachedWidth: number | undefined;
 				let cachedLines: readonly string[] | undefined;
-				this.contentContainer.addChild({
+				this.content.addChild({
 					render: (width: number) => {
 						if (cachedLines === undefined || cachedWidth !== width) {
 							const result = truncateToVisualLines(styledInput, PREVIEW_LINES, width, this.outputPad);
@@ -187,7 +197,7 @@ export class BashExecutionComponent extends Container {
 
 		// Loader or status
 		if (this.status === "running") {
-			this.contentContainer.addChild(this.loader);
+			this.content.addChild(this.loader);
 		} else {
 			const statusParts: string[] = [];
 
@@ -217,7 +227,7 @@ export class BashExecutionComponent extends Container {
 			}
 
 			if (statusParts.length > 0) {
-				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, this.outputPad, 0));
+				this.content.addChild(new Text(`\n${statusParts.join("\n")}`, this.outputPad, 0));
 			}
 		}
 	}
