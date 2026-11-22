@@ -11,17 +11,21 @@
  * within one line.
  */
 import {
+	type BigIntStats,
+	close,
 	closeSync,
 	constants,
 	type Dirent,
 	existsSync,
+	fstat,
 	fstatSync,
+	open as openFile,
 	openSync,
+	read,
 	readSync,
-	type Stats,
 	statSync,
 } from "node:fs";
-import { type FileHandle, open, readdir, readFile, stat } from "node:fs/promises";
+import { type FileHandle, open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -343,7 +347,8 @@ const GLOB_META = /[*?[\\]/;
 
 /**
  * `globMatch` for one pattern, as a function: the common shapes (a name, `*.ext`, `prefix*`, `**` then a name) without the general
- * matcher. Every entry of a walk is checked against every ignore rule, and on a build without the JIT this is most of its time.
+ * matcher. Every entry of a walk is checked against the ignore rules that `IgnoreSet` cannot look up, and against find's and
+ * --glob's patterns.
  */
 export function compileGlob(pattern: string): (text: string) => boolean {
 	if (!GLOB_META.test(pattern)) return (text) => text === pattern;
@@ -367,6 +372,8 @@ export function compileGlob(pattern: string): (text: string) => boolean {
 interface IgnoreRule {
 	/** The folder of the file it is from, relative to the walk's top folder ("" for the top). */
 	base: string;
+	/** `base` and a `/` ("" for the top): what the paths it applies to start with. */
+	basePrefix: string;
 	pattern: string;
 	matches: (text: string) => boolean;
 	negate: boolean;
@@ -395,25 +402,108 @@ export function parseIgnoreFile(text: string, base: string, git: boolean): Ignor
 		if (!line) continue;
 		const anchored = line.includes("/");
 		if (line.startsWith("/")) line = line.slice(1);
-		rules.push({ base, pattern: line, matches: compileGlob(line), negate, dirOnly, anchored, git });
+		const basePrefix = base === "" ? "" : `${base}/`;
+		rules.push({ base, basePrefix, pattern: line, matches: compileGlob(line), negate, dirOnly, anchored, git });
 	}
 	return rules;
 }
 
-/** Whether the rules ignore the entry at `rel` (relative to the top folder): the last rule that matches decides. */
-function isIgnored(rules: readonly IgnoreRule[], rel: string, isDir: boolean): boolean {
-	let ignored = false;
-	const name = rel.slice(rel.lastIndexOf("/") + 1);
-	for (const rule of rules) {
-		if (rule.dirOnly && !isDir) continue;
-		if (ignored !== rule.negate) continue; // (It could not change the outcome.)
-		let below: string;
-		if (rule.base === "") below = rel;
-		else if (rel.startsWith(`${rule.base}/`)) below = rel.slice(rule.base.length + 1);
-		else continue;
-		if (rule.matches(rule.anchored ? below : name)) ignored = !rule.negate;
+/**
+ * Ignore rules, looked up by what they match, as ripgrep does: the last rule that matches an entry decides, and the rules for
+ * one name (`node_modules`), one extension (`*.log`) or one path (`/dist`) are found in a map instead of being matched one by
+ * one. Every entry of a walk is checked, and on a build without the JIT matching each against every rule was most of the
+ * walk's time.
+ */
+class IgnoreSet {
+	readonly rules: readonly IgnoreRule[];
+	/**
+	 * The indexes, highest first, of the rules for one name, by that name; a rule for one path is there by the path's last name,
+	 * the path (from the top folder) in `paths`.
+	 */
+	private readonly byName = new Map<string, number[]>();
+	/** The indexes, highest first, of the rules for one extension (`.log`), by that extension. */
+	private readonly byExtension = new Map<string, number[]>();
+	private readonly paths: (string | undefined)[] = [];
+	/** The indexes of the other rules, in order: matched one by one. */
+	private readonly others: number[] = [];
+
+	constructor(rules: readonly IgnoreRule[]) {
+		this.rules = rules;
+		for (let index = rules.length - 1; index >= 0; index--) {
+			const key = lookupKey(rules[index]);
+			if (!key) {
+				this.others.push(index);
+				continue;
+			}
+			let mapKey = key.key;
+			if (key.by === "path") {
+				this.paths[index] = key.key;
+				mapKey = key.key.slice(key.key.lastIndexOf("/") + 1);
+			}
+			const map = key.by === "extension" ? this.byExtension : this.byName;
+			const indexes = map.get(mapKey);
+			if (indexes) indexes.push(index);
+			else map.set(mapKey, [index]);
+		}
+		this.others.reverse();
 	}
-	return ignored;
+
+	/** Whether the entry at `rel` (relative to the top folder) is ignored: the last rule that matches it decides. */
+	ignores(rel: string, isDir: boolean): boolean {
+		const name = rel.slice(rel.lastIndexOf("/") + 1);
+		let last = this.lastOf(this.byName.get(name), -1, rel, isDir);
+		if (this.byExtension.size > 0) {
+			const dot = name.lastIndexOf(".");
+			if (dot !== -1) last = this.lastOf(this.byExtension.get(name.slice(dot)), last, rel, isDir);
+		}
+		// The other rules after the last one found: in order, each matched only if it could change the outcome (a rule that
+		// ignores while the entry is not ignored, a negated one while it is). The negated rules a file ends with (`!a/**/*.x`)
+		// are then not matched against every entry.
+		let ignored = last !== -1 && !this.rules[last].negate;
+		for (const index of this.others) {
+			if (index <= last) continue;
+			const rule = this.rules[index];
+			if (rule.negate !== ignored || (rule.dirOnly && !isDir) || !rel.startsWith(rule.basePrefix)) continue;
+			if (rule.matches(rule.anchored ? rel.slice(rule.basePrefix.length) : name)) ignored = !ignored;
+		}
+		return ignored;
+	}
+
+	/** The highest of `indexes` (rules a lookup found) above `above` whose rule matches the entry and applies to it; else `above`. */
+	private lastOf(indexes: number[] | undefined, above: number, rel: string, isDir: boolean): number {
+		if (!indexes) return above;
+		for (const index of indexes) {
+			if (index <= above) break;
+			const rule = this.rules[index];
+			const path = this.paths[index];
+			if ((path === undefined || path === rel) && (!rule.dirOnly || isDir) && rel.startsWith(rule.basePrefix))
+				return index;
+		}
+		return above;
+	}
+}
+
+/**
+ * Where `IgnoreSet` looks a rule up, when it is one of the shapes `compileGlob` matches without a glob: a name; `*.ext` (one dot);
+ * and anchored, a path, or `**` then a name or `*.ext`. A rule is matched against the name or, anchored, the path below its base.
+ */
+function lookupKey(rule: IgnoreRule): { by: "name" | "extension" | "path"; key: string } | undefined {
+	if (!rule.anchored) return nameKey(rule.pattern);
+	if (!GLOB_META.test(rule.pattern)) return { by: "path", key: rule.basePrefix + rule.pattern };
+	// (`**/x` matches the last name of the path below its base: the entry's name.)
+	if (rule.pattern.startsWith("**/") && !rule.pattern.slice(3).includes("/")) return nameKey(rule.pattern.slice(3));
+	return undefined;
+}
+
+/** `lookupKey` for a pattern matched against a name (it has no `/`). */
+function nameKey(pattern: string): { by: "name" | "extension"; key: string } | undefined {
+	if (!GLOB_META.test(pattern)) return { by: "name", key: pattern };
+	// `*.log` matches the names that end with `.log`: those whose extension (from their last dot) is `.log`.
+	const suffix = pattern.slice(1);
+	if (pattern.startsWith("*") && suffix.startsWith(".") && !suffix.includes(".", 1) && !GLOB_META.test(suffix)) {
+		return { by: "extension", key: suffix };
+	}
+	return undefined;
 }
 
 /** The most of an ignore file, git's config or a `.git` file that is read. */
@@ -442,26 +532,81 @@ function readSmallFile(file: string): string {
 	}
 }
 
-function readRules(file: string, base: string, git: boolean): IgnoreRule[] {
-	try {
-		return parseIgnoreFile(readSmallFile(file), base, git);
-	} catch {
-		return [];
-	}
+/** What `readCached` made of a file, and the file's `stamp` then. */
+interface Cached<T> {
+	stamp: string;
+	value: T;
 }
+
+/** The most files `readCached` remembers in each of its caches (the first remembered is let go first). */
+const CACHED_FILES = 4096;
+
+/**
+ * A file changed this recently may change again without its stamp changing (on a file system whose times are as coarse as a
+ * second), so `readCached` does not remember it: git's "racy" rule.
+ */
+const RACY_MS = 2500;
+
+/**
+ * What `parse` makes of a small file (as `readSmallFile` reads it), remembered across searches while the file's identity, size
+ * and times stay the same: a search reads the same ignore files each time. Undefined when there is no such file to read.
+ */
+function readCached<T>(
+	cache: Map<string, Cached<T>>,
+	file: string,
+	variant: string,
+	parse: (text: string) => T,
+): T | undefined {
+	let stats: BigIntStats | undefined;
+	try {
+		stats = statSync(file, { bigint: true, throwIfNoEntry: false });
+	} catch {
+		return undefined;
+	}
+	// (A link to a device or a pipe, a folder, a larger file: not read, as `readSmallFile` refuses them.)
+	if (!stats?.isFile() || stats.size > BigInt(SMALL_FILE_BYTES)) return undefined;
+	const key = `${file}\0${variant}`;
+	const stamp = `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`;
+	const cached = cache.get(key);
+	if (cached?.stamp === stamp) return cached.value;
+	cache.delete(key);
+	let text: string;
+	try {
+		text = readSmallFile(file);
+	} catch {
+		return undefined;
+	}
+	const value = parse(text);
+	// (Read after the stat: if it changed in between, the next search sees another stamp and reads it again.)
+	if (Date.now() - Number(stats.mtimeMs > stats.ctimeMs ? stats.mtimeMs : stats.ctimeMs) > RACY_MS) {
+		if (cache.size >= CACHED_FILES) {
+			const first = cache.keys().next();
+			if (!first.done) cache.delete(first.value);
+		}
+		cache.set(key, { stamp, value });
+	}
+	return value;
+}
+
+/** The rules of the ignore files read, by path and base. */
+const ignoreFiles = new Map<string, Cached<IgnoreRule[]>>();
+
+/** The rules of an ignore file; none if there is no such file. The rules may be shared: never changed. */
+function readRules(file: string, base: string, git: boolean): readonly IgnoreRule[] {
+	return readCached(ignoreFiles, file, `${base}\0${git}`, (text) => parseIgnoreFile(text, base, git)) ?? [];
+}
+
+/** ~/.gitconfig's core.excludesFile, as it is written. */
+const gitConfigs = new Map<string, Cached<string | undefined>>();
 
 /** git's global excludes file: core.excludesFile, or $XDG_CONFIG_HOME/git/ignore. */
 function globalExcludesFile(): string {
-	try {
-		const config = readSmallFile(path.join(homedir(), ".gitconfig"));
+	const value = readCached(gitConfigs, path.join(homedir(), ".gitconfig"), "", (config) => {
 		const match = /^\s*excludesfile\s*=\s*(.+?)\s*$/im.exec(config);
-		if (match) {
-			const value = match[1].replace(/^"(.*)"$/, "$1");
-			return value.startsWith("~") ? path.join(homedir(), value.slice(1)) : value;
-		}
-	} catch {
-		// (No ~/.gitconfig: git's default place.)
-	}
+		return match?.[1].replace(/^"(.*)"$/, "$1");
+	});
+	if (value !== undefined) return value.startsWith("~") ? path.join(homedir(), value.slice(1)) : value;
+	// (No ~/.gitconfig, or no excludesFile in it: git's default place.)
 	return path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "git", "ignore");
 }
 
@@ -527,56 +672,98 @@ export interface WalkOptions {
 interface DirTask {
 	abs: string;
 	rel: string;
-	rules: IgnoreRule[];
+	ignore: IgnoreSet;
 	git: boolean;
 }
 
-/** Every entry below `root` that the ignore files leave in (and `keep` takes), in no particular order. */
+/**
+ * What the walk has still to give: an entry, or a folder's entries and folders in order (`children`, once its listing has been
+ * asked for; undefined when it could not be read). `key` places it among its folder's: its name, and a folder's name and a `/`
+ * (what is in a folder sorts as its path does).
+ */
+type Pending = { type: "entry"; key: string; entry: WalkEntry } | Folder;
+
+interface Folder {
+	type: "folder";
+	key: string;
+	task: DirTask;
+	children: Promise<Pending[] | undefined> | undefined;
+}
+
+/**
+ * How many folders are read at once at most, ahead of the walk. Reading a folder waits on the disk, not on the processor, so
+ * several are read at once, the last found first: going depth first, the walk goes into one of them next. (Reading only the
+ * next folders on the walk's own stack left it waiting for each new level in turn, idle half its time.)
+ */
+const FOLDERS_READING = 64;
+/** How many folders are read ahead of the walk, and not yet gone into, at most (what a search that stops early wastes). */
+const FOLDERS_AHEAD = 1024;
+
+/** Every entry below `root` that the ignore files leave in (and `keep` takes), in path order. */
 export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
+	const entries: WalkEntry[] = [];
+	for await (const run of walkInOrder(options)) for (const entry of run) entries.push(entry);
+	return entries;
+}
+
+/**
+ * `walk`'s entries a run at a time, found as they are asked for: a search that has what it needs stops the walk there. They
+ * come in path order, as strings sort (`a`, `a.b`, `a/b`): depth first, a folder's entries sorted by name, with what is in a
+ * folder placed as if its name had a `/` after it.
+ */
+export async function* walkInOrder(options: WalkOptions): AsyncGenerator<WalkEntry[], void, undefined> {
 	const root = path.resolve(options.root);
 	const repository = repositoryOf(root);
 	// Paths are matched relative to the top folder: the repository's, whose ignore files above the search folder apply too.
 	const top = repository ?? root;
 	const rootRel = toPosix(path.relative(top, root));
 	const git = repository !== undefined || !options.requireGit;
-	const rules: IgnoreRule[] = [];
+	let rules: readonly IgnoreRule[] = [];
 	if (repository) {
-		rules.push(...readRules(globalExcludesFile(), "", true));
-		rules.push(...readRules(excludeFileOf(repository), "", true));
+		rules = [...readRules(globalExcludesFile(), "", true), ...readRules(excludeFileOf(repository), "", true)];
 		// The ignore files of the folders from the repository's down to the search folder's parent.
 		let dir = repository;
 		for (const segment of rootRel ? rootRel.split("/") : []) {
 			const base = toPosix(path.relative(top, dir));
-			rules.push(...readRules(path.join(dir, ".gitignore"), base, true));
-			rules.push(...readRules(path.join(dir, ".ignore"), base, false));
+			rules = [
+				...rules,
+				...readRules(path.join(dir, ".gitignore"), base, true),
+				...readRules(path.join(dir, ".ignore"), base, false),
+			];
 			dir = path.join(dir, segment);
 		}
 	}
 
-	const entries: WalkEntry[] = [];
-	const visit = async (task: DirTask): Promise<DirTask[]> => {
-		let dirents: Dirent[];
-		try {
-			dirents = await readdir(task.abs, { withFileTypes: true });
-		} catch {
-			return []; // (Unreadable: passed over, as ripgrep and fd do.)
+	const topRel = (rel: string) => (rootRel ? (rel ? `${rootRel}/${rel}` : rootRel) : rel);
+
+	/** A folder's entries and folders, in the order the walk gives them. */
+	const visit = (task: DirTask, dirents: Dirent[]): Pending[] => {
+		let hasGit = false;
+		let hasGitignore = false;
+		let hasIgnore = false;
+		for (const dirent of dirents) {
+			if (dirent.name === ".git") hasGit = true;
+			else if (dirent.name === ".gitignore") hasGitignore = true;
+			else if (dirent.name === ".ignore") hasIgnore = true;
 		}
-		let { rules: taskRules, git: taskGit } = task;
-		const names = new Set(dirents.map((d) => d.name));
-		const topRel = (rel: string) => (rootRel ? (rel ? `${rootRel}/${rel}` : rootRel) : rel);
 		const base = topRel(task.rel);
-		if (task.rel !== "" && names.has(".git")) {
+		let { ignore, git: taskGit } = task;
+		let taskRules = ignore.rules;
+		if (task.rel !== "" && hasGit) {
 			// A repository of its own: the ignore rules of the one around it stop here.
-			taskRules = taskRules.filter((rule) => !rule.git);
-			taskRules.push(...readRules(excludeFileOf(task.abs), base, true));
+			taskRules = [...taskRules.filter((rule) => !rule.git), ...readRules(excludeFileOf(task.abs), base, true)];
 			taskGit = true;
 		}
-		if (taskGit && names.has(".gitignore")) {
-			taskRules = [...taskRules, ...readRules(path.join(task.abs, ".gitignore"), base, true)];
+		if (taskGit && hasGitignore) {
+			taskRules = withRules(taskRules, readRules(path.join(task.abs, ".gitignore"), base, true));
 		}
-		if (names.has(".ignore")) taskRules = [...taskRules, ...readRules(path.join(task.abs, ".ignore"), base, false)];
+		if (hasIgnore) taskRules = withRules(taskRules, readRules(path.join(task.abs, ".ignore"), base, false));
+		if (taskRules !== ignore.rules) ignore = new IgnoreSet(taskRules);
 
-		const subdirs: DirTask[] = [];
+		// (`path.join` without its normalizing, a large part of the walk's time: the folder's path is normalized already, and a
+		// name has no separator, nor is it `.` or `..`.)
+		const prefix = task.abs.endsWith(path.sep) ? task.abs : task.abs + path.sep;
+		const items: Pending[] = [];
 		for (const dirent of dirents) {
 			if (dirent.name === ".git") continue;
 			const kind = dirent.isDirectory()
@@ -588,28 +775,90 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 						: undefined;
 			if (!kind) continue;
 			const rel = task.rel ? `${task.rel}/${dirent.name}` : dirent.name;
-			if (taskRules.length > 0 && isIgnored(taskRules, topRel(rel), kind === "dir")) {
+			if (ignore.rules.length > 0 && ignore.ignores(topRel(rel), kind === "dir")) {
 				if (kind === "dir" || !options.override?.(rel)) continue;
 			}
-			const abs = path.join(task.abs, dirent.name);
-			if (!options.keep || options.keep(rel, kind)) entries.push({ rel, abs, kind });
-			if (kind === "dir") subdirs.push({ abs, rel, rules: taskRules, git: taskGit });
+			const abs = prefix + dirent.name;
+			if (!options.keep || options.keep(rel, kind)) {
+				items.push({ type: "entry", key: dirent.name, entry: { rel, abs, kind } });
+			}
+			if (kind === "dir") {
+				const task: DirTask = { abs, rel, ignore, git: taskGit };
+				items.push({ type: "folder", key: `${dirent.name}/`, task, children: undefined });
+			}
 		}
-		return subdirs;
+		return items.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 	};
 
-	// Several folders at once: reading a folder waits on the disk, not on the processor.
-	const pending: DirTask[] = [{ abs: root, rel: "", rules, git }];
-	while (pending.length > 0) {
-		if (options.signal?.aborted) throw new Error("Operation aborted");
-		const batch = pending.splice(0, 64);
-		const found = await Promise.all(batch.map(visit));
-		for (const subdirs of found) pending.push(...subdirs);
+	// The folders found and not read yet, the next to read last (a folder's first subfolder is read before its others); how
+	// many are being read, and how many are read or being read and not yet gone into. None is started once the walk stops.
+	const unread: Folder[] = [];
+	let reading = 0;
+	let ahead = 0;
+	let stopped = false;
+	const readMore = () => {
+		while (!stopped && reading < FOLDERS_READING && ahead < FOLDERS_AHEAD) {
+			const folder = unread.pop();
+			if (!folder) return;
+			if (!folder.children) read(folder);
+		}
+	};
+	const read = (folder: Folder) => {
+		reading++;
+		ahead++;
+		folder.children = readdir(folder.task.abs, { withFileTypes: true }).then(
+			(dirents) => {
+				reading--;
+				const children = visit(folder.task, dirents);
+				for (let i = children.length - 1; i >= 0; i--) {
+					const child = children[i];
+					if (child.type === "folder") unread.push(child);
+				}
+				readMore();
+				return children;
+			},
+			() => {
+				reading--;
+				readMore();
+				return undefined; // (Unreadable: passed over, as ripgrep and fd do.)
+			},
+		);
+		// (A walk stopped early leaves some unread: what `visit` throws then is not left unhandled.)
+		folder.children.catch(() => {});
+	};
+
+	// What is left to give, the next last.
+	const stack: Pending[] = [
+		{ type: "folder", key: "", task: { abs: root, rel: "", ignore: new IgnoreSet(rules), git }, children: undefined },
+	];
+	let run: WalkEntry[] = [];
+	try {
+		for (let pending = stack.pop(); pending; pending = stack.pop()) {
+			if (pending.type === "entry") {
+				run.push(pending.entry);
+				continue;
+			}
+			if (run.length > 0) {
+				yield run;
+				run = [];
+			}
+			if (options.signal?.aborted) throw new Error("Operation aborted");
+			if (!pending.children) read(pending);
+			const children = await pending.children;
+			ahead--;
+			if (children) for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
+			readMore();
+		}
+		if (run.length > 0) yield run;
+	} finally {
+		stopped = true;
 	}
-	return entries;
 }
 
-const byPath = (a: WalkEntry, b: WalkEntry) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0);
+/** `rules` and `more` after them (`rules` itself when there are none more). */
+function withRules(rules: readonly IgnoreRule[], more: readonly IgnoreRule[]): readonly IgnoreRule[] {
+	return more.length > 0 ? [...rules, ...more] : rules;
+}
 
 // --- find ---------------------------------------------------------------------------------------------------------------
 
@@ -636,10 +885,16 @@ export async function nativeFind(options: NativeFindOptions): Promise<string[]> 
 		const subject = fullPath ? rootPrefix + rel : rel.slice(rel.lastIndexOf("/") + 1);
 		return patterns.some((matches) => matches(subject));
 	};
-	return (await walk({ root: options.root, requireGit: false, keep, signal: options.signal }))
-		.sort(byPath)
-		.slice(0, Math.max(0, options.limit))
-		.map((entry) => (entry.kind === "dir" ? `${entry.rel}/` : entry.rel));
+	const found: string[] = [];
+	if (options.limit <= 0) return found;
+	// (The walk gives them in path order: it stops at the limit.)
+	for await (const run of walkInOrder({ root: options.root, requireGit: false, keep, signal: options.signal })) {
+		for (const entry of run) {
+			found.push(entry.kind === "dir" ? `${entry.rel}/` : entry.rel);
+			if (found.length >= options.limit) return found;
+		}
+	}
+	return found;
 }
 
 // --- grep ---------------------------------------------------------------------------------------------------------------
@@ -695,71 +950,171 @@ export function translatePattern(pattern: string): { source: string; ignoreCase:
 	return { source, ignoreCase };
 }
 
+/** The most literals `requiredLiterals` gives: each is looked for in every file. */
+const MAX_LITERALS = 32;
+
 /**
- * The longest run of plain characters every match of `source` contains, when it is easy to be sure of one (no alternation,
- * outside any group, not made optional): files without it need no regular expression run over them.
+ * Literals of which every match of `source` contains one, when it is easy to be sure of them: a file with none of them needs
+ * no regular expression run over it, and of a file that has one, only the lines that have one. Of a sequence, its longest run
+ * of plain characters (outside any group, not made optional) or a group's literals (a group not made optional), whichever
+ * has the longer shortest literal; of an alternation, every alternative's. Each is at least 3 characters long. Undefined if
+ * there are none such, or the expression has a part this does not know: a lookaround (it could see past a line), or an escape
+ * that stands for a character (`\x66`) or more (`\p{L}`, `\1`).
  */
+export function requiredLiterals(source: string): string[] | undefined {
+	const scan = { source, at: 0 };
+	let literals: string[] | undefined;
+	try {
+		literals = alternationLiterals(scan);
+	} catch (error) {
+		if (error === UNKNOWN_PART) return undefined;
+		throw error;
+	}
+	if (!literals || scan.at < source.length) return undefined;
+	// (A literal with another in it is found where that one is.)
+	const fewest: string[] = [];
+	for (const literal of [...new Set(literals)].sort((a, b) => a.length - b.length)) {
+		if (!fewest.some((shorter) => literal.includes(shorter))) fewest.push(literal);
+	}
+	return fewest.length <= MAX_LITERALS ? fewest : undefined;
+}
+
+/** Thrown by the scan of an expression for a part `requiredLiterals` does not know. */
+const UNKNOWN_PART = new Error("A part of the expression whose literals are not known");
+
 /** Escapes that are one character of the pattern and match no particular text: classes, anchors, white space. */
 const SIMPLE_ESCAPES = "dDwWsSbBAzZntrfv";
 
-export function requiredLiteral(source: string): string | undefined {
-	if (source.includes("|") || source.includes("(?")) return undefined;
-	let best = "";
+/** A quantifier that makes what is before it optional (at least none). */
+const OPTIONAL = /[?*]|\{0+(?:,\d*)?\}/y;
+/** A `{...}` quantifier (without the u flag, a `{` that does not start one is the character). */
+const BRACES = /\{(\d+)(?:,\d*)?\}/y;
+
+interface Scan {
+	source: string;
+	at: number;
+}
+
+/** `requiredLiterals` of the alternation at `scan.at`, which it leaves at the `)` that closes the alternation or the end. */
+function alternationLiterals(scan: Scan): string[] | undefined {
+	let union: string[] | undefined = [];
+	for (;;) {
+		const literals = sequenceLiterals(scan);
+		union = union && literals ? [...union, ...literals] : undefined;
+		if (scan.source[scan.at] !== "|") return union;
+		scan.at++;
+	}
+}
+
+/** `requiredLiterals` of the sequence at `scan.at`, which it leaves at the `|` or `)` that ends the sequence, or the end. */
+function sequenceLiterals(scan: Scan): string[] | undefined {
+	const { source } = scan;
+	let best: string[] | undefined;
+	const consider = (literals: string[]) => {
+		const shortest = shortestLength(literals);
+		if (
+			!best ||
+			shortest > shortestLength(best) ||
+			(shortest === shortestLength(best) && literals.length < best.length)
+		) {
+			best = literals;
+		}
+	};
 	let run = "";
-	let depth = 0;
 	const end = () => {
-		if (run.length > best.length) best = run;
+		if (run.length >= 3) consider([run]);
 		run = "";
 	};
-	for (let i = 0; i < source.length; i++) {
-		const c = source[i];
+	// The character before a `?`, `*` or `{0...}` is optional: out of the run. (A run holds surrogates only in pairs.)
+	const dropLast = () => {
+		run = run.slice(0, isLowSurrogate(run.charCodeAt(run.length - 1)) ? -2 : -1);
+	};
+	while (scan.at < source.length) {
+		const c = source[scan.at];
+		if (c === "|" || c === ")") break;
 		if (c === "\\") {
-			// A class or an anchor (`\d`, `\b`), or an escaped sign (`\.`): one character, and not a known one. An escape that
-			// stands for a character or more (`\x66`, `\u{1F600}`, `\p{L}`, `\1`) has a length of its own: no literal then.
-			const next = source[i + 1] ?? "";
-			if (/[0-9A-Za-z]/.test(next) && !SIMPLE_ESCAPES.includes(next)) return undefined;
-			end();
-			i++;
+			const next = source[scan.at + 1] ?? "";
+			if (/[0-9A-Za-z]/.test(next)) {
+				// A class or an anchor (`\d`, `\b`): one character, not a known one. An escape that stands for a character or
+				// more (`\x66`, `\u{1F600}`, `\p{L}`, `\1`) has a length of its own: not known.
+				if (!SIMPLE_ESCAPES.includes(next)) throw UNKNOWN_PART;
+				end();
+			} else if (next !== "" && next < "\x80") {
+				run += next; // (An escaped sign, `\.`: that character.)
+			} else {
+				end();
+			}
+			scan.at += 2;
 			continue;
 		}
 		if (c === "(") {
 			end();
-			depth++;
-			continue;
-		}
-		if (c === ")") {
-			end();
-			depth = Math.max(0, depth - 1);
+			scan.at++;
+			if (source[scan.at] === "?") {
+				// A group that does not capture, or one with a name; any other `(?` (a lookaround) is not known.
+				const kind = source[scan.at + 1];
+				const after = source[scan.at + 2];
+				if (kind === ":") scan.at += 2;
+				else if (kind === "<" && after !== "=" && after !== "!") {
+					const close = source.indexOf(">", scan.at);
+					if (close === -1) throw UNKNOWN_PART;
+					scan.at = close + 1;
+				} else throw UNKNOWN_PART;
+			}
+			const inner = alternationLiterals(scan);
+			if (source[scan.at] !== ")") throw UNKNOWN_PART;
+			scan.at++;
+			OPTIONAL.lastIndex = scan.at;
+			if (inner && !OPTIONAL.test(source)) consider(inner);
 			continue;
 		}
 		if (c === "[") {
+			// Without the u flag a class ends at the first `]` not escaped, even right after the `[` (`[]` matches nothing).
 			end();
-			const close = source.indexOf("]", i + 2);
-			if (close === -1) return undefined;
-			i = close;
+			let i = scan.at + 1;
+			if (source[i] === "^") i++;
+			while (i < source.length && source[i] !== "]") i += source[i] === "\\" ? 2 : 1;
+			if (i >= source.length) throw UNKNOWN_PART;
+			scan.at = i + 1;
 			continue;
 		}
-		if (c === "?" || c === "*" || c === "{") {
-			// The character before is optional, or repeated an unknown number of times.
-			run = run.slice(0, -1);
+		if (c === "?" || c === "*") {
+			dropLast();
 			end();
-			if (c === "{") {
-				const close = source.indexOf("}", i);
-				if (close === -1) return undefined;
-				i = close;
-			}
+			scan.at++;
 			continue;
 		}
-		if (c === "+" || c === "." || c === "^" || c === "$") {
+		if (c === "{") {
+			BRACES.lastIndex = scan.at;
+			const quantifier = BRACES.exec(source);
+			if (quantifier && Number(quantifier[1]) === 0) dropLast();
 			end();
+			scan.at += quantifier ? quantifier[0].length : 1;
 			continue;
 		}
-		if (depth === 0) run += c;
-		else end();
+		const code = source.charCodeAt(scan.at);
+		if (code >= 0xd800 && code <= 0xdbff && isLowSurrogate(source.charCodeAt(scan.at + 1))) {
+			run += source.slice(scan.at, scan.at + 2);
+			scan.at += 2;
+			continue;
+		}
+		// `+` (what is before it is there at least once), `.`, `^`, `$`; `]` and `}`, the characters; a lone surrogate or
+		// U+FFFD, which text read from UTF-8 has where its bytes are not UTF-8: not plain characters of the run.
+		if ("+.^$]}".includes(c) || (code >= 0xd800 && code <= 0xdfff) || code === 0xfffd) end();
+		else run += c;
+		scan.at++;
 	}
 	end();
-	return best.length >= 3 ? best : undefined;
+	return best;
 }
+
+function shortestLength(literals: string[]): number {
+	let shortest = Number.POSITIVE_INFINITY;
+	for (const literal of literals) shortest = Math.min(shortest, literal.length);
+	return shortest;
+}
+
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 const NEWLINE = 10;
 
@@ -787,8 +1142,8 @@ function stripCr(line: string): string {
 type SearchRest = (deadline: number) => SearchRest | undefined;
 
 interface Matcher {
-	/** Bytes every matching file has (a fast check before anything else). */
-	prefilter?: Buffer;
+	/** Whether `buffer` may have a match: false only when it has none (a fast check before anything else). */
+	mayMatch?: (buffer: Buffer) => boolean;
 	/**
 	 * Searches whole lines: a file, or a part of one that ends with a line break; `firstLine` is the number of its first. A
 	 * regular expression can take long on a line (the engine backtracks), so a search that has to run one checks the time
@@ -806,6 +1161,64 @@ interface Matcher {
 }
 
 const isAscii = (text: string) => /^[\x00-\x7f]*$/.test(text);
+
+/** Finds where any of some literals are in a buffer. */
+interface LiteralFinder {
+	/** Whether `buffer` has one of them. */
+	has(buffer: Buffer): boolean;
+	/** For `buffer`: from a place in it, where the next of them starts (-1: nowhere). Asked for places in increasing order. */
+	in(buffer: Buffer): (from: number) => number;
+}
+
+/** A `LiteralFinder` for literals as they are: their UTF-8 bytes. */
+function exactFinder(literals: readonly string[]): LiteralFinder {
+	const finds = literals.map((literal) => rarestFirst(Buffer.from(literal, "utf8"), BUFFER_SEARCH));
+	return {
+		has: (buffer) => finds.some((find) => find(buffer, 0) !== -1),
+		in: (buffer) =>
+			finds.length === 1
+				? (from) => finds[0](buffer, from)
+				: nextOfAny(finds.length, (k, from) => finds[k](buffer, from)),
+	};
+}
+
+/**
+ * A `LiteralFinder` for ASCII literals, letters in either case. The buffer is read as Latin-1 (a character a byte) and put in
+ * lower case, where an ASCII letter comes only from one (the other Latin-1 letters stay outside ASCII): the lower-case literals
+ * are found there by the engine's own search. (A check of each byte in JavaScript is interpreted on a build without the JIT:
+ * 5 to 10 times as long.) A buffer larger than LOWERED_BYTES (a piece of a file that ends inside a very long line) is searched
+ * byte by byte instead.
+ */
+function caselessFinder(literals: readonly string[]): LiteralFinder {
+	const needles = [...new Set(literals.map((literal) => literal.toLowerCase()))];
+	const finds = needles.map((needle) => rarestFirst(needle, TEXT_SEARCH));
+	const bytes = needles.map((needle) => Buffer.from(needle, "latin1"));
+	// (The text of the last buffer: `has` and then `in` are asked about the same one.)
+	let last: Buffer | undefined;
+	let lastText = "";
+	const findIn = (buffer: Buffer): ((k: number, from: number) => number) => {
+		if (buffer.length > LOWERED_BYTES) return (k, from) => indexOfIgnoringCase(buffer, bytes[k], from);
+		if (buffer !== last) {
+			last = buffer;
+			lastText = buffer.toString("latin1").toLowerCase();
+		}
+		const text = lastText;
+		return (k, from) => finds[k](text, from);
+	};
+	return {
+		has: (buffer) => {
+			const find = findIn(buffer);
+			return needles.some((_, k) => find(k, 0) !== -1);
+		},
+		in: (buffer) => {
+			const find = findIn(buffer);
+			return needles.length === 1 ? (from) => find(0, from) : nextOfAny(needles.length, find);
+		},
+	};
+}
+
+/** The largest buffer `caselessFinder` puts in lower case: a string that long is held besides it (and an engine has a limit). */
+const LOWERED_BYTES = 32 * 1024 * 1024;
 
 /** Where `needle` (lower case, ASCII) is in `buffer` from `from` on, letters in either case; -1 if nowhere. */
 function indexOfIgnoringCase(buffer: Buffer, needle: Buffer, from: number): number {
@@ -827,6 +1240,83 @@ function indexOfIgnoringCase(buffer: Buffer, needle: Buffer, from: number): numb
 		else upper = buffer.indexOf(firstUpper, at + 1);
 	}
 	return -1;
+}
+
+/** The engine's search in a buffer or a string, and what `rarestFirst` needs besides. */
+interface Search<T extends Buffer | string> {
+	indexOf(haystack: T, needle: T, from: number): number;
+	/** Whether `part` is in `haystack` at `at`. */
+	isAt(haystack: T, part: T, at: number): boolean;
+	slice(needle: T, start: number, end: number): T;
+	unit(needle: T, index: number): number;
+}
+
+const BUFFER_SEARCH: Search<Buffer> = {
+	indexOf: (haystack, needle, from) => haystack.indexOf(needle, from),
+	isAt: (haystack, part, at) => haystack.compare(part, 0, part.length, at, at + part.length) === 0,
+	slice: (needle, start, end) => needle.subarray(start, end),
+	unit: (needle, index) => needle[index],
+};
+
+const TEXT_SEARCH: Search<string> = {
+	indexOf: (haystack, needle, from) => haystack.indexOf(needle, from),
+	isAt: (haystack, part, at) => haystack.startsWith(part, at),
+	slice: (needle, start, end) => needle.slice(start, end),
+	unit: (needle, index) => needle.charCodeAt(index),
+};
+
+/** Characters of source text, the most common first: the others (upper-case letters, most digits and signs) are rarer. */
+const COMMON_CHARACTERS = " etaoinsrlcdupmhfg.();=,yb_\"'/-:{}wvk0x1";
+
+/**
+ * Where `needle` is in a haystack from a place on (-1: nowhere), found by its part from its rarest character on, and its start
+ * checked at each place that part is: the engine's search stops at each place the first character it looks for is, and a
+ * rare one is at few places (`FileSync` was found 5 times as fast as `readFileSync`).
+ */
+function rarestFirst<T extends Buffer | string>(needle: T, search: Search<T>): (haystack: T, from: number) => number {
+	let at = 0;
+	let rarest = -1;
+	for (let i = 0; i < needle.length; i++) {
+		const rank = COMMON_CHARACTERS.indexOf(String.fromCharCode(search.unit(needle, i)));
+		const rarity = rank === -1 ? COMMON_CHARACTERS.length : rank;
+		if (rarity > rarest) {
+			rarest = rarity;
+			at = i;
+		}
+	}
+	if (at === 0) return (haystack, from) => search.indexOf(haystack, needle, from);
+	const head = search.slice(needle, 0, at);
+	const tail = search.slice(needle, at, needle.length);
+	return (haystack, from) => {
+		for (
+			let place = search.indexOf(haystack, tail, from + at);
+			place !== -1;
+			place = search.indexOf(haystack, tail, place + 1)
+		) {
+			if (search.isAt(haystack, head, place - at)) return place - at;
+		}
+		return -1;
+	};
+}
+
+/**
+ * The nearest of `count` searches' next places (`find(k, from)`, -1 for none), from places asked for in increasing order: a
+ * search runs again only once the place passes the one it found last.
+ */
+function nextOfAny(count: number, find: (k: number, from: number) => number): (from: number) => number {
+	const found = new Array<number>(count).fill(-2); // (-2: not run yet.)
+	return (from) => {
+		let nearest = -1;
+		for (let k = 0; k < count; k++) {
+			let at = found[k];
+			if (at !== -1 && at < from) {
+				at = find(k, from);
+				found[k] = at;
+			}
+			if (at !== -1 && (nearest === -1 || at < nearest)) nearest = at;
+		}
+		return nearest;
+	};
 }
 
 /**
@@ -872,30 +1362,24 @@ function searchLines(
 
 /** A literal: its bytes, or with `ignoreCase` (ASCII) its letters in either case. */
 function literalMatcher(pattern: string, ignoreCase: boolean): Matcher {
-	if (ignoreCase) {
-		const needle = Buffer.from(pattern.toLowerCase(), "utf8");
+	if (pattern === "") {
+		// (Every line has it.)
 		return {
 			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
 				searchLines(
 					buffer,
-					(from) => indexOfIgnoringCase(buffer, needle, from),
+					(from) => (from < buffer.length ? from : -1),
 					undefined,
 					{ filePath, budget, keepChars, out, firstLine },
 					deadline,
 				),
 		};
 	}
-	const needle = Buffer.from(pattern, "utf8");
+	const finder = ignoreCase ? caselessFinder([pattern]) : exactFinder([pattern]);
 	return {
-		prefilter: needle.length > 0 ? needle : undefined,
+		mayMatch: finder.has,
 		search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
-			searchLines(
-				buffer,
-				(from) => (needle.length > 0 ? buffer.indexOf(needle, from) : from < buffer.length ? from : -1),
-				undefined,
-				{ filePath, budget, keepChars, out, firstLine },
-				deadline,
-			),
+			searchLines(buffer, finder.in(buffer), undefined, { filePath, budget, keepChars, out, firstLine }, deadline),
 	};
 }
 
@@ -908,33 +1392,15 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 		throw new Error(`regex parse error: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const test = (line: string) => one.test(line);
-	// What every match contains: only the lines that have it are run through the expression.
-	const literal = requiredLiteral(source);
-	if (literal && !ignoreCase) {
-		const needle = Buffer.from(literal, "utf8");
+	// What every match contains one of: only the lines that have one are run through the expression. (With `ignoreCase`, only
+	// ASCII literals: without the u flag an ASCII letter matches only ASCII letters, the same in either case.)
+	const literals = requiredLiterals(source);
+	if (literals && (!ignoreCase || literals.every(isAscii))) {
+		const finder = ignoreCase ? caselessFinder(literals) : exactFinder(literals);
 		return {
-			prefilter: needle,
+			mayMatch: finder.has,
 			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
-				searchLines(
-					buffer,
-					(from) => buffer.indexOf(needle, from),
-					test,
-					{ filePath, budget, keepChars, out, firstLine },
-					deadline,
-				),
-		};
-	}
-	if (literal && isAscii(literal)) {
-		const needle = Buffer.from(literal.toLowerCase(), "utf8");
-		return {
-			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
-				searchLines(
-					buffer,
-					(from) => indexOfIgnoringCase(buffer, needle, from),
-					test,
-					{ filePath, budget, keepChars, out, firstLine },
-					deadline,
-				),
+				searchLines(buffer, finder.in(buffer), test, { filePath, budget, keepChars, out, firstLine }, deadline),
 		};
 	}
 	// A window of lines at a time: an expression run over the whole text tries every place in it within one call, which a
@@ -1030,12 +1496,11 @@ function globFilter(glob: string | undefined): { take: (rel: string) => boolean;
 const WINDOW_BYTES = 16 * 1024;
 
 /**
- * How many files are read at once at most, and how many are asked for their size ahead of being read. Both are asked for half
- * of that at a time: a request on its own wakes a worker thread, and its answer the main thread; a batch keeps them busy.
- * (With a request per file and 32 files read at once, grep over 20,000 small files took 10-20% longer.)
+ * How many files are read at once at most. They are asked for half of that at a time: a request on its own wakes a worker
+ * thread, and its answer the main thread; a batch keeps them busy. (With a request per file and 32 files read at once, grep
+ * over 20,000 small files took 10-20% longer.)
  */
 const READ_AHEAD = 64;
-const STAT_AHEAD = 256;
 
 /** How long grep searches before the rest of Pi (the screen, the Escape that aborts the search) has a turn. */
 const TURN_MS = 50;
@@ -1088,7 +1553,7 @@ const PIECE_BYTES = 1024 * 1024;
  *
  * Its speed is that of a search of the file read whole: one buffer, read into again (the start of a line a piece ends inside
  * of is moved to its front); and line breaks are counted only up to the last piece that can have a match, as a file read
- * whole counts them only up to its matches: a piece without the matcher's prefilter is not counted, and when a later piece
+ * whole counts them only up to its matches: a piece the matcher's `mayMatch` rules out is not counted, and when a later piece
  * has it, the pieces since are read again and counted then.
  */
 async function searchInPieces(
@@ -1166,11 +1631,7 @@ async function searchInPieces(
 				kept = rest;
 			}
 			// (Not the nothing after a last line break: as in a file read whole, there is no line there.)
-			if (
-				lines.length > 0 &&
-				found.length < budget &&
-				(!matcher.prefilter || lines.indexOf(matcher.prefilter) !== -1)
-			) {
+			if (lines.length > 0 && found.length < budget && (!matcher.mayMatch || matcher.mayMatch(lines))) {
 				while (countedAt < bufferAt) {
 					if (turns.due()) await turns.check();
 					again ??= Buffer.allocUnsafe(pieceBytes);
@@ -1205,7 +1666,6 @@ async function searchInPieces(
 		await handle.close().catch(() => {});
 	}
 }
-
 /** A file's contents; for a file too large to read whole, its size; undefined for one that is not searched. */
 type Contents = Buffer | number | undefined;
 
@@ -1224,61 +1684,125 @@ export async function nativeGrep(
 		matcher = regexMatcher(source, Boolean(options.ignoreCase) || ignoreCase);
 	}
 
-	let files: string[];
+	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
+	// The files in path order, as far as the walk has gone: it goes on only as far as the search needs.
+	const files: string[] = [];
+	let walking: AsyncGenerator<WalkEntry[], void, undefined> | undefined;
+	let read: (file: string) => Promise<Contents>;
 	if (options.isDirectory) {
 		const { take, include } = globFilter(options.glob);
 		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
-		files = (await walk({ root: options.root, requireGit: true, override: include, keep, signal: options.signal }))
-			.sort(byPath)
-			.map((entry) => entry.abs);
+		walking = walkInOrder({ root: options.root, requireGit: true, override: include, keep, signal: options.signal });
+		read = (file) => readContents(file, wholeFileBytes);
 	} else {
-		files = [options.root];
+		files.push(options.root);
+		// Only a regular file is opened: a device or a pipe (a search of one path names what it likes) is left alone.
+		read = (file) =>
+			stat(file).then(
+				(stats) => (stats.isFile() ? readContents(file, wholeFileBytes) : undefined),
+				() => undefined,
+			);
 	}
 
 	const matches: NativeGrepMatch[] = [];
-	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
-	const skip = () => undefined;
-	// The files' sizes, then their contents: `sizes[i]` and `reads[i]` for the files from `index` on, as far as they have been
-	// asked for. Only regular files are read: a device or a pipe (a search of one path names what it likes) would be read
-	// without end, or wait.
-	const sizes: (Promise<Stats | undefined> | undefined)[] = [];
+	// The files' contents: `reads[i]` for the files from `index` on, as far as they have been asked for.
 	const reads: (Promise<Contents> | undefined)[] = [];
-	let sized = 0;
 	let requested = 0;
 	const turns = new Turns(options.signal);
-	for (let index = 0; index < files.length; index++) {
-		if (turns.due()) await turns.check();
-		if (sized <= index + STAT_AHEAD / 2) {
-			for (const end = Math.min(files.length, index + STAT_AHEAD); sized < end; sized++) {
-				sizes[sized] = stat(files[sized]).catch(skip);
+	try {
+		for (let index = 0; ; index++) {
+			if (turns.due()) await turns.check();
+			if (requested <= index + READ_AHEAD / 2) {
+				while (walking && files.length < index + READ_AHEAD) {
+					const run = await walking.next();
+					if (run.done) walking = undefined;
+					else for (const entry of run.value) files.push(entry.abs);
+				}
+				for (const end = Math.min(files.length, index + READ_AHEAD); requested < end; requested++) {
+					reads[requested] = read(files[requested]);
+				}
 			}
-		}
-		if (requested <= index + READ_AHEAD / 2) {
-			for (const end = Math.min(files.length, index + READ_AHEAD); requested < end; requested++) {
-				const file = files[requested];
-				reads[requested] = (sizes[requested] ?? stat(file).catch(skip)).then(
-					(stats): Contents | Promise<Contents> =>
-						!stats?.isFile() ? undefined : stats.size > wholeFileBytes ? stats.size : readFile(file).catch(skip),
-				);
-				sizes[requested] = undefined;
+			if (index >= files.length) return { matches, limitReached: false };
+			const contents = await reads[index];
+			reads[index] = undefined; // (Done with it: let it go.)
+			if (typeof contents === "number") {
+				const budget = options.limit - matches.length;
+				const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
+				const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns);
+				if (found) matches.push(...found);
+			} else {
+				if (!contents || contents.length === 0) continue;
+				if (matcher.mayMatch && !matcher.mayMatch(contents)) continue;
+				if (contents.indexOf(0) !== -1) continue; // (Binary.)
+				const budget = options.limit - matches.length;
+				const rest = matcher.search(contents, files[index], budget, options.keepChars, matches, 1, turns.deadline);
+				if (rest) await turns.finish(rest);
 			}
+			if (matches.length >= options.limit) return { matches, limitReached: true };
 		}
-		const contents = await reads[index];
-		reads[index] = undefined; // (Done with it: let it go.)
-		if (typeof contents === "number") {
-			const budget = options.limit - matches.length;
-			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
-			const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns);
-			if (found) matches.push(...found);
-		} else {
-			if (!contents || contents.length === 0) continue;
-			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
-			if (contents.indexOf(0) !== -1) continue; // (Binary.)
-			const budget = options.limit - matches.length;
-			const rest = matcher.search(contents, files[index], budget, options.keepChars, matches, 1, turns.deadline);
-			if (rest) await turns.finish(rest);
-		}
-		if (matches.length >= options.limit) return { matches, limitReached: true };
+	} finally {
+		await walking?.return();
 	}
-	return { matches, limitReached: false };
+}
+
+/**
+ * A file's `Contents`: opened (without blocking: what was a file when the walk found it may be a pipe by now), asked for its
+ * size once, and read whole if it is a regular file of at most `wholeFileBytes`. A request each, without a stat before.
+ */
+function readContents(file: string, wholeFileBytes: number): Promise<Contents> {
+	return new Promise((resolve) => {
+		openFile(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0), (error, fd) => {
+			if (error) {
+				resolve(undefined);
+				return;
+			}
+			const finish = (contents: Contents) => close(fd, () => resolve(contents));
+			fstat(fd, (error, stats) => {
+				if (error || !stats.isFile()) finish(undefined);
+				else if (stats.size > wholeFileBytes) finish(stats.size);
+				else readOpenFile(fd, stats.size, finish);
+			});
+		});
+	});
+}
+
+/** What a file of unknown size (one whose size is 0, as in /proc) is read in. */
+const UNKNOWN_SIZE_CHUNK = 64 * 1024;
+
+/**
+ * The bytes of the open file `fd`, as readFile reads them: up to `size` (fewer if it has shrunk since); for a size of 0, all
+ * there is. Undefined if a read fails.
+ */
+function readOpenFile(fd: number, size: number, done: (contents: Buffer | undefined) => void): void {
+	const chunks: Buffer[] = [];
+	let buffer = Buffer.allocUnsafe(size === 0 ? UNKNOWN_SIZE_CHUNK : size);
+	let filled = 0;
+	let position = 0;
+	const step = () => {
+		read(fd, buffer, filled, buffer.length - filled, position, (error, bytesRead) => {
+			if (error) {
+				done(undefined);
+				return;
+			}
+			filled += bytesRead;
+			position += bytesRead;
+			if (size > 0) {
+				if (bytesRead === 0 || filled === size) done(filled < size ? buffer.subarray(0, filled) : buffer);
+				else step();
+				return;
+			}
+			if (bytesRead === 0) {
+				chunks.push(buffer.subarray(0, filled));
+				done(Buffer.concat(chunks));
+				return;
+			}
+			if (filled === buffer.length) {
+				chunks.push(buffer);
+				buffer = Buffer.allocUnsafe(UNKNOWN_SIZE_CHUNK);
+				filled = 0;
+			}
+			step();
+		});
+	};
+	step();
 }

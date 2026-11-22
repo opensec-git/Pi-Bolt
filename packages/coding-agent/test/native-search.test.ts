@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -11,7 +11,7 @@ import {
 	globMatch,
 	nativeFind,
 	nativeGrep,
-	requiredLiteral,
+	requiredLiterals,
 	translatePattern,
 	walk,
 } from "../src/core/tools/native-search.ts";
@@ -118,18 +118,36 @@ describe("regular expressions", () => {
 		expect(translatePattern("\\x{1F600}|\\\\u{65}").source).toBe("(?:\\ud83d\\ude00)|\\\\u{65}");
 	});
 
-	test("the literal every match contains, only when it is sure", () => {
-		expect(requiredLiteral("function needleFn\\(")).toBe("function needleFn");
-		expect(requiredLiteral("needles?")).toBe("needle");
-		expect(requiredLiteral("foo|bar")).toBeUndefined();
-		expect(requiredLiteral("(abc)?def")).toBe("def");
-		expect(requiredLiteral("a.b")).toBeUndefined();
+	test("the literals every match contains one of, only when it is sure", () => {
+		expect(requiredLiterals("function needleFn\\(")).toEqual(["function needleFn("]);
+		expect(requiredLiterals("needles?")).toEqual(["needle"]);
+		expect(requiredLiterals("(abc)?def")).toEqual(["def"]);
+		expect(requiredLiterals("a.b")).toBeUndefined();
 		// An escape that stands for a character (or more) is not its text: `\x66oo` matches "foo", not "66oo".
-		expect(requiredLiteral("\\x66oo")).toBeUndefined();
-		expect(requiredLiteral("n\\u0065edle")).toBeUndefined();
-		expect(requiredLiteral("\\p{L}abc")).toBeUndefined();
-		expect(requiredLiteral("(a)\\1bcd")).toBeUndefined();
-		expect(requiredLiteral("needle\\.\\d+")).toBe("needle");
+		expect(requiredLiterals("\\x66oo")).toBeUndefined();
+		expect(requiredLiterals("n\\u0065edle")).toBeUndefined();
+		expect(requiredLiterals("\\p{L}abc")).toBeUndefined();
+		expect(requiredLiterals("(a)\\1bcd")).toBeUndefined();
+		expect(requiredLiterals("needle\\.\\d+")).toEqual(["needle."]);
+		// An alternation: every alternative's; a group not made optional, when its literals are longer.
+		expect(requiredLiterals("foo|bar|baz")).toEqual(["foo", "bar", "baz"]);
+		expect(requiredLiterals("\\b(TODO|FIXME)\\b")).toEqual(["TODO", "FIXME"]);
+		expect(requiredLiterals("x(?:alpha|betas)y")).toEqual(["alpha", "betas"]);
+		expect(requiredLiterals("foo(?:bar|baz)?")).toEqual(["foo"]);
+		expect(requiredLiterals("abc(?<name>defg|hijk){0,2}")).toEqual(["abc"]);
+		expect(requiredLiterals("foo|ba")).toBeUndefined();
+		expect(requiredLiterals("foo|")).toBeUndefined();
+		expect(requiredLiterals("foobar|foo")).toEqual(["foo"]);
+		// A lookaround could see past the line: not known.
+		expect(requiredLiterals("foo(?=bar)")).toBeUndefined();
+		expect(requiredLiterals("(?<!x)foo")).toBeUndefined();
+		// Without the u flag a class ends at its first `]` not escaped; `{` that starts no quantifier is the character.
+		expect(requiredLiterals("[\\]a]bcd")).toEqual(["bcd"]);
+		expect(requiredLiterals("[]abcd")).toEqual(["abcd"]);
+		expect(requiredLiterals("x{(yyy)?www")).toEqual(["www"]);
+		// A surrogate pair made optional is left out whole; U+FFFD is not in a literal.
+		expect(requiredLiterals("abc\u{1F600}?")).toEqual(["abc"]);
+		expect(requiredLiterals("ab\uFFFDcd")).toBeUndefined();
 	});
 });
 
@@ -317,6 +335,46 @@ describe("grep", () => {
 		}
 	});
 
+	// Files with none of an alternation's literals are passed over, and of the others only the lines with one are run through
+	// the expression: the same lines as the expression finds on its own.
+	test("an alternation, and literals in either case", async () => {
+		expect(where(await grep("needleFn|not rooted|NEEDLE"))).toEqual([
+			"src/a.ts:3:function needleFn() {}",
+			"src/sub/b.ts:2:NEEDLE upper",
+			"src/sub/rooted.ts:1:needle not rooted",
+		]);
+		expect(where(await grep("(?i)NEEDLEFN|(upper|hidden)"))).toEqual([
+			".hidden/h.ts:1:needle hidden",
+			"src/a.ts:3:function needleFn() {}",
+			"src/sub/b.ts:2:NEEDLE upper",
+		]);
+		expect(where(await grep("ROOTED|Hidden", { ignoreCase: true, glob: "*.ts" }))).toEqual([
+			".hidden/h.ts:1:needle hidden",
+			"rooted.ts:1:needle rooted",
+			"src/sub/rooted.ts:1:needle not rooted",
+		]);
+	});
+
+	// A piece of a file that ends inside a very long line is too large to put in lower case as a string: searched byte by byte.
+	test("a literal in either case in a line longer than 32 MB", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-longline-"));
+		try {
+			writeFileSync(join(dir, "long.txt"), `first\n${"x".repeat(33 * 1024 * 1024)} NeEdLe\nlast needle\n`);
+			const result = await nativeGrep({
+				root: dir,
+				isDirectory: true,
+				pattern: "needle",
+				literal: true,
+				ignoreCase: true,
+				limit: 10,
+				keepChars: 5,
+			});
+			expect(result.matches.map((m) => `${m.lineNumber}:${m.lineText}`)).toEqual(["2:xxxxx", "3:last "]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
 	test("a file of its own, and a bad expression", async () => {
 		const result = await nativeGrep({
 			root: join(root, "src", "a.ts"),
@@ -350,6 +408,104 @@ describe("find", () => {
 			"src/sub/rooted.ts",
 		]);
 		expect(await nativeFind({ root, pattern: "*.{md,log}", limit: 1 })).toEqual(["docs/a/b.md"]);
+	});
+
+	// The walk goes depth first and stops at the limit, in the order the paths sort as strings: a folder before the names that
+	// sort between it and what is in it (`a` < `a!` < `a.b` < `a/b`, as `!` and `.` sort before `/`).
+	test("in path order, as strings sort, at any limit", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-order-"));
+		try {
+			for (const rel of ["a/b", "a/a.b/c", "a!", "a.b", "a-b/x", "Z", "b", "é", "a0", "a/b.c/d"]) {
+				mkdirSync(join(dir, dirname(rel)), { recursive: true });
+				writeFileSync(join(dir, rel), "needle\n");
+			}
+			const all = await nativeFind({ root: dir, pattern: "*", limit: 100 });
+			expect(all).toEqual([
+				"Z",
+				"a/",
+				"a!",
+				"a-b/",
+				"a-b/x",
+				"a.b",
+				"a/a.b/",
+				"a/a.b/c",
+				"a/b",
+				"a/b.c/",
+				"a/b.c/d",
+				"a0",
+				"b",
+				"é",
+			]);
+			for (let limit = 1; limit <= all.length; limit++) {
+				expect(await nativeFind({ root: dir, pattern: "*", limit })).toEqual(all.slice(0, limit));
+			}
+			const files = all.filter((rel) => !rel.endsWith("/"));
+			expect((await walk({ root: dir, requireGit: false })).map((entry) => entry.rel)).toEqual(
+				all.map((rel) => rel.replace(/\/$/, "")),
+			);
+			const grep = await nativeGrep({ root: dir, isDirectory: true, pattern: "needle", limit: 3, keepChars: 10 });
+			expect(grep.matches.map((m) => m.filePath.slice(dir.length + 1))).toEqual(files.slice(0, 3));
+			expect(grep.limitReached).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("ignore files", () => {
+	// Read ignore files are remembered while their stamp (identity, size, times) stays: a change of the same size, with the
+	// same modification time, still changes the change time.
+	test("a changed ignore file is read again", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-ignorecache-"));
+		try {
+			writeFileSync(join(dir, "a.txt"), "x\n");
+			writeFileSync(join(dir, "b.txt"), "x\n");
+			const old = new Date(Date.now() - 3_600_000);
+			writeFileSync(join(dir, ".ignore"), "a.txt\n");
+			utimesSync(join(dir, ".ignore"), old, old);
+			const files = async () =>
+				(await walk({ root: dir, requireGit: false }))
+					.map((entry) => entry.rel)
+					.filter((rel) => rel.endsWith(".txt"));
+			expect(await files()).toEqual(["b.txt"]);
+			expect(await files()).toEqual(["b.txt"]);
+			writeFileSync(join(dir, ".ignore"), "b.txt\n");
+			utimesSync(join(dir, ".ignore"), old, old);
+			expect(await files()).toEqual(["a.txt"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Rules for a name, an extension or a path are looked up; the rest are matched in order. The last rule that matches decides.
+	test("the last rule that matches decides, looked up or not", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-ignoreorder-"));
+		try {
+			for (const rel of [
+				"x.log",
+				"keep.log",
+				"deep/x.log",
+				"deep/y.tmp",
+				"deep/z.tmp",
+				"top.tmp",
+				"lib/a.js",
+				"lib/b.js",
+			]) {
+				mkdirSync(join(dir, dirname(rel)), { recursive: true });
+				writeFileSync(join(dir, rel), "x\n");
+			}
+			writeFileSync(join(dir, ".ignore"), "*.log\n!keep.log\n*.tmp\n!deep/*.tmp\ndeep/z.tmp\n/lib/*\n!/lib/b.js\n");
+			const rels = (await walk({ root: dir, requireGit: false })).map((entry) => entry.rel);
+			expect(rels.filter((rel) => !rel.startsWith("."))).toEqual([
+				"deep",
+				"deep/y.tmp",
+				"keep.log",
+				"lib",
+				"lib/b.js",
+			]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

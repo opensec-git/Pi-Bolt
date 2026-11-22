@@ -1,20 +1,21 @@
+import type * as Fs from "node:fs";
 import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
-import type * as FsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { nativeGrep } from "../src/core/tools/native-search.ts";
 
-// The size of every file the search read whole.
+// The size of every file the search read whole: a whole file is read into a buffer its size, from its start (a piece of a
+// larger one, through a file handle, is not).
 const readWhole = vi.hoisted(() => [] as number[]);
-vi.mock("node:fs/promises", async (importOriginal) => {
-	const actual = await importOriginal<typeof FsPromises>();
-	const readFile = async (...args: Parameters<typeof actual.readFile>) => {
-		const contents = await actual.readFile(...args);
-		readWhole.push(contents.length);
-		return contents;
-	};
-	return { ...actual, readFile, default: { ...actual, readFile } };
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof Fs>();
+	const read = ((...args: unknown[]) => {
+		const [, buffer, offset] = args;
+		if (offset === 0 && ArrayBuffer.isView(buffer)) readWhole.push(buffer.byteLength);
+		return (actual.read as (...args: unknown[]) => void)(...args);
+	}) as typeof actual.read;
+	return { ...actual, read, default: { ...actual, read } };
 });
 
 let dir: string;
