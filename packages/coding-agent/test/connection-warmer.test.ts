@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	ConnectionWarmer,
 	isModelActivity,
+	modelPreconnectOrigin,
+	preconnectAtStartup,
 	preconnectOrigin,
 	runtimePreconnect,
 } from "../src/core/connection-warmer.ts";
@@ -161,6 +163,99 @@ describe("ConnectionWarmer", () => {
 			expect(runtimePreconnect()).toBeUndefined();
 		} finally {
 			vi.unstubAllGlobals();
+		}
+	});
+});
+
+/** A model runtime that has made no request yet, signing in with OAuth or not. */
+function runtime(options: { oauth?: boolean; lastBaseUrl?: string } = {}) {
+	return {
+		lastRequestBaseUrl: () => options.lastBaseUrl,
+		isUsingOAuth: () => options.oauth === true,
+	};
+}
+
+describe("startup preconnect", () => {
+	it("uses the model's base URL before any request unless the provider signs in with OAuth", () => {
+		expect(modelPreconnectOrigin(anthropic, runtime())).toBe("https://api.anthropic.com");
+		expect(modelPreconnectOrigin(anthropic, runtime({ oauth: true }))).toBeUndefined();
+		// A request has shown where they go.
+		expect(
+			modelPreconnectOrigin(anthropic, runtime({ oauth: true, lastBaseUrl: "https://copilot.example.com" })),
+		).toBe("https://copilot.example.com");
+		expect(modelPreconnectOrigin(undefined, runtime())).toBeUndefined();
+	});
+
+	it("preconnects once, and never throws", () => {
+		const preconnect = vi.fn<(url: string) => void>();
+		preconnectAtStartup(anthropic, runtime(), preconnect);
+		expect(preconnect).toHaveBeenCalledExactlyOnceWith("https://api.anthropic.com");
+		preconnectAtStartup(model("openai-completions", "http://localhost:11434/v1"), runtime(), preconnect);
+		preconnectAtStartup(undefined, runtime(), preconnect);
+		expect(preconnect).toHaveBeenCalledOnce();
+		expect(() =>
+			preconnectAtStartup(anthropic, runtime(), () => {
+				throw new Error("no");
+			}),
+		).not.toThrow();
+		expect(() => preconnectAtStartup(anthropic, runtime(), undefined)).not.toThrow();
+	});
+});
+
+describe("ConnectionWarmer during a tool batch", () => {
+	it("preconnects every idle period from the batch's first call to the end of its turn", () => {
+		vi.useFakeTimers();
+		try {
+			const preconnect = vi.fn<(url: string) => void>();
+			const warmer = new ConnectionWarmer({ preconnect, idleMs: 10_000, target: () => "https://api.anthropic.com" });
+			warmer.onAgentEvent({ type: "tool_execution_start" });
+			// The batch's other calls do not restart the period.
+			vi.advanceTimersByTime(5_000);
+			warmer.onAgentEvent({ type: "tool_execution_start" });
+			vi.advanceTimersByTime(5_000);
+			expect(preconnect).toHaveBeenCalledExactlyOnceWith("https://api.anthropic.com");
+			vi.advanceTimersByTime(10_000);
+			expect(preconnect).toHaveBeenCalledTimes(2);
+			// The results are about to be sent: the request uses the connection.
+			warmer.onAgentEvent({ type: "turn_end" });
+			vi.advanceTimersByTime(60_000);
+			expect(preconnect).toHaveBeenCalledTimes(2);
+			// A short batch preconnects nothing; the end of the run and stop() end it too.
+			warmer.onAgentEvent({ type: "tool_execution_start" });
+			vi.advanceTimersByTime(9_000);
+			warmer.onAgentEvent({ type: "agent_end" });
+			warmer.onAgentEvent({ type: "tool_execution_start" });
+			warmer.stop();
+			vi.advanceTimersByTime(60_000);
+			expect(preconnect).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does nothing without a target or a runtime preconnect, and survives one that throws", () => {
+		vi.useFakeTimers();
+		try {
+			const preconnect = vi.fn<(url: string) => void>();
+			new ConnectionWarmer({ preconnect, idleMs: 10_000 }).onAgentEvent({ type: "tool_execution_start" });
+			new ConnectionWarmer({
+				preconnect: undefined,
+				idleMs: 10_000,
+				target: () => "https://a.example",
+			}).onAgentEvent({ type: "tool_execution_start" });
+			const throwing = new ConnectionWarmer({
+				preconnect: () => {
+					throw new Error("no");
+				},
+				idleMs: 10_000,
+				target: () => "https://a.example",
+			});
+			throwing.onAgentEvent({ type: "tool_execution_start" });
+			expect(() => vi.advanceTimersByTime(30_000)).not.toThrow();
+			expect(preconnect).not.toHaveBeenCalled();
+			throwing.stop();
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 });

@@ -7,6 +7,12 @@ import { isBundledNode, isBunRuntime } from "../config.ts";
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 // Node's 250ms default can terminate valid connection attempts on high-latency routes.
 const DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 2_000;
+// How long an idle connection stays pooled when the server sends no Keep-Alive hint. Undici's default, 4 s, closed
+// the connection during any longer pause between model requests (a tool batch, the user reading), so the next
+// request paid a new TCP and TLS handshake (50-300 ms). A server's own `Keep-Alive: timeout=N` still wins, up to
+// the maximum below. A server that closes sooner without a hint closes the socket itself; undici drops it then.
+const KEEP_ALIVE_TIMEOUT_MS = 60_000;
+const KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
 
 export const HTTP_IDLE_TIMEOUT_CHOICES = [
 	{ label: "30 sec", timeoutMs: 30_000 },
@@ -219,6 +225,8 @@ export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TI
 				autoSelectFamilyAttemptTimeout: DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
 			},
 			headersTimeout: normalizedTimeoutMs,
+			keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS,
+			keepAliveMaxTimeout: KEEP_ALIVE_MAX_TIMEOUT_MS,
 			clientFactory: createUndiciClient,
 			factory: createUndiciOriginDispatcher,
 		}),

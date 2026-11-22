@@ -26,6 +26,7 @@ import {
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+import { preconnectAtStartup } from "./core/connection-warmer.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { type CompiledExtension, setCompiledExtensions } from "./core/extensions/compiled.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
@@ -983,6 +984,8 @@ export async function main(args: string[], options?: MainOptions) {
 		await listModels(modelRuntime, searchPattern, AbortSignal.timeout(15_000));
 		process.exit(0);
 	}
+	// The TCP and TLS handshakes with the model's endpoint overlap the rest of startup and the first prompt.
+	if (!offlineMode) preconnectAtStartup(session.model, modelRuntime);
 
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	let stdinContent: string | undefined;

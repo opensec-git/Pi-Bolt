@@ -147,6 +147,47 @@ describe("http dispatcher", () => {
 		}
 	});
 
+	it("keeps an idle connection pooled longer than undici's 4 second default", async () => {
+		let connections = 0;
+		const sockets = new Set<net.Socket>();
+		// A minimal HTTP/1.1 server that keeps connections open and, like many provider endpoints, sends no
+		// `Keep-Alive: timeout=N` hint (Node's http server always sends one, which undici would follow instead).
+		const origin = net.createServer((socket) => {
+			connections++;
+			sockets.add(socket);
+			let pending = "";
+			socket.on("data", (data) => {
+				pending += data.toString();
+				while (pending.includes("\r\n\r\n")) {
+					pending = pending.slice(pending.indexOf("\r\n\r\n") + 4);
+					socket.write("HTTP/1.1 200 OK\r\ncontent-length: 6\r\n\r\norigin");
+				}
+			});
+			socket.on("close", () => sockets.delete(socket));
+		});
+		await new Promise<void>((resolve) => origin.listen(0, "127.0.0.1", resolve));
+		const address = origin.address();
+		if (!address || typeof address === "string") {
+			throw new Error("Origin did not bind to a TCP port");
+		}
+
+		configureHttpDispatcher();
+		const dispatcher = undici.getGlobalDispatcher();
+		try {
+			const url = `http://127.0.0.1:${address.port}/`;
+			await expect(undici.fetch(url).then((response) => response.text())).resolves.toBe("origin");
+			// A pause like a tool batch between two model requests, past undici's default.
+			await new Promise((resolve) => setTimeout(resolve, 4_500));
+			await expect(undici.fetch(url).then((response) => response.text())).resolves.toBe("origin");
+			expect(connections).toBe(1);
+		} finally {
+			await dispatcher.close();
+			undici.setGlobalDispatcher(originalDispatcher);
+			for (const socket of sockets) socket.destroy();
+			await new Promise<void>((resolve) => origin.close(() => resolve()));
+		}
+	}, 15_000);
+
 	it("allows two seconds for HTTPS connection attempts without changing the Node default", async () => {
 		// Preserve a deliberate host fetch override while testing the dispatcher itself.
 		globalThis.fetch = async () => {

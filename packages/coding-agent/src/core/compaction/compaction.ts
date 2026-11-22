@@ -1326,46 +1326,64 @@ export async function compact(
 	let summaryUsage: Usage;
 
 	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		let historyText = previousSummary ?? "No prior history.";
-		let historyUsage: Usage | undefined;
-		if (messagesToSummarize.length > 0) {
-			const historyResult = await generateHistorySummary(
-				messagesToSummarize,
-				model,
-				getSummaryMaxTokens(model, settings),
-				apiKey,
-				headers,
-				signal,
-				customInstructions,
-				previousSummary,
-				thinkingLevel,
-				streamFn,
-				env,
-				retry,
-				callbacks,
-				sessionId,
-			);
-			historyText = historyResult.text;
-			historyUsage = historyResult.usage;
-		}
-		const turnPrefixResult = await generateTurnPrefixSummary(
-			turnPrefixMessages,
-			model,
-			getSummaryMaxTokens(model, settings, "turnPrefix"),
-			apiKey,
-			headers,
-			env,
-			signal,
-			thinkingLevel,
-			streamFn,
-			retry,
-			callbacks,
-			sessionId,
-			customInstructions,
-		);
+		// The history summary and the turn prefix summary do not depend on each other, so both requests run at
+		// once: a split-turn compaction then takes one summary round trip instead of two. If one fails, the other
+		// is aborted (it would be discarded) and the compaction fails with the first error, as when they ran in turn.
+		const pair = new AbortController();
+		const pairSignal = signal ? AbortSignal.any([signal, pair.signal]) : pair.signal;
+		// Errors in the order the requests failed: an aborted sibling may fail too, after the first.
+		const failures: unknown[] = [];
+		const settle = <T>(request: Promise<T>): Promise<T | undefined> =>
+			request.catch((error: unknown) => {
+				failures.push(error);
+				pair.abort();
+				return undefined;
+			});
+		const [historyResult, turnPrefixResult] = await Promise.all([
+			messagesToSummarize.length > 0
+				? settle(
+						generateHistorySummary(
+							messagesToSummarize,
+							model,
+							getSummaryMaxTokens(model, settings),
+							apiKey,
+							headers,
+							pairSignal,
+							customInstructions,
+							previousSummary,
+							thinkingLevel,
+							streamFn,
+							env,
+							retry,
+							callbacks,
+							sessionId,
+						),
+					)
+				: undefined,
+			settle(
+				generateTurnPrefixSummary(
+					turnPrefixMessages,
+					model,
+					getSummaryMaxTokens(model, settings, "turnPrefix"),
+					apiKey,
+					headers,
+					env,
+					pairSignal,
+					thinkingLevel,
+					streamFn,
+					retry,
+					callbacks,
+					sessionId,
+					customInstructions,
+				),
+			),
+		]);
+		// A failed request settled as undefined.
+		if (failures.length > 0 || !turnPrefixResult) throw failures[0];
+		const historyText = historyResult?.text ?? previousSummary ?? "No prior history.";
 		// Merge into single summary
 		summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.text}`;
-		summaryUsage = historyUsage ? combineUsage(historyUsage, turnPrefixResult.usage) : turnPrefixResult.usage;
+		summaryUsage = historyResult ? combineUsage(historyResult.usage, turnPrefixResult.usage) : turnPrefixResult.usage;
 	} else {
 		// Just generate history summary
 		const result = await generateHistorySummary(
