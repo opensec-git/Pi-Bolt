@@ -585,10 +585,12 @@ export class ToolExecutionComponent extends Container {
 		let hasContent = false;
 		this.hideComponent = false;
 		if (shell.kind !== "fallback") {
-			const renderContainer = shell.container;
-			if (shell.kind === "default") {
-				shell.container.setBgFn(bgFn);
-				shell.container.setPaddingX(this.outputPad);
+			const renderContainer: Box | Container = shell.container;
+			// Checked, not taken from `shell.kind`, as upstream: an extension may assign a Container to `contentBox` (no
+			// background) or a Box to `selfRenderContainer` (#339).
+			if (renderContainer instanceof Box) {
+				renderContainer.setBgFn(bgFn);
+				renderContainer.setPaddingX(this.outputPad);
 			}
 			renderContainer.clear();
 

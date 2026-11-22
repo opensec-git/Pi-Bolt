@@ -13,7 +13,7 @@ import {
 	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
@@ -300,6 +300,33 @@ describe("ToolExecutionComponent upstream fields assigned (#339)", () => {
 		expect(text(replacement.render(width))).toContain("result expanded");
 		expect(component.render(width)).toEqual(before);
 		expect(text(component.render(width))).toContain("result collapsed");
+	});
+
+	// #339: upstream sets background and padding only on a Box, whichever shell the row uses.
+	test("a Container assigned to contentBox is filled without a background; the row's updates do not throw", () => {
+		const component = row(definition());
+		const tool = upstream(component);
+		const replacement = new Container();
+		(tool as unknown as { contentBox: Container }).contentBox = replacement;
+		expect(() => component.setExpanded(true)).not.toThrow();
+		expect(() => component.invalidate()).not.toThrow();
+		expect(text(replacement.render(60))).toContain("result expanded");
+	});
+
+	// #339
+	test("a Box assigned to selfRenderContainer gets the row's background and padding", () => {
+		const component = row(definition("self"));
+		const tool = upstream(component);
+		const replacement = new Box(0, 0);
+		const setBgFn = vi.spyOn(replacement, "setBgFn");
+		const setPaddingX = vi.spyOn(replacement, "setPaddingX");
+		(tool as unknown as { selfRenderContainer: Box }).selfRenderContainer = replacement;
+		component.setOutputPad(2);
+		expect(setBgFn).toHaveBeenCalledTimes(1);
+		expect(setPaddingX).toHaveBeenCalledWith(2);
+		const lines = component.render(60);
+		expect(lines).toEqual(["", ...replacement.render(60)]);
+		expect(stripAnsi(lines.find((line) => stripAnsi(line).includes("probe call"))!)).toMatch(/^ {2}probe call/);
 	});
 
 	// #339
