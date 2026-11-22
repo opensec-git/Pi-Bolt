@@ -1235,8 +1235,9 @@ offer_extensions() {
 	done
 }
 
-# Paseo drives Pi-Bolt through its Pi provider. Run the JSON edit with the installed executable's own Bun runtime, so
-# neither Node nor jq is needed. A separate process keeps the temporary file's trap and variables out of the installer.
+# register_paseo CONFIG: adds the pi-bolt provider to Paseo's CONFIG; prints "added", or "kept" when it has one. Paseo drives
+# Pi-Bolt through its Pi provider. Run the JSON edit with the installed executable's own Bun runtime, so neither Node nor jq is
+# needed. A separate process keeps the temporary file's trap and variables out of the installer.
 register_paseo() (
 	paseo_tmp=$(mktemp -d) || return 1
 	case "$paseo_tmp" in /*) ;; *) paseo_tmp="$PWD/$paseo_tmp" ;; esac
@@ -1269,7 +1270,7 @@ try {
 	if (!Object.hasOwn(config.agents, "providers")) config.agents.providers = {};
 	object(config.agents.providers, "agents.providers");
 	if (Object.hasOwn(config.agents.providers, "pi-bolt")) {
-		console.log("Paseo already has a pi-bolt provider; its settings were left unchanged.");
+		console.log("kept");
 		process.exit(0);
 	}
 	config.agents.providers["pi-bolt"] = { extends: "pi", label: "Pi-Bolt", command: [command] };
@@ -1279,10 +1280,9 @@ try {
 	fs.writeFileSync(staged, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 	fs.chmodSync(staged, mode);
 	fs.renameSync(staged, configPath);
-	console.log("Added Pi-Bolt to " + configPath + ".");
-	console.log("Run paseo reload for that Paseo home, then select Pi-Bolt. Paseo was not restarted.");
+	console.log("added");
 } catch (error) {
-	console.error("Could not add the Paseo provider: " + error.message);
+	console.error(error.message);
 	process.exitCode = 1;
 } finally {
 	if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
@@ -1291,7 +1291,7 @@ EOF
 	# Bun reads bunfig.toml (including preloads) from its working directory. Keep the caller's project out of this run;
 	# resolve relative installer paths before changing directories.
 	paseo_exe="$INSTALL/$NAME/$(command_of_build)"
-	paseo_config="${PASEO_HOME:-$HOME/.paseo}/config.json"
+	paseo_config=$1
 	# (The command this installation is run with: $BIN_DIR/pi-bolt is not this installation's with PIBOLT_NO_PATH=1.)
 	paseo_command="$installed_command"
 	case "$paseo_exe" in /*) ;; *) paseo_exe="$PWD/$paseo_exe" ;; esac
@@ -1304,17 +1304,24 @@ offer_paseo() {
 	choice="${PIBOLT_PASEO:-}"
 	case "$choice" in
 	"" | yes | no) ;;
-	*) printf '  PIBOLT_PASEO must be yes or no: Paseo configuration unchanged.\n'; return 0 ;;
+	*) printf '  %sPIBOLT_PASEO must be yes or no: Paseo configuration unchanged%s\n' "$dim" "$reset"; return 0 ;;
 	esac
 	[ "$choice" != no ] || return 0
+	config="${PASEO_HOME:-$HOME/.paseo}/config.json"
 	if [ -z "$choice" ]; then
 		has_tty || return 0
 		[ -d "${PASEO_HOME:-$HOME/.paseo}" ] || command -v paseo >/dev/null 2>&1 || return 0
-		ask '\nAdd Pi-Bolt as a Paseo provider in %s? [Y/n] ' "$(tilde "${PASEO_HOME:-$HOME/.paseo}/config.json")"
+		ask '\nAdd Pi-Bolt as a Paseo provider in %s? [Y/n] ' "$(tilde "$config")"
 		case "$answer" in n | N | no | NO) return 0 ;; esac
 	fi
-	if ! register_paseo; then
-		printf 'Pi-Bolt itself is installed. Configure Paseo manually: https://github.com/opensec-git/Pi-Bolt#paseo\n'
+	if out=$(register_paseo "$config" 2>&1); then
+		case "$(printf '%s\n' "$out" | tail -n 1)" in
+		kept) printf '  %sPaseo already has a pi-bolt provider: left unchanged%s\n' "$dim" "$reset" ;;
+		*) printf '  %s%s%s added Pi-Bolt to Paseo (%s): run %spaseo reload%s to use it\n' "$green" "$CHECK" "$reset" "$(tilde "$config")" "$bold" "$reset" ;;
+		esac
+	else
+		printf '  %scould not add Pi-Bolt to Paseo (Pi-Bolt itself is installed): %s%s\n' "$red" "$(printf '%s' "$out" | tail -n 1)" "$reset"
+		printf '  %sConfigure Paseo manually: https://github.com/opensec-git/Pi-Bolt#paseo%s\n' "$dim" "$reset"
 	fi
 }
 
