@@ -65,8 +65,14 @@ interface BunPlugins {
 	}): void;
 }
 
-const provided = new Set<string>();
-let modules: Record<string, unknown> | undefined;
+/** What a runtime has been given: the names, and Pi's modules once they are loaded. */
+interface Provided {
+	names: Set<string>;
+	modules?: Record<string, unknown>;
+}
+
+/** By runtime (its `Bun` object): the process has one. */
+const providedTo = new WeakMap<BunPlugins, Provided>();
 
 /**
  * Gives the runtime Pi's modules (`load` loads them, with the names `names` among them) by those names, each name once.
@@ -80,12 +86,18 @@ export function provideModulesToFiles(
 ): void {
 	const bun = (globalThis as { Bun?: BunPlugins }).Bun;
 	if (!bun) return;
-	modules ??= loaded;
-	const added = names.filter((name) => !provided.has(name));
+	let provided = providedTo.get(bun);
+	if (!provided) {
+		provided = { names: new Set() };
+		providedTo.set(bun, provided);
+	}
+	const state = provided;
+	state.modules ??= loaded;
+	const added = names.filter((name) => !state.names.has(name));
 	if (added.length === 0) return;
-	for (const name of added) provided.add(name);
-	const result = (name: string): ModuleResult => ({
-		exports: modules![name] as Record<string, unknown>,
+	for (const name of added) state.names.add(name);
+	const result = (modules: Record<string, unknown>, name: string): ModuleResult => ({
+		exports: modules[name] as Record<string, unknown>,
 		loader: "object",
 	});
 	bun.plugin({
@@ -93,11 +105,11 @@ export function provideModulesToFiles(
 		setup(build) {
 			for (const name of added) {
 				build.module(name, () =>
-					modules
-						? result(name)
+					state.modules
+						? result(state.modules, name)
 						: load().then((loadedNow) => {
-								modules ??= loadedNow;
-								return result(name);
+								state.modules ??= loadedNow;
+								return result(state.modules, name);
 							}),
 				);
 			}
