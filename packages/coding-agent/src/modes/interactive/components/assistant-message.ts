@@ -237,6 +237,10 @@ export class AssistantMessageComponent extends Container {
 		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
 		this.contentAssigned = true;
 		this.content = container;
+		// The next build makes its components into `container`, as upstream's updateContent() does: the streaming shortcut
+		// would only give new text to the components in the mounted container, and those stay there.
+		this.built = undefined;
+		this.markdownBlocks = [];
 	}
 
 	/**

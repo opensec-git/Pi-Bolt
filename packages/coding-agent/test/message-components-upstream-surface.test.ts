@@ -132,6 +132,29 @@ describe("AssistantMessageComponent upstream surface (#339)", () => {
 		expect(component.compact()).toBe(false);
 	});
 
+	// #339: upstream's updateContent() fills the field with every streamed update.
+	test("a contentContainer assigned while a reply streams receives the streamed text", () => {
+		const component = new AssistantMessageComponent(undefined, false);
+		const message = component as unknown as UpstreamAssistant;
+		const transcript = new Container();
+		transcript.addChild(component);
+		message.updateContent(assistantMessage("Streaming starts"), true);
+		transcript.render(60);
+		message.updateContent(assistantMessage("Streaming starts and"), true);
+		transcript.render(60);
+		const before = transcript.render(60).slice();
+		const replacement = new Container();
+		message.contentContainer = replacement;
+		message.updateContent(assistantMessage("Streaming starts and goes on"), true);
+		expect(rows(message.contentContainer.children, 60)).toContain("goes on");
+		// The mounted container keeps what it held at the assignment.
+		expect(transcript.render(60)).toEqual(before);
+		// The next frame applies the next update (here as upstream's updateContent() does at once).
+		message.updateContent(assistantMessage("Streaming starts and goes on to the end"), true);
+		expect(text(transcript.render(60))).not.toContain("goes on");
+		expect(rows(replacement.children, 60)).toContain("to the end");
+	});
+
 	// #339
 	test("an assigned thinkingVisibilityOverrides is what updateContent() draws from", () => {
 		const component = new AssistantMessageComponent(assistantMessage("The answer."), true);
