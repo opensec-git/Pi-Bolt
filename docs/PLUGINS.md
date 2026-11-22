@@ -335,6 +335,23 @@ scripts/train-profile.sh --plugins my-plugins/plugins.ts --out profiles/my-plugi
 scripts/build-pi.sh --plugins my-plugins/plugins.ts --profile profiles/my-plugins --out out/pi-bolt-plugins
 ```
 
+## Pi's packages in an extension's modules
+
+Pi gives an extension its own modules by the names above, wherever a copy of the package is installed. Which modules get them:
+
+- **Pi's own packages** (`@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core`, `pi-tui`, and their former
+  `@mariozechner/` names): every module of the extension and of the libraries it uses gets Pi's. That covers the
+  TypeScript jiti compiles and the JavaScript the runtime loads as it is (an ES module of a `"type": "module"` package, a
+  `.mjs`, a `.cjs`, a required CommonJS file), in `node_modules` or not, with `import`, `import()` and `require()`. A copy
+  npm or bun installed beside the extension is not loaded.
+- **`typebox` and `@sinclair/typebox`** are packages of their own, which a library may need in another version. A module jiti
+  compiles gets Pi's. JavaScript the runtime loads as it is gets the copy installed beside it, when there is one, and Pi's when
+  there is none.
+- **With an extension compiled in** (`pi-bolt compile`), the runtime gives every module Pi's `typebox` and
+  `@sinclair/typebox` as well, from the moment that extension loads. The modules a compiled-in extension loads from disk as it
+  runs need them, and the runtime has one set of names for the whole process. A library of an extension loaded from its files
+  that needs its own version of `typebox` then gets Pi's.
+
 ## Compatibility checklist
 
 These are the rules for any code bundled into a single executable. Most plugins already follow them.
@@ -344,9 +361,8 @@ These are the rules for any code bundled into a single executable. Most plugins 
 `gen-plugin-manifest.mjs` also take the older names Pi's loader takes: [what it copies](#what-it-copies)). List these as
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
-`node_modules`. A second copy would mean duplicate classes and registries. An extension loaded from its files gets Pi's own
-packages (`@earendil-works/pi-*`) in every module it loads, its JavaScript in `node_modules` included, not a copy installed
-beside it. `typebox` is a package of its own: a library the extension uses that has its own copy keeps it.
+`node_modules`. A second copy would mean duplicate classes and registries. How an extension loaded from its files gets these
+packages: [Pi's packages in an extension's modules](#pis-packages-in-an-extensions-modules).
 
 **Use static imports.** The bundler follows `import x from "./file.ts"` and `await import("./file.ts")` with a literal path. It
 cannot follow an import or `require()` of a path computed at run time. Replace

@@ -5,7 +5,11 @@
  * extension that imports `typebox` or `@earendil-works/pi-coding-agent` gets Pi's. Not every module goes through jiti:
  * - Compiled in, the extension's code is Pi-Bolt's own, and a module it loads with `await import(path)` is loaded by the
  *   runtime, which finds no package of that name beside it (#6 of the loader-parity review: "Cannot find package 'typebox'").
- *   There, the runtime is given every one of those names (PI_MODULE_NAMES).
+ *   There, the runtime is given every one of those names (PI_MODULE_NAMES). The bundler resolved the extension's own
+ *   imports when it was compiled in; these are for the modules it loads from disk as it runs, which have no jiti to fall
+ *   back on (tests/pi/compile.py, loader parity #6, fails without typebox). The runtime has one set of names for the
+ *   process: once a compiled-in extension has loaded, every module the runtime loads itself gets Pi's typebox, a library of
+ *   an extension loaded from its files too (docs/PLUGINS.md).
  * - Loaded from its files, jiti hands a module that is JavaScript as it is to the runtime: an ES module (`.mjs`, or `.js` in a
  *   package of `"type": "module"`) that is imported, and a `.cjs` (or CommonJS `.js`) that is required. The runtime resolves
  *   its imports as Node does, and finds the copy of Pi's package that npm or bun installed beside the extension, if there is
