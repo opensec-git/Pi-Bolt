@@ -65,6 +65,76 @@ else
 	status=1
 fi
 
+# #331: every module of an extension gets Pi's own modules by the names Pi gives them, not an older copy of Pi's package that
+# npm or bun installed beside it: the JavaScript modules jiti hands to the runtime as they are too (an ES module of a "type":
+# "module" package, imported statically or with import(); a .cjs, required), in node_modules or not.
+sdk_case() { # FOLDER: a package folder with an older @earendil-works/pi-coding-agent in a node_modules above it
+	local ext=$1
+	mkdir -p "$ext/dist"
+	printf '{"name": "sdk-alias", "type": "module"}\n' >"$ext/package.json"
+	printf 'import { VERSION } from "@earendil-works/pi-coding-agent";\nexport { VERSION };\n' >"$ext/dist/static.js"
+	printf 'export const VERSION = (await import("@earendil-works/pi-coding-agent")).VERSION;\n' >"$ext/dist/dynamic.js"
+	printf 'exports.VERSION = require("@earendil-works/pi-coding-agent").VERSION;\n' >"$ext/dist/required.cjs"
+	cat >"$ext/sdk-alias.ts" <<'TS'
+import { createRequire } from "node:module";
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import * as staticJs from "./dist/static.js";
+const dynamicJs = await import("./dist/static.js");
+const nested = await import("./dist/dynamic.js");
+const requiredCjs = createRequire(import.meta.url)("./dist/required.cjs");
+export default function () {
+	console.log(
+		`sdk-alias: host=${VERSION} static=${staticJs.VERSION} dynamic=${dynamicJs.VERSION} nested=${nested.VERSION} require=${requiredCjs.VERSION}`,
+	);
+	process.exit(0);
+}
+TS
+}
+old_sdk() { # NODE_MODULES: an @earendil-works/pi-coding-agent 0.0.1 in it, for import and for require
+	local sdk="$1/@earendil-works/pi-coding-agent"
+	mkdir -p "$sdk"
+	printf '{"name": "@earendil-works/pi-coding-agent", "version": "0.0.1", "type": "module", "exports": {".": {"import": "./index.js", "require": "./index.cjs"}}}\n' >"$sdk/package.json"
+	printf 'export const VERSION = "0.0.1";\n' >"$sdk/index.js"
+	printf 'exports.VERSION = "0.0.1";\n' >"$sdk/index.cjs"
+}
+sdk_check() { # NAME FOLDER
+	local name=$1 ext=$2 out host
+	out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+		"$PI" -ne -e "$ext/sdk-alias.ts" --offline --no-session -p hi 2>&1 </dev/null)
+	host=$(sed -n 's/^sdk-alias: host=\([^ ]*\) .*/\1/p' <<<"$out")
+	if [ -n "$host" ] && [ "$host" != 0.0.1 ] &&
+		grep -q "^sdk-alias: host=$host static=$host dynamic=$host nested=$host require=$host$" <<<"$out"; then
+		echo "PASS $name"
+	else
+		echo "FAIL $name"
+		grep -m3 "sdk-alias\|error\|rror:" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+		status=1
+	fi
+}
+sdk="$home/extensions/sdk-alias"
+old_sdk "$sdk/node_modules"
+sdk_case "$sdk/node_modules/sdk-alias"
+sdk_check "an extension's modules in node_modules get Pi's SDK, not the copy beside them (#331)" "$sdk/node_modules/sdk-alias"
+sdk_case "$sdk/local"
+sdk_check "an extension's modules outside node_modules get Pi's SDK, not the copy above them (#331)" "$sdk/local"
+# (A require() cannot wait for Pi's modules to load: one before any import gets them too.)
+cat >"$sdk/local/require-first.ts" <<'TS'
+import { createRequire } from "node:module";
+export default function () {
+	console.log(`require-first: ${createRequire(import.meta.url)("./dist/required.cjs").VERSION}`);
+	process.exit(0);
+}
+TS
+out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+	"$PI" -ne -e "$sdk/local/require-first.ts" --offline --no-session -p hi 2>&1 </dev/null)
+if grep -q "^require-first: [0-9]" <<<"$out" && ! grep -q "^require-first: 0\.0\.1$" <<<"$out"; then
+	echo "PASS a require() of Pi's SDK before any import gets Pi's (#331)"
+else
+	echo "FAIL a require() of Pi's SDK before any import gets Pi's (#331)"
+	grep -m3 "require-first\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+	status=1
+fi
+
 # Without the JIT, a package that works only through bun:ffi does not load, so that its extension takes its Node.js alternative
 # (pi-fff: @ff-labs/fff-bun, then @ff-labs/fff-node); with the JIT it loads.
 ffi="$home/extensions/jit-only"

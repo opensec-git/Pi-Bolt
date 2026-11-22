@@ -107,6 +107,14 @@ function withoutJitOnlyPackages(modules: Record<string, unknown>): Record<string
 }
 
 /**
+ * The names the runtime is given Pi's modules by, for the modules an extension loads without jiti
+ * (core/extensions/compiled-modules.ts): those jiti gives, and without the JIT, the packages it refuses (JIT_ONLY_PACKAGES).
+ */
+function piModuleNamesForFiles(): readonly string[] {
+	return PIBOLT && !PIBOLT.jit ? [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES] : PI_MODULE_NAMES;
+}
+
+/**
  * Get aliases for jiti (used in built Node.js mode).
  * In compiled binary mode, virtualModules is used instead.
  */
@@ -668,6 +676,11 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		: isTypeScriptSourceRuntime
 			? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
 			: { alias: getAliases() };
+	if (isBunBinary) {
+		// Pi-Bolt (#331): what jiti hands to the runtime as it is (an ES module imported, a CommonJS module required), in
+		// node_modules or not, gets Pi's modules by those names too, not a copy of Pi's package installed beside the extension.
+		provideModulesToFiles(piModuleNamesForFiles(), getVirtualModules, await getVirtualModules());
+	}
 	const jiti = createJitiImpl(import.meta.url, {
 		moduleCache: false,
 		...resolutionOptions,
@@ -784,10 +797,7 @@ async function loadExtension(
 	if (compiled && "factory" in compiled) {
 		time(`${extensionPath} module import`, "extensions");
 		// (What it loads from disk as it runs gets Pi's modules, as from jiti: core/extensions/compiled-modules.ts.)
-		provideModulesToFiles(
-			PIBOLT?.jit ? PI_MODULE_NAMES : [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES],
-			getVirtualModules,
-		);
+		provideModulesToFiles(piModuleNamesForFiles(), getVirtualModules);
 		try {
 			const extension = await initializeExtension(
 				compiled.factory,
