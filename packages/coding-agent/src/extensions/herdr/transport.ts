@@ -96,10 +96,21 @@ export function herdrAnswer(id: string, line: string): HerdrAnswer | undefined {
 	return error == null && result !== undefined ? { taken: true } : refused(error);
 }
 
-/** The error code in the output of a `herdr pane` command that failed: its last line `{"id", "error": {"code"}}`. */
+/**
+ * The error code in the stderr of a `herdr pane` command that failed: the last line holding Herdr's answer
+ * `{"id", "error": {"code"}}`, also with text around it, so a warning or log line before or after it does not hide it.
+ */
 export function herdrCommandError(output: string): HerdrAnswer {
-	const lines = output.trim().split("\n");
-	return refused(parseLine(lines[lines.length - 1])?.error);
+	const lines = output.split(/\r?\n/);
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const line = lines[i];
+		const start = line.indexOf("{");
+		const end = line.lastIndexOf("}");
+		if (start < 0 || end < start) continue;
+		const answer = refused(parseLine(line.slice(start, end + 1))?.error);
+		if (!answer.taken && answer.code) return answer;
+	}
+	return NOT_TAKEN;
 }
 
 // Wire input from Herdr: checked here, typed after.
@@ -161,15 +172,22 @@ export function socketTransport(endpoint: string): HerdrTransport {
 		});
 }
 
+/** How long a failed `herdr` command's stderr may stay open after it exited. */
+const STDERR_GRACE_MS = 100;
+
 export function executableTransport(bin: string): HerdrTransport {
 	return (request, timeoutMs) =>
 		new Promise((resolve) => {
 			let done = false;
 			let child: ReturnType<typeof spawn> | undefined;
+			let grace: ReturnType<typeof setTimeout> | undefined;
 			const finish = (answer: HerdrAnswer) => {
 				if (done) return;
 				done = true;
 				clearTimeout(timeout);
+				clearTimeout(grace);
+				// A process the command started may still hold the pipe; Pi-Bolt does not wait for it.
+				child?.stderr?.destroy();
 				resolve(answer);
 			};
 			const timeout = setTimeout(() => {
@@ -190,7 +208,13 @@ export function executableTransport(bin: string): HerdrTransport {
 				if (stderr.length < MAX_ANSWER_LENGTH) stderr += chunk;
 			});
 			child.on("error", () => finish(NOT_TAKEN));
-			// close, not exit: stderr is complete only then.
+			// The answer is the exit status. A refusal's error is on stderr, which ends with the command unless a process it
+			// started keeps the pipe open: that gets a short grace, not the whole timeout.
+			child.on("exit", (code) => {
+				if (code === 0) return finish({ taken: true });
+				grace = setTimeout(() => finish(herdrCommandError(stderr)), STDERR_GRACE_MS);
+				grace.unref?.();
+			});
 			child.on("close", (code) => finish(code === 0 ? { taken: true } : herdrCommandError(stderr)));
 		});
 }

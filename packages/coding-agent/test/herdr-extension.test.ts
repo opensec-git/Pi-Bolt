@@ -13,6 +13,7 @@ import {
 } from "../src/extensions/herdr/index.ts";
 import { isHerdrPiIntegration } from "../src/extensions/herdr/integration-file.ts";
 import {
+	executableTransport,
 	type HerdrRequest,
 	herdrAnswer,
 	herdrArguments,
@@ -891,12 +892,45 @@ describe("Herdr executable (Windows)", () => {
 		expect(calls().map((call) => call.includes("|--|"))).toEqual([true, false, false]);
 	});
 
+	// #330 (review): the answer waited for stderr to close, so a process the command left running with stderr open held
+	// every report until its timeout, which then counted as no answer.
+	test.skipIf(process.platform === "win32")("a process holding stderr open does not hold up the answer", async () => {
+		const dir = tempDir();
+		const refusal = JSON.stringify({ id: "cli:request", error: { code: "resume_not_accepted", message: "m" } });
+		const script = (exit: number, line: string) => {
+			const bin = join(dir, `herdr-${exit}`);
+			writeFileSync(bin, `#!/bin/sh\nsleep 3 &\n${line}\nexit ${exit}\n`);
+			chmodSync(bin, 0o755);
+			return bin;
+		};
+		const report: HerdrRequest = {
+			method: "pane.report_agent",
+			params: { pane_id: "w1:p1", source: "pi-bolt", agent: "pi-bolt", state: "idle", seq: 1 },
+		};
+		for (const [bin, expected] of [
+			[script(1, `echo '${refusal}' >&2`), { taken: false, code: "resume_not_accepted" }],
+			[script(0, ":"), { taken: true }],
+		] as const) {
+			const started = Date.now();
+			expect(await executableTransport(bin)(report, 2500)).toEqual(expected);
+			expect(Date.now() - started).toBeLessThan(1000);
+		}
+	});
+
 	test("the error code of a failed command", () => {
 		const answer = JSON.stringify({ id: "cli:request", error: { code: "resume_not_accepted", message: "m" } });
 		expect(herdrCommandError(`${answer}\n`)).toEqual({ taken: false, code: "resume_not_accepted" });
 		expect(herdrCommandError(`warning\n${answer}`)).toEqual({ taken: false, code: "resume_not_accepted" });
 		expect(herdrCommandError("")).toEqual({ taken: false });
 		expect(herdrCommandError("error: unexpected argument")).toEqual({ taken: false });
+		// #330 (review): a line after the answer hid its code, and the refused command was sent again.
+		const refused = { taken: false, code: "resume_not_accepted" };
+		expect(herdrCommandError(`${answer}\nwarning: something else\n`)).toEqual(refused);
+		expect(herdrCommandError(`${answer}\r\nlog line\r\n`)).toEqual(refused);
+		expect(herdrCommandError(`Error: ${answer}`)).toEqual(refused);
+		expect(herdrCommandError(`${answer}\n${JSON.stringify({ id: "x", result: {} })}\n{not json}`)).toEqual(refused);
+		const other = JSON.stringify({ id: "cli:request", error: { code: "pane_not_found", message: "m" } });
+		expect(herdrCommandError(`${answer}\n${other}`)).toEqual({ taken: false, code: "pane_not_found" });
 	});
 });
 
