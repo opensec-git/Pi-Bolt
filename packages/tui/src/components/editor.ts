@@ -293,15 +293,6 @@ function canWrapStandalone(line: string, lineWidth: number, maxWidth: number): b
 	return lineWidth >= 0 && (maxWidth >= 2 || lineWidth === line.length);
 }
 
-/**
- * visibleWidth() of an editor line: for a line of standalone characters, their widths added up, without segmenting it
- * (visibleWidth() segments any line with a character it does not measure directly, such as CJK, every time).
- */
-function editorLineWidth(line: string): number {
-	const width = standaloneTextWidth(line);
-	return width >= 0 ? width : visibleWidth(line);
-}
-
 /** isWhitespaceChar() for a standalone character, by its code. */
 function isStandaloneWhitespace(line: string, i: number, code: number): boolean {
 	return code === 0x20 || (code > 0x7e && isWhitespaceChar(line[i]!));
@@ -411,6 +402,75 @@ interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
 	cursorPos?: number;
+}
+
+/** One visual row of the text: a part of logical line `logicalLine`. */
+interface VisualLine {
+	logicalLine: number;
+	startCol: number;
+	length: number;
+}
+
+/** The visual rows of the text at one width, by row index. */
+interface VisualLines {
+	readonly length: number;
+	/** Visual line `row`, or undefined outside the text. */
+	at(row: number): VisualLine | undefined;
+	/** The row holding column `col` of logical line `line`: at the end of a line, its last row; else the last row. */
+	find(line: number, col: number): number;
+}
+
+/** Logical lines laid out at one width, by line index (see Editor.layoutText()). */
+interface TextLayout {
+	width: number;
+	pasteIds: string;
+	/** Each logical line with its chunks, one per visual row. Valid where `text` is the line at that index now. */
+	lines: Array<{ text: string; chunks: TextChunk[] } | undefined>;
+	/** The first row of each logical line; rowStarts[lines.length] is the number of rows. */
+	rowStarts: number[];
+	/** Lines before this index are laid out and counted in rowStarts, except those in `changed`. */
+	validLines: number;
+	/** Lines before validLines replaced in place since the last layout, each the same as before column `from`. */
+	changed: Array<{ line: number; from: number }>;
+}
+
+/**
+ * `array` with `deleteCount` items at `start` replaced by `items`: spliced in place, or copied when there are many items
+ * (the arguments of a call, which a spread splice() passes them as, are limited in number).
+ */
+function spliceItems<T>(array: T[], start: number, deleteCount: number, items: T[]): T[] {
+	if (items.length <= 4096) {
+		array.splice(start, deleteCount, ...items);
+		return array;
+	}
+	return array.slice(0, start).concat(items, array.slice(start + deleteCount));
+}
+
+/**
+ * Move the laid-out lines at the end of `known` to the indices their lines have in `lines`, which has a different number
+ * of lines: lines were added or removed when the whole text was replaced (an undo of a new line, a text set to the same
+ * text with a line more). Without this, every line after the change would be compared with the wrong line and wrapped
+ * again. Entries before `from` stay (the tail compared is after them); the others are laid out again if they differ.
+ */
+function realignTail(known: TextLayout["lines"], lines: readonly string[], from: number): void {
+	let same = 0;
+	const max = Math.min(known.length, lines.length) - from;
+	while (same < max && known[known.length - 1 - same]?.text === lines[lines.length - 1 - same]) same++;
+	const tail = known.slice(known.length - same);
+	known.length = lines.length - same;
+	for (const laidOut of tail) known.push(laidOut);
+}
+
+/** The logical line holding `row` (0 <= row < rowStarts[lineCount]), by binary search over rowStarts. */
+function lineAtRow(rowStarts: readonly number[], lineCount: number, row: number): number {
+	let low = 0;
+	let high = lineCount - 1;
+	while (low < high) {
+		const middle = (low + high + 1) >> 1;
+		if (rowStarts[middle]! <= row) low = middle;
+		else high = middle - 1;
+	}
+	return low;
 }
 
 export interface EditorTheme {
@@ -568,44 +628,196 @@ export class Editor implements Component, Focusable {
 	}
 
 	/**
-	 * The wrapped chunks of each logical line, by line index, for one width and one set of paste IDs (a paste marker
-	 * wraps as one unit): every frame lays out the whole text again, and all lines but the edited one are what they were.
+	 * Bumped on every change to the text (see setLine(), spliceLines(), linesReplaced()): what was computed from the text
+	 * at one version is still right while the version is the same (getText(), renderedText).
 	 */
-	private wrapCache: {
-		width: number;
-		pasteIds: string;
-		lines: Array<{ text: string; chunks: TextChunk[] } | undefined>;
-	} = { width: -1, pasteIds: "", lines: [] };
+	private textVersion = 0;
 
-	/** The wrap cache for `width`, emptied when the width or the paste IDs changed. */
-	private wrapCacheFor(width: number): Array<{ text: string; chunks: TextChunk[] } | undefined> {
-		const pasteIds = [...this.pastes.keys()].join(",");
-		const cache = this.wrapCache;
-		if (cache.width !== width || cache.pasteIds !== pasteIds) {
-			this.wrapCache = { width, pasteIds, lines: [] };
-		} else if (cache.lines.length > this.state.lines.length) {
-			cache.lines.length = this.state.lines.length;
+	/** getText() at textVersion `version`: the text is made once per change, when someone reads it. */
+	private joinedText = { version: 0, text: "" };
+
+	/**
+	 * The text before and after logical line `line`, joined when getText() was first read with that line changed. While
+	 * keystrokes change only that line, the text is `before + line + after`, made without joining every line again
+	 * (lines.join() on each keystroke cost 80 µs with 7,000 lines; a reader that needs the characters copies the three
+	 * parts into one string, several times faster than join()).
+	 */
+	private textSplit?: { line: number; before: string; after: string };
+
+	/**
+	 * The text laid out at one width and one set of paste IDs (a paste marker wraps as one unit), kept between keystrokes:
+	 * a keystroke changes one line, and laying out the whole text again on every frame cost O(text) per key (3 ms with
+	 * 7,000 lines). See layoutText().
+	 */
+	private layout?: TextLayout;
+
+	/**
+	 * Replace logical line `index` with `text`, which is the same as the line was before column `from`. Every in-place
+	 * change of one line goes through here.
+	 */
+	private setLine(index: number, text: string, from = 0): void {
+		this.state.lines[index] = text;
+		this.textVersion++;
+		if (this.textSplit?.line !== index) this.textSplit = undefined;
+		const layout = this.layout;
+		// A line past validLines is laid out again by layoutText() anyway.
+		if (layout === undefined || index >= layout.validLines) return;
+		const changed = layout.changed.find((change) => change.line === index);
+		if (changed !== undefined) {
+			changed.from = Math.min(changed.from, from);
+		} else if (layout.changed.length < 64) {
+			layout.changed.push({ line: index, from });
+		} else {
+			// Many lines changed without a render in between: comparing every line is cheaper than finding them here.
+			layout.validLines = 0;
+			layout.changed.length = 0;
 		}
-		return this.wrapCache.lines;
 	}
 
-	/** wordWrapLine() for logical line `index`, from the wrap cache when the line is unchanged. */
-	private wrapLine(
-		cache: Array<{ text: string; chunks: TextChunk[] } | undefined>,
-		index: number,
-		line: string,
-		width: number,
-	): TextChunk[] {
-		const known = cache[index];
-		if (known !== undefined && known.text === line) return known.chunks;
+	/** Remove `deleteCount` logical lines at `start` and insert `inserted` there. */
+	private spliceLines(start: number, deleteCount: number, inserted: string[]): void {
+		this.state.lines = spliceItems(this.state.lines, start, deleteCount, inserted);
+		this.textVersion++;
+		this.textSplit = undefined;
+		const layout = this.layout;
+		if (layout === undefined) return;
+		// The rows of every line from `start` on move: count them again from there. The lines after the change keep
+		// what was laid out for them.
+		layout.validLines = Math.min(layout.validLines, start);
+		if (start < layout.lines.length) {
+			layout.lines = spliceItems(layout.lines, start, deleteCount, new Array(inserted.length).fill(undefined));
+		}
+	}
+
+	/**
+	 * Note that this.state.lines was replaced as a whole (or this.state). The next layout compares every line with what
+	 * was laid out at its index, and lays out again only those that differ.
+	 */
+	private linesReplaced(): void {
+		this.textVersion++;
+		this.textSplit = undefined;
+		if (this.layout !== undefined) this.layout.validLines = 0;
+	}
+
+	/**
+	 * The text laid out at `width`: what is unchanged since the last layout is kept, so a keystroke costs the edited line
+	 * (wrapped again) and the lines after it only when their rows move (a line added, removed or wrapping to a different
+	 * number of rows).
+	 */
+	private layoutText(width: number): TextLayout {
+		const pasteIds = this.pastes.size === 0 ? "" : [...this.pastes.keys()].join(",");
+		let layout = this.layout;
+		if (layout === undefined || layout.width !== width || layout.pasteIds !== pasteIds) {
+			layout = { width, pasteIds, lines: [], rowStarts: [0], validLines: 0, changed: [] };
+			this.layout = layout;
+		}
+		const lines = this.state.lines;
+		const known = layout.lines;
+		const rowStarts = layout.rowStarts;
+
+		// Lines changed in place before validLines: a line that still has as many rows leaves the rows after it in place.
+		let validLines = layout.validLines;
+		for (const { line: index, from } of layout.changed) {
+			if (index >= validLines) continue;
+			const before = known[index];
+			const line = lines[index] ?? "";
+			if (before !== undefined && before.text === line) continue;
+			const chunks = before === undefined ? this.wrapLine(line, width) : this.rewrapLine(before, line, from, width);
+			known[index] = { text: line, chunks };
+			if (before === undefined || before.chunks.length !== chunks.length) validLines = index;
+		}
+		layout.changed.length = 0;
+
+		if (known.length !== lines.length) realignTail(known, lines, validLines);
+		for (let index = validLines; index < lines.length; index++) {
+			const line = lines[index] ?? "";
+			let laidOut = known[index];
+			if (laidOut === undefined || laidOut.text !== line) {
+				laidOut = { text: line, chunks: this.wrapLine(line, width) };
+				known[index] = laidOut;
+			}
+			rowStarts[index + 1] = rowStarts[index]! + laidOut.chunks.length;
+		}
+		known.length = lines.length;
+		rowStarts.length = lines.length + 1;
+		layout.validLines = lines.length;
+		return layout;
+	}
+
+	/**
+	 * The visual rows of `line` at `width`, as wordWrapLine() splits it (one chunk for a line that fits). A line of
+	 * standalone characters is measured and wrapped without segmenting it (visibleWidth() segments any line with a
+	 * character it does not measure directly, such as CJK, every time).
+	 */
+	private wrapLine(line: string, width: number): TextChunk[] {
+		const standaloneWidth = standaloneTextWidth(line);
+		const lineWidth = standaloneWidth >= 0 ? standaloneWidth : visibleWidth(line);
+		if (lineWidth <= width) return [{ text: line, startIndex: 0, endIndex: line.length }];
 		// A line of standalone characters without paste markers wraps the same from its plain graphemes, which
 		// wordWrapStandaloneLine() does without segmenting it.
-		const standaloneWidth = this.hasNoPasteMarkers(line) ? standaloneTextWidth(line) : -1;
-		const chunks = canWrapStandalone(line, standaloneWidth, width)
-			? wordWrapStandaloneLine(line, width, standaloneWidth)
-			: wordWrapLine(line, width, [...this.segment(line, "grapheme")]);
-		cache[index] = { text: line, chunks };
-		return chunks;
+		if (this.hasNoPasteMarkers(line) && canWrapStandalone(line, standaloneWidth, width)) {
+			return wordWrapStandaloneLine(line, width, standaloneWidth);
+		}
+		return wordWrapLine(line, width, [...this.segment(line, "grapheme")]);
+	}
+
+	/**
+	 * wrapLine() for `line`, which is `before.text` changed from column `from` on, keeping the rows of `before` that end
+	 * before the row preceding the change. Where wordWrapLine() ends a row depends only on the text before the start of
+	 * the row after it, and at the start of a row it is in the state it starts a line in: wrapping the rest of the line
+	 * from the start of the row before the changed one gives the rows a wrap of the whole line gives there. A keystroke
+	 * at the end of a long line wraps its last rows only (the whole line cost 0.1-0.5 ms per key at 5,000-20,000
+	 * characters).
+	 */
+	private rewrapLine(
+		before: { text: string; chunks: TextChunk[] },
+		line: string,
+		from: number,
+		width: number,
+	): TextChunk[] {
+		const chunks = before.chunks;
+		let changedRow = chunks.length - 1;
+		while (changedRow > 0 && chunks[changedRow]!.startIndex > from) changedRow--;
+		// A paste marker wider than the width is split across rows: a row can start inside it, and wrapping from there
+		// would split the marker differently.
+		if (changedRow < 2 || !this.hasNoPasteMarkers(line)) return this.wrapLine(line, width);
+		const restart = chunks[changedRow - 1]!.startIndex;
+		const rest = this.wrapLine(line.slice(restart), width);
+		const result = chunks.slice(0, changedRow - 1);
+		for (const chunk of rest) {
+			result.push({ text: chunk.text, startIndex: chunk.startIndex + restart, endIndex: chunk.endIndex + restart });
+		}
+		return result;
+	}
+
+	/** The visual lines of the text laid out at `width`, looked up by row without building them all. */
+	private visualLinesAt(width: number): VisualLines {
+		const layout = this.layoutText(width);
+		const rowStarts = layout.rowStarts;
+		const lineCount = layout.lines.length;
+		return {
+			length: rowStarts[lineCount]!,
+			at: (row) => {
+				if (row < 0 || row >= rowStarts[lineCount]!) return undefined;
+				const line = lineAtRow(rowStarts, lineCount, row);
+				const chunk = layout.lines[line]!.chunks[row - rowStarts[line]!]!;
+				return { logicalLine: line, startCol: chunk.startIndex, length: chunk.endIndex - chunk.startIndex };
+			},
+			find: (line, col) => {
+				if (line >= 0 && line < lineCount) {
+					const chunks = layout.lines[line]!.chunks;
+					for (let i = 0; i < chunks.length; i++) {
+						const offset = col - chunks[i]!.startIndex;
+						// For the last chunk of the line, the cursor can be at its end.
+						const length = chunks[i]!.endIndex - chunks[i]!.startIndex;
+						if (offset >= 0 && (offset < length || (i === chunks.length - 1 && offset === length))) {
+							return rowStarts[line]! + i;
+						}
+					}
+				}
+				return rowStarts[lineCount]! - 1;
+			},
+		};
 	}
 
 	/** Set of currently valid paste IDs, for marker-aware segmentation. */
@@ -705,13 +917,13 @@ export class Editor implements Component, Focusable {
 	}
 
 	private isOnFirstVisualLine(): boolean {
-		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLines = this.visualLinesAt(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
 		return currentVisualLine === 0;
 	}
 
 	private isOnLastVisualLine(): boolean {
-		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLines = this.visualLinesAt(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
 		return currentVisualLine === visualLines.length - 1;
 	}
@@ -736,6 +948,7 @@ export class Editor implements Component, Focusable {
 			this.historyDraft = null;
 			if (draft) {
 				this.state = draft;
+				this.linesReplaced();
 				this.preferredVisualCol = null;
 				this.snappedFromCursorCol = null;
 				this.scrollOffset = 0;
@@ -757,6 +970,7 @@ export class Editor implements Component, Focusable {
 	private setTextInternal(text: string, cursorPlacement: "start" | "end" = "end"): void {
 		const lines = text.split("\n");
 		this.state.lines = lines.length === 0 ? [""] : lines;
+		this.linesReplaced();
 		this.state.cursorLine = cursorPlacement === "start" ? 0 : this.state.lines.length - 1;
 		this.setCursorCol(cursorPlacement === "start" ? 0 : this.state.lines[this.state.cursorLine]?.length || 0);
 		// Reset scroll - render() will adjust to show cursor
@@ -802,7 +1016,8 @@ export class Editor implements Component, Focusable {
 		terminalRows: number;
 		focused: boolean;
 		pasteIds: string;
-		lines: readonly string[];
+		/** textVersion when the lines were drawn: the text is the same while it is. */
+		textVersion: number;
 		cursorLine: number;
 		cursorCol: number;
 		/** The scroll position the lines were drawn at: render() adjusts it, and it is what it was set to then. */
@@ -821,24 +1036,17 @@ export class Editor implements Component, Focusable {
 		terminalRows: number,
 		pasteIds: string,
 	): boolean {
-		const lines = this.state.lines;
-		if (
-			known.width !== width ||
-			known.paddingX !== this.paddingX ||
-			known.terminalRows !== terminalRows ||
-			known.focused !== this.focused ||
-			known.pasteIds !== pasteIds ||
-			known.cursorLine !== this.state.cursorLine ||
-			known.cursorCol !== this.state.cursorCol ||
-			known.scrollOffset !== this.scrollOffset ||
-			known.lines.length !== lines.length
-		) {
-			return false;
-		}
-		for (let i = 0; i < lines.length; i++) {
-			if (known.lines[i] !== lines[i]) return false;
-		}
-		return true;
+		return (
+			known.width === width &&
+			known.paddingX === this.paddingX &&
+			known.terminalRows === terminalRows &&
+			known.focused === this.focused &&
+			known.pasteIds === pasteIds &&
+			known.textVersion === this.textVersion &&
+			known.cursorLine === this.state.cursorLine &&
+			known.cursorCol === this.state.cursorCol &&
+			known.scrollOffset === this.scrollOffset
+		);
 	}
 
 	render(width: number): string[] {
@@ -874,14 +1082,15 @@ export class Editor implements Component, Focusable {
 		this.lastWidth = layoutWidth;
 
 		// Layout the text
-		const layoutLines = this.layoutText(layoutWidth);
+		const layout = this.layoutText(layoutWidth);
+		const rowCount = layout.rowStarts[layout.lines.length]!;
+		const cursor = this.cursorRow(layout);
 
 		// Calculate max visible lines: 30% of terminal height, minimum 5 lines
 		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
 
-		// Find the cursor line index in layoutLines
-		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
-		if (cursorLineIndex === -1) cursorLineIndex = 0;
+		// The row with the cursor
+		const cursorLineIndex = cursor?.row ?? 0;
 
 		// Adjust scroll offset to keep cursor visible
 		if (cursorLineIndex < this.scrollOffset) {
@@ -891,11 +1100,16 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Clamp scroll offset to valid range
-		const maxScrollOffset = Math.max(0, layoutLines.length - maxVisibleLines);
+		const maxScrollOffset = Math.max(0, rowCount - maxVisibleLines);
 		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxScrollOffset));
 
-		// Get visible lines slice
-		const visibleLines = layoutLines.slice(this.scrollOffset, this.scrollOffset + maxVisibleLines);
+		// Only the visible rows are built
+		const visibleLines = this.layoutRows(
+			layout,
+			this.scrollOffset,
+			Math.min(rowCount, this.scrollOffset + maxVisibleLines),
+			cursor,
+		);
 		this.renderedVisibleLineCount = visibleLines.length;
 
 		const result: string[] = [];
@@ -953,7 +1167,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Render bottom border (with scroll indicator if more content below)
-		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
+		const linesBelow = rowCount - (this.scrollOffset + visibleLines.length);
 		result.push(this.renderBottomBorder(width, linesBelow));
 
 		if (!showAutocomplete) {
@@ -964,7 +1178,7 @@ export class Editor implements Component, Focusable {
 				terminalRows,
 				focused: this.focused,
 				pasteIds: this.pastes.size === 0 ? "" : [...this.pastes.keys()].join(","),
-				lines: this.state.lines.slice(),
+				textVersion: this.textVersion,
 				cursorLine: this.state.cursorLine,
 				cursorCol: this.state.cursorCol,
 				scrollOffset: this.scrollOffset,
@@ -1018,9 +1232,9 @@ export class Editor implements Component, Focusable {
 		if (event.type !== "click" || event.button !== "left") return undefined;
 		if (event.y <= 0 || event.y > this.renderedVisibleLineCount) return { handled: true, focus: true };
 
-		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLines = this.visualLinesAt(this.lastWidth);
 		const visualLineIndex = this.scrollOffset + event.y - 1;
-		const visualLine = visualLines[visualLineIndex];
+		const visualLine = visualLines.at(visualLineIndex);
 		if (!visualLine) return { handled: true, focus: true };
 		const logicalLine = this.state.lines[visualLine.logicalLine] ?? "";
 		const chunkEnd = visualLine.startCol + visualLine.length;
@@ -1042,7 +1256,7 @@ export class Editor implements Component, Focusable {
 		}
 		const isLastSegment =
 			visualLineIndex === visualLines.length - 1 ||
-			visualLines[visualLineIndex + 1]?.logicalLine !== visualLine.logicalLine;
+			visualLines.at(visualLineIndex + 1)?.logicalLine !== visualLine.logicalLine;
 		if (!isLastSegment && targetIndex === chunk.length && chunk.length > 0) targetIndex = lastGraphemeIndex;
 
 		this.state.cursorLine = visualLine.logicalLine;
@@ -1144,6 +1358,7 @@ export class Editor implements Component, Focusable {
 						this.autocompletePrefix,
 					);
 					this.state.lines = result.lines;
+					this.linesReplaced();
 					this.state.cursorLine = result.cursorLine;
 					this.setCursorCol(result.cursorCol);
 					this.cancelAutocomplete();
@@ -1171,6 +1386,7 @@ export class Editor implements Component, Focusable {
 						this.autocompletePrefix,
 					);
 					this.state.lines = result.lines;
+					this.linesReplaced();
 					this.state.cursorLine = result.cursorLine;
 					this.setCursorCol(result.cursorCol);
 
@@ -1366,97 +1582,78 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	private layoutText(contentWidth: number): LayoutLine[] {
-		const layoutLines: LayoutLine[] = [];
-
-		if (this.state.lines.length === 0 || (this.state.lines.length === 1 && this.state.lines[0] === "")) {
-			// Empty editor
-			layoutLines.push({
-				text: "",
-				hasCursor: true,
-				cursorPos: 0,
-			});
-			return layoutLines;
-		}
-
-		// Process each logical line
-		const wrapCache = this.wrapCacheFor(contentWidth);
-		for (let i = 0; i < this.state.lines.length; i++) {
-			const line = this.state.lines[i] || "";
-			const isCurrentLine = i === this.state.cursorLine;
-			const lineVisibleWidth = editorLineWidth(line);
-
-			if (lineVisibleWidth <= contentWidth) {
-				// Line fits in one layout line
-				if (isCurrentLine) {
-					layoutLines.push({
-						text: line,
-						hasCursor: true,
-						cursorPos: this.state.cursorCol,
-					});
-				} else {
-					layoutLines.push({
-						text: line,
-						hasCursor: false,
-					});
-				}
-			} else {
-				// Line needs wrapping - use word-aware wrapping
-				const chunks = this.wrapLine(wrapCache, i, line, contentWidth);
-
-				for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
-					const chunk = chunks[chunkIndex];
-					if (!chunk) continue;
-
-					const cursorPos = this.state.cursorCol;
-					const isLastChunk = chunkIndex === chunks.length - 1;
-
-					// Determine if cursor is in this chunk
-					// For word-wrapped chunks, we need to handle the case where
-					// cursor might be in trimmed whitespace at end of chunk
-					let hasCursorInChunk = false;
-					let adjustedCursorPos = 0;
-
-					if (isCurrentLine) {
-						if (isLastChunk) {
-							// Last chunk: cursor belongs here if >= startIndex
-							hasCursorInChunk = cursorPos >= chunk.startIndex;
-							adjustedCursorPos = cursorPos - chunk.startIndex;
-						} else {
-							// Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
-							// But we need to handle the visual position in the trimmed text
-							hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
-							if (hasCursorInChunk) {
-								adjustedCursorPos = cursorPos - chunk.startIndex;
-								// Clamp to text length (in case cursor was in trimmed whitespace)
-								if (adjustedCursorPos > chunk.text.length) {
-									adjustedCursorPos = chunk.text.length;
-								}
-							}
-						}
-					}
-
-					if (hasCursorInChunk) {
-						layoutLines.push({
-							text: chunk.text,
-							hasCursor: true,
-							cursorPos: adjustedCursorPos,
-						});
-					} else {
-						layoutLines.push({
-							text: chunk.text,
-							hasCursor: false,
-						});
-					}
-				}
+	/**
+	 * The row with the cursor and the cursor's position in that row's text, or undefined if no row has it. A cursor at
+	 * a wrap point belongs to the row it starts, except at the end of the line; one in the whitespace a non-last row ends
+	 * with is drawn at that row's end.
+	 */
+	private cursorRow(layout: TextLayout): { row: number; pos: number } | undefined {
+		const { cursorLine, cursorCol } = this.state;
+		const laidOut = layout.lines[cursorLine];
+		if (laidOut === undefined) return undefined;
+		const chunks = laidOut.chunks;
+		for (let i = 0; i < chunks.length; i++) {
+			const chunk = chunks[i]!;
+			const isLastChunk = i === chunks.length - 1;
+			if (cursorCol >= chunk.startIndex && (isLastChunk || cursorCol < chunk.endIndex)) {
+				const pos = cursorCol - chunk.startIndex;
+				return {
+					row: layout.rowStarts[cursorLine]! + i,
+					pos: isLastChunk ? pos : Math.min(pos, chunk.text.length),
+				};
 			}
 		}
+		return undefined;
+	}
 
-		return layoutLines;
+	/** Rows `start` to `end` (exclusive) of `layout` for render(), with the cursor where `cursor` puts it. */
+	private layoutRows(
+		layout: TextLayout,
+		start: number,
+		end: number,
+		cursor: { row: number; pos: number } | undefined,
+	): LayoutLine[] {
+		const lineCount = layout.lines.length;
+		if (lineCount === 0) return [{ text: "", hasCursor: true, cursorPos: 0 }];
+		const rows: LayoutLine[] = [];
+		if (start >= end) return rows;
+		let line = lineAtRow(layout.rowStarts, lineCount, start);
+		let chunkIndex = start - layout.rowStarts[line]!;
+		for (let row = start; row < end; row++) {
+			const chunks = layout.lines[line]!.chunks;
+			const text = chunks[chunkIndex]!.text;
+			rows.push(row === cursor?.row ? { text, hasCursor: true, cursorPos: cursor.pos } : { text, hasCursor: false });
+			if (++chunkIndex === chunks.length) {
+				line++;
+				chunkIndex = 0;
+			}
+		}
+		return rows;
 	}
 
 	getText(): string {
-		return this.state.lines.join("\n");
+		if (this.joinedText.version !== this.textVersion) {
+			this.joinedText = { version: this.textVersion, text: this.joinLines() };
+		}
+		return this.joinedText.text;
+	}
+
+	/** this.state.lines.join("\n"), from textSplit when only its line changed since it was made. */
+	private joinLines(): string {
+		const lines = this.state.lines;
+		if (lines.length === 1) return lines[0]!;
+		let split = this.textSplit;
+		if (split === undefined) {
+			// The cursor's line is the one the next keystrokes change.
+			const line = Math.min(this.state.cursorLine, lines.length - 1);
+			split = {
+				line,
+				before: line > 0 ? `${lines.slice(0, line).join("\n")}\n` : "",
+				after: line < lines.length - 1 ? `\n${lines.slice(line + 1).join("\n")}` : "",
+			};
+			this.textSplit = split;
+		}
+		return split.before + lines[split.line] + split.after;
 	}
 
 	private expandPasteMarkers(text: string): string {
@@ -1473,7 +1670,7 @@ export class Editor implements Component, Focusable {
 	 * Use this when you need the full content (e.g., for external editor).
 	 */
 	getExpandedText(): string {
-		return this.expandPasteMarkers(this.state.lines.join("\n"));
+		return this.expandPasteMarkers(this.getText());
 	}
 
 	getLines(): string[] {
@@ -1539,26 +1736,16 @@ export class Editor implements Component, Focusable {
 
 		if (insertedLines.length === 1) {
 			// Single line - insert at cursor position
-			this.state.lines[this.state.cursorLine] = beforeCursor + normalized + afterCursor;
+			this.setLine(this.state.cursorLine, beforeCursor + normalized + afterCursor, beforeCursor.length);
 			this.setCursorCol(this.state.cursorCol + normalized.length);
 		} else {
-			// Multi-line insertion
-			this.state.lines = [
-				// All lines before current line
-				...this.state.lines.slice(0, this.state.cursorLine),
-
-				// The first inserted line merged with text before cursor
+			// Multi-line insertion: the current line becomes the first inserted line merged with the text before the
+			// cursor, the middle inserted lines, and the last inserted line with the text after the cursor.
+			this.spliceLines(this.state.cursorLine, 1, [
 				beforeCursor + insertedLines[0],
-
-				// All middle inserted lines
 				...insertedLines.slice(1, -1),
-
-				// The last inserted line with text after cursor
 				insertedLines[insertedLines.length - 1] + afterCursor,
-
-				// All lines after current line
-				...this.state.lines.slice(this.state.cursorLine + 1),
-			];
+			]);
 
 			this.state.cursorLine += insertedLines.length - 1;
 			this.setCursorCol((insertedLines[insertedLines.length - 1] || "").length);
@@ -1590,7 +1777,7 @@ export class Editor implements Component, Focusable {
 		const before = line.slice(0, this.state.cursorCol);
 		const after = line.slice(this.state.cursorCol);
 
-		this.state.lines[this.state.cursorLine] = before + char + after;
+		this.setLine(this.state.cursorLine, before + char + after, before.length);
 		this.setCursorCol(this.state.cursorCol + char.length);
 
 		if (this.onChange) {
@@ -1710,8 +1897,8 @@ export class Editor implements Component, Focusable {
 		const after = currentLine.slice(this.state.cursorCol);
 
 		// Split current line
-		this.state.lines[this.state.cursorLine] = before;
-		this.state.lines.splice(this.state.cursorLine + 1, 0, after);
+		this.setLine(this.state.cursorLine, before);
+		this.spliceLines(this.state.cursorLine + 1, 0, [after]);
 
 		// Move cursor to start of new line
 		this.state.cursorLine++;
@@ -1738,6 +1925,7 @@ export class Editor implements Component, Focusable {
 		const result = this.expandPasteMarkers(this.state.lines.join("\n")).trim();
 
 		this.state = { lines: [""], cursorLine: 0, cursorCol: 0 };
+		this.linesReplaced();
 		this.pastes.clear();
 		this.pasteCounter = 0;
 		this.exitHistoryBrowsing();
@@ -1788,6 +1976,7 @@ export class Editor implements Component, Focusable {
 						return `[paste #${x - 1}${suffixGroup ?? ""}]`;
 					}),
 				);
+				this.linesReplaced();
 			}
 
 			line = this.state.lines[this.state.cursorLine] || "";
@@ -1795,7 +1984,7 @@ export class Editor implements Component, Focusable {
 			const before = line.slice(0, this.state.cursorCol - graphemeLength);
 			const after = line.slice(this.state.cursorCol);
 
-			this.state.lines[this.state.cursorLine] = before + after;
+			this.setLine(this.state.cursorLine, before + after, before.length);
 			this.setCursorCol(this.state.cursorCol - graphemeLength);
 		} else if (this.state.cursorLine > 0) {
 			this.pushUndoSnapshot();
@@ -1804,8 +1993,8 @@ export class Editor implements Component, Focusable {
 			const currentLine = this.state.lines[this.state.cursorLine] || "";
 			const previousLine = this.state.lines[this.state.cursorLine - 1] || "";
 
-			this.state.lines[this.state.cursorLine - 1] = previousLine + currentLine;
-			this.state.lines.splice(this.state.cursorLine, 1);
+			this.setLine(this.state.cursorLine - 1, previousLine + currentLine);
+			this.spliceLines(this.state.cursorLine, 1, []);
 
 			this.state.cursorLine--;
 			this.setCursorCol(previousLine.length);
@@ -1847,13 +2036,9 @@ export class Editor implements Component, Focusable {
 	 * Move cursor to a target visual line, applying sticky column logic.
 	 * Shared by moveCursor() and pageScroll().
 	 */
-	private moveToVisualLine(
-		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
-		currentVisualLine: number,
-		targetVisualLine: number,
-	): void {
-		const currentVL = visualLines[currentVisualLine];
-		const targetVL = visualLines[targetVisualLine];
+	private moveToVisualLine(visualLines: VisualLines, currentVisualLine: number, targetVisualLine: number): void {
+		const currentVL = visualLines.at(currentVisualLine);
+		const targetVL = visualLines.at(targetVisualLine);
 		if (!(currentVL && targetVL)) return;
 
 		// When the cursor was snapped to a segment start, resolve the pre-snap
@@ -1861,8 +2046,8 @@ export class Editor implements Component, Focusable {
 		// column even after a resize reshuffles VLs.
 		let currentVisualCol: number;
 		if (this.snappedFromCursorCol !== null) {
-			const vlIndex = this.findVisualLineAt(visualLines, currentVL.logicalLine, this.snappedFromCursorCol);
-			currentVisualCol = this.snappedFromCursorCol - visualLines[vlIndex].startCol;
+			const vlIndex = visualLines.find(currentVL.logicalLine, this.snappedFromCursorCol);
+			currentVisualCol = this.snappedFromCursorCol - visualLines.at(vlIndex)!.startCol;
 		} else {
 			currentVisualCol = this.state.cursorCol - currentVL.startCol;
 		}
@@ -1870,12 +2055,12 @@ export class Editor implements Component, Focusable {
 		// For non-last segments, clamp to length-1 to stay within the segment
 		const isLastSourceSegment =
 			currentVisualLine === visualLines.length - 1 ||
-			visualLines[currentVisualLine + 1]?.logicalLine !== currentVL.logicalLine;
+			visualLines.at(currentVisualLine + 1)?.logicalLine !== currentVL.logicalLine;
 		const sourceMaxVisualCol = isLastSourceSegment ? currentVL.length : Math.max(0, currentVL.length - 1);
 
 		const isLastTargetSegment =
 			targetVisualLine === visualLines.length - 1 ||
-			visualLines[targetVisualLine + 1]?.logicalLine !== targetVL.logicalLine;
+			visualLines.at(targetVisualLine + 1)?.logicalLine !== targetVL.logicalLine;
 		const targetMaxVisualCol = isLastTargetSegment ? targetVL.length : Math.max(0, targetVL.length - 1);
 
 		const moveToVisualCol = this.computeVerticalMoveColumn(currentVisualCol, sourceMaxVisualCol, targetMaxVisualCol);
@@ -1903,8 +2088,8 @@ export class Editor implements Component, Focusable {
 				let next = targetVisualLine + 1;
 				while (
 					next < visualLines.length &&
-					visualLines[next].logicalLine === targetVL.logicalLine &&
-					visualLines[next].startCol < segEnd
+					visualLines.at(next)!.logicalLine === targetVL.logicalLine &&
+					visualLines.at(next)!.startCol < segEnd
 				) {
 					next++;
 				}
@@ -2004,7 +2189,7 @@ export class Editor implements Component, Focusable {
 			this.lastAction = "kill";
 
 			// Delete from start of line up to cursor
-			this.state.lines[this.state.cursorLine] = currentLine.slice(this.state.cursorCol);
+			this.setLine(this.state.cursorLine, currentLine.slice(this.state.cursorCol));
 			this.setCursorCol(0);
 		} else if (this.state.cursorLine > 0) {
 			this.pushUndoSnapshot();
@@ -2014,8 +2199,8 @@ export class Editor implements Component, Focusable {
 			this.lastAction = "kill";
 
 			const previousLine = this.state.lines[this.state.cursorLine - 1] || "";
-			this.state.lines[this.state.cursorLine - 1] = previousLine + currentLine;
-			this.state.lines.splice(this.state.cursorLine, 1);
+			this.setLine(this.state.cursorLine - 1, previousLine + currentLine);
+			this.spliceLines(this.state.cursorLine, 1, []);
 			this.state.cursorLine--;
 			this.setCursorCol(previousLine.length);
 		}
@@ -2039,7 +2224,7 @@ export class Editor implements Component, Focusable {
 			this.lastAction = "kill";
 
 			// Delete from cursor to end of line
-			this.state.lines[this.state.cursorLine] = currentLine.slice(0, this.state.cursorCol);
+			this.setLine(this.state.cursorLine, currentLine.slice(0, this.state.cursorCol));
 		} else if (this.state.cursorLine < this.state.lines.length - 1) {
 			this.pushUndoSnapshot();
 
@@ -2048,8 +2233,8 @@ export class Editor implements Component, Focusable {
 			this.lastAction = "kill";
 
 			const nextLine = this.state.lines[this.state.cursorLine + 1] || "";
-			this.state.lines[this.state.cursorLine] = currentLine + nextLine;
-			this.state.lines.splice(this.state.cursorLine + 1, 1);
+			this.setLine(this.state.cursorLine, currentLine + nextLine);
+			this.spliceLines(this.state.cursorLine + 1, 1, []);
 		}
 
 		if (this.onChange) {
@@ -2072,8 +2257,8 @@ export class Editor implements Component, Focusable {
 				this.lastAction = "kill";
 
 				const previousLine = this.state.lines[this.state.cursorLine - 1] || "";
-				this.state.lines[this.state.cursorLine - 1] = previousLine + currentLine;
-				this.state.lines.splice(this.state.cursorLine, 1);
+				this.setLine(this.state.cursorLine - 1, previousLine + currentLine);
+				this.spliceLines(this.state.cursorLine, 1, []);
 				this.state.cursorLine--;
 				this.setCursorCol(previousLine.length);
 			}
@@ -2092,8 +2277,10 @@ export class Editor implements Component, Focusable {
 			this.killRing.push(deletedText, { prepend: true, accumulate: wasKill });
 			this.lastAction = "kill";
 
-			this.state.lines[this.state.cursorLine] =
-				currentLine.slice(0, deleteFrom) + currentLine.slice(this.state.cursorCol);
+			this.setLine(
+				this.state.cursorLine,
+				currentLine.slice(0, deleteFrom) + currentLine.slice(this.state.cursorCol),
+			);
 			this.setCursorCol(deleteFrom);
 		}
 
@@ -2117,8 +2304,8 @@ export class Editor implements Component, Focusable {
 				this.lastAction = "kill";
 
 				const nextLine = this.state.lines[this.state.cursorLine + 1] || "";
-				this.state.lines[this.state.cursorLine] = currentLine + nextLine;
-				this.state.lines.splice(this.state.cursorLine + 1, 1);
+				this.setLine(this.state.cursorLine, currentLine + nextLine);
+				this.spliceLines(this.state.cursorLine + 1, 1, []);
 			}
 		} else {
 			this.pushUndoSnapshot();
@@ -2135,8 +2322,7 @@ export class Editor implements Component, Focusable {
 			this.killRing.push(deletedText, { prepend: false, accumulate: wasKill });
 			this.lastAction = "kill";
 
-			this.state.lines[this.state.cursorLine] =
-				currentLine.slice(0, this.state.cursorCol) + currentLine.slice(deleteTo);
+			this.setLine(this.state.cursorLine, currentLine.slice(0, this.state.cursorCol) + currentLine.slice(deleteTo));
 		}
 
 		if (this.onChange) {
@@ -2162,14 +2348,14 @@ export class Editor implements Component, Focusable {
 
 			const before = currentLine.slice(0, this.state.cursorCol);
 			const after = currentLine.slice(this.state.cursorCol + graphemeLength);
-			this.state.lines[this.state.cursorLine] = before + after;
+			this.setLine(this.state.cursorLine, before + after, before.length);
 		} else if (this.state.cursorLine < this.state.lines.length - 1) {
 			this.pushUndoSnapshot();
 
 			// At end of line - merge with next line
 			const nextLine = this.state.lines[this.state.cursorLine + 1] || "";
-			this.state.lines[this.state.cursorLine] = currentLine + nextLine;
-			this.state.lines.splice(this.state.cursorLine + 1, 1);
+			this.setLine(this.state.cursorLine, currentLine + nextLine);
+			this.spliceLines(this.state.cursorLine + 1, 1, []);
 		}
 
 		if (this.onChange) {
@@ -2193,75 +2379,14 @@ export class Editor implements Component, Focusable {
 		}
 	}
 
-	/**
-	 * Build a mapping from visual lines to logical positions.
-	 * Returns an array where each element represents a visual line with:
-	 * - logicalLine: index into this.state.lines
-	 * - startCol: starting column in the logical line
-	 * - length: length of this visual line segment
-	 */
-	private buildVisualLineMap(width: number): Array<{ logicalLine: number; startCol: number; length: number }> {
-		const visualLines: Array<{ logicalLine: number; startCol: number; length: number }> = [];
-		const wrapCache = this.wrapCacheFor(width);
-
-		for (let i = 0; i < this.state.lines.length; i++) {
-			const line = this.state.lines[i] || "";
-			const lineVisWidth = editorLineWidth(line);
-			if (line.length === 0) {
-				// Empty line still takes one visual line
-				visualLines.push({ logicalLine: i, startCol: 0, length: 0 });
-			} else if (lineVisWidth <= width) {
-				visualLines.push({ logicalLine: i, startCol: 0, length: line.length });
-			} else {
-				// Line needs wrapping - use word-aware wrapping
-				const chunks = this.wrapLine(wrapCache, i, line, width);
-				for (const chunk of chunks) {
-					visualLines.push({
-						logicalLine: i,
-						startCol: chunk.startIndex,
-						length: chunk.endIndex - chunk.startIndex,
-					});
-				}
-			}
-		}
-
-		return visualLines;
-	}
-
-	/**
-	 * Find the visual line index that contains the given logical position.
-	 */
-	private findVisualLineAt(
-		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
-		line: number,
-		col: number,
-	): number {
-		for (let i = 0; i < visualLines.length; i++) {
-			const vl = visualLines[i];
-			if (!vl || vl.logicalLine !== line) continue;
-			const offset = col - vl.startCol;
-			// Cursor is in this segment if it's within range. For the last
-			// segment of a logical line, cursor can be at length (end position)
-			const isLastSegmentOfLine = i === visualLines.length - 1 || visualLines[i + 1]?.logicalLine !== vl.logicalLine;
-			if (offset >= 0 && (offset < vl.length || (isLastSegmentOfLine && offset === vl.length))) {
-				return i;
-			}
-		}
-		return visualLines.length - 1;
-	}
-
-	/**
-	 * Find the visual line index for the current cursor position.
-	 */
-	private findCurrentVisualLine(
-		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
-	): number {
-		return this.findVisualLineAt(visualLines, this.state.cursorLine, this.state.cursorCol);
+	/** The row of the cursor in `visualLines`. */
+	private findCurrentVisualLine(visualLines: VisualLines): number {
+		return visualLines.find(this.state.cursorLine, this.state.cursorCol);
 	}
 
 	private moveCursor(deltaLine: number, deltaCol: number): void {
 		this.lastAction = null;
-		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLines = this.visualLinesAt(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
 
 		if (deltaLine !== 0) {
@@ -2287,7 +2412,7 @@ export class Editor implements Component, Focusable {
 					this.setCursorCol(0);
 				} else {
 					// At end of last line - can't move, but set preferredVisualCol for up/down navigation
-					const currentVL = visualLines[currentVisualLine];
+					const currentVL = visualLines.at(currentVisualLine);
 					if (currentVL) {
 						this.preferredVisualCol = this.state.cursorCol - currentVL.startCol;
 					}
@@ -2329,7 +2454,7 @@ export class Editor implements Component, Focusable {
 		const terminalRows = this.tui.terminal.rows;
 		const pageSize = Math.max(5, Math.floor(terminalRows * 0.3));
 
-		const visualLines = this.buildVisualLineMap(this.lastWidth);
+		const visualLines = this.visualLinesAt(this.lastWidth);
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
 		const targetVisualLine = Math.max(0, Math.min(visualLines.length - 1, currentVisualLine + direction * pageSize));
 
@@ -2407,7 +2532,7 @@ export class Editor implements Component, Focusable {
 			const currentLine = this.state.lines[this.state.cursorLine] || "";
 			const before = currentLine.slice(0, this.state.cursorCol);
 			const after = currentLine.slice(this.state.cursorCol);
-			this.state.lines[this.state.cursorLine] = before + text + after;
+			this.setLine(this.state.cursorLine, before + text + after);
 			this.setCursorCol(this.state.cursorCol + text.length);
 		} else {
 			// Multi-line insert
@@ -2416,16 +2541,14 @@ export class Editor implements Component, Focusable {
 			const after = currentLine.slice(this.state.cursorCol);
 
 			// First line merges with text before cursor
-			this.state.lines[this.state.cursorLine] = before + (lines[0] || "");
+			this.setLine(this.state.cursorLine, before + (lines[0] || ""));
 
-			// Insert middle lines
-			for (let i = 1; i < lines.length - 1; i++) {
-				this.state.lines.splice(this.state.cursorLine + i, 0, lines[i] || "");
-			}
-
-			// Last line merges with text after cursor
+			// Insert the middle lines, and the last line merged with text after cursor
 			const lastLineIndex = this.state.cursorLine + lines.length - 1;
-			this.state.lines.splice(lastLineIndex, 0, (lines[lines.length - 1] || "") + after);
+			this.spliceLines(this.state.cursorLine + 1, 0, [
+				...lines.slice(1, -1).map((line) => line || ""),
+				(lines[lines.length - 1] || "") + after,
+			]);
 
 			// Update cursor position
 			this.state.cursorLine = lastLineIndex;
@@ -2453,7 +2576,7 @@ export class Editor implements Component, Focusable {
 			const deleteLen = yankedText.length;
 			const before = currentLine.slice(0, this.state.cursorCol - deleteLen);
 			const after = currentLine.slice(this.state.cursorCol);
-			this.state.lines[this.state.cursorLine] = before + after;
+			this.setLine(this.state.cursorLine, before + after, before.length);
 			this.setCursorCol(this.state.cursorCol - deleteLen);
 		} else {
 			// Multi-line delete - cursor is at end of last yanked line
@@ -2467,7 +2590,7 @@ export class Editor implements Component, Focusable {
 			const beforeYank = (this.state.lines[startLine] || "").slice(0, startCol);
 
 			// Remove all lines from startLine to cursorLine and replace with merged line
-			this.state.lines.splice(startLine, yankLines.length, beforeYank + afterCursor);
+			this.spliceLines(startLine, yankLines.length, [beforeYank + afterCursor]);
 
 			// Update cursor
 			this.state.cursorLine = startLine;
@@ -2488,6 +2611,7 @@ export class Editor implements Component, Focusable {
 		const snapshot = this.undoStack.pop();
 		if (!snapshot) return;
 		Object.assign(this.state, snapshot.state);
+		this.linesReplaced();
 		this.pastes = snapshot.pastes;
 		this.pasteCounter = snapshot.pasteCounter;
 		this.lastAction = null;
@@ -2635,6 +2759,7 @@ export class Editor implements Component, Focusable {
 				this.autocompletePrefix,
 			);
 			this.state.lines = result.lines;
+			this.linesReplaced();
 			this.state.cursorLine = result.cursorLine;
 			this.setCursorCol(result.cursorCol);
 			this.cancelAutocomplete();
@@ -2786,6 +2911,7 @@ export class Editor implements Component, Focusable {
 				suggestions.prefix,
 			);
 			this.state.lines = result.lines;
+			this.linesReplaced();
 			this.state.cursorLine = result.cursorLine;
 			this.setCursorCol(result.cursorCol);
 			if (this.onChange) this.onChange(this.getText());
