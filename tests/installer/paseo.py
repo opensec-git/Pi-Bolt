@@ -24,7 +24,8 @@ class PaseoInstallTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="installer-paseo-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # (Resolved: on macOS the temporary folder is a link, /var to /private/var, and the shell's $PWD is the real path.)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "home"
         self.home.mkdir()
         self.paseo = self.home / ".paseo"
