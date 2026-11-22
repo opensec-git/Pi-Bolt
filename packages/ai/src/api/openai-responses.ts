@@ -23,7 +23,7 @@ import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
-import { clientKey, reusableClient } from "../utils/sdk-client.ts";
+import { reusableClient } from "../utils/sdk-client.ts";
 import { getDeclaredTools, resolveTranscript } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
@@ -350,9 +350,7 @@ function createClient(
 	}
 
 	return reusableClient(
-		clientKey(apiKey, model.baseUrl, headers),
-		// Without a fetch of its own the client keeps the global fetch it is made with: another one makes another client.
-		fetch ?? globalThis.fetch,
+		{ apiKey, baseUrl: model.baseUrl, headers, fetch },
 		() =>
 			new OpenAI({
 				apiKey,

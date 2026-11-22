@@ -51,7 +51,7 @@ import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-r
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
-import { clientKey, reusableClient } from "../utils/sdk-client.ts";
+import { reusableClient } from "../utils/sdk-client.ts";
 import { ToolCallArgumentsStream } from "../utils/streaming-json.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import {
@@ -817,9 +817,7 @@ function createClient(
 	}
 
 	return reusableClient(
-		clientKey(apiKey, model.baseUrl, headers),
-		// Without a fetch of its own the client keeps the global fetch it is made with: another one makes another client.
-		fetch ?? globalThis.fetch,
+		{ apiKey, baseUrl: model.baseUrl, headers, fetch },
 		() =>
 			new OpenAI({
 				apiKey,

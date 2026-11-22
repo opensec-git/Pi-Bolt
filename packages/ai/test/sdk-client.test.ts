@@ -2,34 +2,57 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stream } from "../src/api/openai-completions.ts";
 import { normalizeContext } from "../src/compat.ts";
 import type { Context, Model } from "../src/types.ts";
-import { clientKey, forgetReusableClients, reusableClient } from "../src/utils/sdk-client.ts";
+import { forgetReusableClients, reusableClient } from "../src/utils/sdk-client.ts";
 
 beforeEach(() => forgetReusableClients());
 
+const config = (apiKey: string, baseUrl = "https://a", headers: unknown = { h: "1" }, fetch?: unknown) => ({
+	apiKey,
+	baseUrl,
+	headers,
+	fetch,
+});
+
 describe("reusableClient", () => {
-	it("makes a client once per configuration and fetch", () => {
-		const fetchA = () => undefined;
-		const fetchB = () => undefined;
+	it("makes a client once per configuration", () => {
 		const make = vi.fn(() => ({}));
-		const a = reusableClient(clientKey("key", "https://a", { h: "1" }), fetchA, make);
-		expect(reusableClient(clientKey("key", "https://a", { h: "1" }), fetchA, make)).toBe(a);
-		expect(make).toHaveBeenCalledTimes(1);
-		expect(reusableClient(clientKey("key", "https://a", { h: "1" }), fetchB, make)).not.toBe(a);
-		expect(reusableClient(clientKey("other", "https://a", { h: "1" }), fetchB, make)).not.toBe(a);
-		expect(reusableClient(clientKey("key", "https://a", { h: "2" }), fetchB, make)).not.toBe(a);
-		expect(make).toHaveBeenCalledTimes(4);
+		const a = reusableClient(config("key"), make);
+		expect(reusableClient(config("key"), make)).toBe(a);
+		expect(reusableClient(config("key", "https://a", { h: "2" }), make)).not.toBe(a);
+		expect(reusableClient(config("key", "https://b"), make)).not.toBe(a);
+		expect(make).toHaveBeenCalledTimes(3);
+		// The global fetch itself, passed explicitly, is the same configuration.
+		expect(reusableClient(config("key", "https://a", { h: "1" }, globalThis.fetch), make)).toBe(a);
+	});
+
+	it("does not keep a client made with a fetch of the caller's", () => {
+		const fetch = () => undefined;
+		const make = vi.fn(() => ({}));
+		const a = reusableClient(config("key", "https://a", {}, fetch), make);
+		expect(reusableClient(config("key", "https://a", {}, fetch), make)).not.toBe(a);
+		expect(make).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops the clients of another key for the same base URL", () => {
+		const make = vi.fn(() => ({}));
+		const old = reusableClient(config("old"), make);
+		const other = reusableClient(config("x", "https://b"), make);
+		reusableClient(config("new"), make);
+		// The old key's client is gone; another base URL's stays.
+		expect(reusableClient(config("old"), make)).not.toBe(old);
+		expect(reusableClient(config("x", "https://b"), make)).toBe(other);
 	});
 
 	it("keeps the four latest configurations", () => {
 		const make = vi.fn(() => ({}));
-		const first = reusableClient("0", undefined, make);
-		for (const key of ["1", "2", "3"]) reusableClient(key, undefined, make);
+		const first = reusableClient(config("k", "0"), make);
+		for (const url of ["1", "2", "3"]) reusableClient(config("k", url), make);
 		// Using the first again makes "1" the oldest.
-		expect(reusableClient("0", undefined, make)).toBe(first);
-		reusableClient("4", undefined, make);
-		expect(reusableClient("0", undefined, make)).toBe(first);
+		expect(reusableClient(config("k", "0"), make)).toBe(first);
+		reusableClient(config("k", "4"), make);
+		expect(reusableClient(config("k", "0"), make)).toBe(first);
 		expect(make).toHaveBeenCalledTimes(5);
-		reusableClient("1", undefined, make);
+		reusableClient(config("k", "1"), make);
 		expect(make).toHaveBeenCalledTimes(6);
 	});
 });
@@ -68,5 +91,14 @@ describe("openai-completions", () => {
 		}
 		expect(first).toHaveBeenCalledTimes(2);
 		expect(second).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses a fetch passed with the request for that request", async () => {
+		const own = vi.fn(async () => sse());
+		const other = vi.fn(async () => sse());
+		await stream(model, context, { apiKey: "k", fetch: own as unknown as typeof fetch }).result();
+		await stream(model, context, { apiKey: "k", fetch: other as unknown as typeof fetch }).result();
+		expect(own).toHaveBeenCalledTimes(1);
+		expect(other).toHaveBeenCalledTimes(1);
 	});
 });
