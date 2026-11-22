@@ -11,7 +11,10 @@
 #   - a PIBOLT_BIN_DIR with quotes, $(...) and backquotes stays a folder name in the line given for the shell's configuration;
 #   - an update keeps the build it replaces as <name>.previous (for pi-bolt update --rollback), and the same build installed
 #     again does not replace the one kept;
-#   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away.
+#   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
+#   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz through a
+#     tar that reads it itself; an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead;
+#     where that cannot be downloaded either, nothing is installed and nothing is left.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
 # Usage: tests/installer/run.sh
@@ -105,6 +108,54 @@ out=$(install good https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9
 if ! installed && grep -q "set PIBOLT_VERSION to the release it serves" <<<"$out"; then
 	pass "a mirror, and the latest release not known: not installed"; else
 	fail "a mirror, and the latest release not known: not installed"; printf '%s\n' "$out"; fi
+
+# Programs that stand in for others, first on PATH: BusyBox's xz and tar, and an xz that fails after writing everything (#328).
+# Each notes how it was called in $WORK/calls.
+real_tar=$(command -v tar) real_xz=$(command -v xz || true)
+stub() { # stub DIR NAME BODY: DIR/NAME, a shell script running BODY
+	mkdir -p "$WORK/$1"
+	printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\n%s\n' "$2" "$WORK" "$3" >"$WORK/$1/$2"
+	chmod 755 "$WORK/$1/$2"
+}
+busybox_xz='for a; do case "$a" in -T*) echo "xz: unrecognized option: T" >&2; exit 1 ;; --version) echo "BusyBox v1.37.0 multi-call binary." >&2; exit 1 ;; esac; done
+echo "xz: corrupted data" >&2; exit 1'
+stub busybox xz "$busybox_xz"
+stub busybox-tar-too xz "$busybox_xz"
+stub busybox-tar-too tar "if [ \"\$1\" = --version ]; then echo 'tar (busybox) 1.37.0'; exit 0; fi
+exec '$real_tar' \"\$@\""
+dl() { grep -c "^downloading http://127.0.0.1:$port/good/$NAME\.$1 " <<<"$out" || true; }
+
+# (BusyBox's xz, and a tar that reads no .tar.xz itself: the .tar.gz.) #328
+rm -f "$WORK/calls"
+out=$(install good PATH="$WORK/busybox-tar-too:$PATH")
+if installed && [ "$(dl tar.gz)" = 1 ] && [ "$(dl tar.xz)" = 0 ] && ! grep -q '^xz .*-d' "$WORK/calls"; then
+	pass "BusyBox's xz and tar: the .tar.gz is installed"; else
+	fail "BusyBox's xz and tar: the .tar.gz is installed"; printf '%s\n' "$out"; cat "$WORK/calls" 2>/dev/null; fi
+# (BusyBox's xz, and a tar that reads a .tar.xz itself, as macOS's: the .tar.xz, through tar.) #328
+if tar --version 2>/dev/null | grep -q liblzma; then
+	rm -f "$WORK/calls"
+	out=$(install good PATH="$WORK/busybox:$PATH")
+	if installed && [ "$(dl tar.xz)" = 1 ] && ! grep -q '^xz .*-d' "$WORK/calls"; then
+		pass "BusyBox's xz and a tar with liblzma: the .tar.xz is installed, through tar"; else
+		fail "BusyBox's xz and a tar with liblzma: the .tar.xz is installed, through tar"; printf '%s\n' "$out"; fi
+fi
+
+if [ -n "$real_xz" ]; then
+	# (XZ Utils' xz, as far as the installer can tell, that writes the whole archive and then fails: tar ends well.) #328
+	stub badxz xz "if [ \"\$1\" = --version ]; then exec '$real_xz' --version; fi
+'$real_xz' \"\$@\"; exit 1"
+	out=$(install good PATH="$WORK/badxz:$PATH")
+	if installed && [ "$(dl tar.xz)" = 1 ] && [ "$(dl tar.gz)" = 1 ] && grep -q "could not unpack $NAME.tar.xz here" <<<"$out"; then
+		pass "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; else
+		fail "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; printf '%s\n' "$out"; fi
+	# (The same, and the .tar.gz cannot be downloaded: nothing installed, no half-unpacked build left.)
+	cp -R "$WORK/good" "$WORK/nogz" && rm "$WORK/nogz/$NAME.tar.gz"
+	out=$(install nogz PATH="$WORK/badxz:$PATH")
+	left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)
+	if ! installed && [ -z "$left" ] && grep -q "download failed: .*/$NAME.tar.gz" <<<"$out"; then
+		pass "xz fails and no .tar.gz: nothing installed, nothing left"; else
+		fail "xz fails and no .tar.gz: nothing installed, nothing left"; printf '%s\n%s\n' "$out" "$left"; fi
+fi
 
 bin="$WORK/home/b\"\$(touch $WORK/pwned)\`touch $WORK/pwned\`"
 out=$(install good PIBOLT_BIN_DIR="$bin")

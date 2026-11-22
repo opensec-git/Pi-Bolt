@@ -513,7 +513,7 @@ npm_probe() {
 }
 
 # What to download, worked out in the background while the bar moves: the checksums, then the smaller .tar.xz if the release
-# has one and xz is installed (otherwise .tar.gz), where from and how big it is. The .tar.xz is also published on npm, as the
+# has one and it can be unpacked here (xz_unpacker; otherwise .tar.gz), where from and how big it is. The .tar.xz is also published on npm, as the
 # package pi-bolt-PLATFORM-VARIANT (pi-bolt-linux-x64, pi-bolt-darwin-arm64, ...) of the same version: that is tried first. Writes "SOURCE EXT FINAL SIZE RANGES" to $TMP/plan.
 plan_download() {
 	if ! fetch "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" 2>/dev/null; then
@@ -521,7 +521,7 @@ plan_download() {
 		return
 	fi
 	ext=tar.gz
-	if can_unxz && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
+	if xz_unpacker >/dev/null && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
 	where=""
 	if [ "$ext" = tar.xz ] && [ "${PIBOLT_SOURCE:-auto}" != github ] && [ -z "${PIBOLT_DOWNLOAD_BASE:-}" ]; then
 		case "$SHOWN_VERSION" in
@@ -536,8 +536,44 @@ plan_download() {
 	printf '%s\n' "${where%% *} $ext ${where#* }" >"$TMP/plan.part" && mv "$TMP/plan.part" "$TMP/plan"
 }
 
-# Whether a .tar.xz can be unpacked: with xz, or with a tar that reads it itself (bsdtar with liblzma: macOS's tar).
-can_unxz() { command -v xz >/dev/null 2>&1 || tar --version 2>/dev/null | grep -q liblzma; }
+# What unpacks a .tar.xz here: "xz" (XZ Utils' xz), or "tar" (a tar that reads it itself: bsdtar with liblzma, macOS's tar);
+# false if nothing does. Not another xz: BusyBox's cannot decode the x86 filter of the x86-64 archives, and has no -T.
+xz_unpacker() {
+	if xz --version 2>/dev/null | grep -q 'XZ Utils'; then printf xz
+	elif tar --version 2>/dev/null | grep -q liblzma; then printf tar
+	else return 1; fi
+}
+
+# unpack FILE: unpacks FILE (in $TMP) into $TMP. False if tar or the decompressor failed: a pipeline's status is tar's only,
+# and tar can end well on what xz wrote before it failed.
+unpack() {
+	case "$1:$(xz_unpacker || true)" in
+	*.tar.xz:xz)
+		rm -f "$TMP/unxz.failed"
+		# (-T0 decodes the blocks of a release's archive in parallel: XZ Utils from 5.4; earlier ones take it and use one thread.)
+		{ xz -T0 -dc "$TMP/$1" || : >"$TMP/unxz.failed"; } | tar -C "$TMP" -xf - || return 1
+		[ ! -e "$TMP/unxz.failed" ]
+		;;
+	*.tar.xz:*) tar -C "$TMP" -xf "$TMP/$1" ;;
+	*) tar -C "$TMP" -xzf "$TMP/$1" ;;
+	esac
+}
+
+# extract FILE: unpacks FILE (in $TMP) with the bar moving. False, with nothing of it left, unless it unpacked and holds the
+# build's executable.
+extract() {
+	unpack "$1" &
+	PIDS=$!
+	draw_progress "$step" 10000 "${dim}extracting$reset"
+	while [ -t 1 ] && running; do
+		step=$((step + 1))
+		draw_progress "$step" 10000 "${dim}extracting$reset"
+		sleep 0.08
+	done
+	all_succeeded && [ -f "$TMP/$NAME/pi" ] && return 0
+	rm -rf "${TMP:?}/$NAME"
+	return 1
+}
 
 # The npm package that holds this release's .tar.xz.
 npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_VERSION"; }
@@ -791,6 +827,17 @@ download() {
 	total=$(wc -c <"$5" | tr -d ' ')
 }
 
+# download_release FINAL SIZE RANGES: fetches $NAME.$ext from the release (GitHub, or the mirror) into $TMP and checks it against
+# the checksums; stops the install if it cannot.
+download_release() {
+	download "$BASE/$NAME.$ext" "$1" "$2" "$3" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
+	FROM=GitHub
+	[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
+	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
+	(cd "$TMP" && check_sum "$NAME.$ext") ||
+		fail "checksum mismatch: the download is corrupt or incomplete"
+}
+
 install_release() {
 	SIGNED="" UNSIGNED="" NOVERIFY=""
 	# The download is kept next to where it is installed: a /tmp mounted noexec could not run the check of the executable
@@ -842,14 +889,7 @@ install_release() {
 			final=$1 total=$2 ranges=$3
 		fi
 	fi
-	if [ "$source" = github ]; then
-		download "$BASE/$NAME.$ext" "$final" "$total" "$ranges" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
-		FROM=GitHub
-		[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
-		draw_progress "$step" 10000 "${dim}verifying checksum$reset"
-		(cd "$TMP" && check_sum "$NAME.$ext") ||
-			fail "checksum mismatch: the download is corrupt or incomplete"
-	fi
+	[ "$source" != github ] || download_release "$final" "$total" "$ranges"
 	if [ -n "$SIG_PID" ] && kill -0 "$SIG_PID" 2>/dev/null; then
 		draw_progress "$step" 10000 "${dim}fetching the signature$reset"
 	fi
@@ -860,23 +900,19 @@ install_release() {
 	if fetch "$TMP/extensions.txt" "$BASE/extensions.txt" 2>/dev/null && (cd "$TMP" && check_sum extensions.txt); then
 		PINS=$(grep -E '^[a-z0-9][a-z0-9._-]* [0-9]+\.[0-9]+\.[0-9]+ sha512-[A-Za-z0-9+/]+=*$' "$TMP/extensions.txt" || true)
 	fi
-	if [ "$ext" = tar.xz ]; then
-		if command -v xz >/dev/null 2>&1; then
-			(xz -T0 -dc "$TMP/$NAME.$ext" 2>/dev/null || xz -dc "$TMP/$NAME.$ext") | tar -C "$TMP" -xf - &
-		else
-			tar -C "$TMP" -xf "$TMP/$NAME.$ext" &
+	if ! extract "$NAME.$ext"; then
+		# The release's .tar.gz needs no xz: an xz that cannot decode the archive (one xz_unpacker does not know) is not the end.
+		if [ "$ext" != tar.xz ] || [ "${PIBOLT_SOURCE:-auto}" = npm ] || ! grep -q " $NAME\.tar\.gz\$" "$TMP/SHA256SUMS"; then
+			fail "could not extract $NAME.$ext"
 		fi
-	else
-		tar -C "$TMP" -xzf "$TMP/$NAME.$ext" &
+		finish_progress
+		printf '  %scould not unpack %s.tar.xz here; downloading %s.tar.gz instead%s\n' "$dim" "$NAME" "$NAME" "$reset"
+		rm -f "$TMP/$NAME.$ext"
+		ext=tar.gz
+		# shellcheck disable=SC2046 # three words
+		download_release $(probe "$BASE/$NAME.$ext")
+		extract "$NAME.$ext" || fail "could not extract $NAME.$ext"
 	fi
-	PIDS=$!
-	draw_progress "$step" 10000 "${dim}extracting$reset"
-	while [ -t 1 ] && running; do
-		step=$((step + 1))
-		draw_progress "$step" 10000 "${dim}extracting$reset"
-		sleep 0.08
-	done
-	all_succeeded || fail "could not extract $NAME.$ext"
 	draw_progress "$((step + 2))" 10000 "${dim}checking the executable$reset"
 	if [ -n "$TERMUX" ]; then
 		set_interpreter "$TMP/$NAME/pi" "$LOADER" || fail "could not set the executable's loader to $LOADER"

@@ -86,8 +86,9 @@ for target in "${TARGETS[@]}"; do
 	log "pi-bolt-$name.tar.gz (Pi $("$build/pi" --version))"
 	"${TAR[@]}" -C "$STAGE" -czf "$DIST/pi-bolt-$name.tar.gz" "pi-bolt-$name"
 	# (-T0 writes blocks, which xz -T0 can decompress in parallel.) On x86-64 with xz's x86 filter first, which makes the machine
-	# code's call targets relative and so more alike: 2% smaller, and every xz and liblzma since 2009 unpacks it. Not the ARM64
-	# filter: xz and libarchive older than 5.4 (2022; Ubuntu 22.04's, macOS's tar) cannot.
+	# code's call targets relative and so more alike: 2% smaller, and XZ Utils' xz and liblzma since 2009 unpack it (BusyBox's
+	# xz cannot: install.sh takes the .tar.gz there). Not the ARM64 filter: xz and libarchive older than 5.4 (2022; Ubuntu
+	# 22.04's, macOS's tar) cannot.
 	filters=(--lzma2=preset=9e); [ "$PIBOLT_ARCH" = x64 ] && filters=(--x86 "${filters[@]}")
 	"${TAR[@]}" -C "$STAGE" -cf - "pi-bolt-$name" | xz -T0 "${filters[@]}" >"$DIST/pi-bolt-$name.tar.xz"
 done
