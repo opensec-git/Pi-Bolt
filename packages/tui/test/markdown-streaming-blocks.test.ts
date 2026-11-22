@@ -230,6 +230,66 @@ describe("Markdown streaming: lists, tables and paragraphs at every length", () 
 	});
 });
 
+describe("Markdown streaming: a reply that starts with a list or a table", () => {
+	// (No comment before the block, as unique() puts there: the first item or row is what makes the document unique.)
+	const listBody = FIXTURES.list!.slice("Steps:\n\n".length);
+	const tableBody = FIXTURES.table!.slice("Results:\n\n".length);
+	const documents: Record<string, (id: string) => string> = {
+		list: (id) => `- ${id}\n${listBody}`,
+		table: (id) => tableBody.replace("| row0 |", `| ${id} |`),
+		blankLinesFirst: (id) => `\n\n- ${id}\n${listBody}`,
+		tightThenLoose: (id) => `- ${id}\n${DOCUMENTS.tightThenLoose}`,
+		looseFromStart: (id) => `- ${id}\n\n${DOCUMENTS.looseFromStart}`,
+		tasks: (id) => `- [ ] ${id}\n${DOCUMENTS.tasks}`,
+		listEdges: (id) => `- ${id}\n${DOCUMENTS.listEdges}`,
+		listHtml: (id) => `- ${id}\n${DOCUMENTS.listHtml}`,
+		tables: (id) => DOCUMENTS.tables!.replace("| a | b | c |", `| ${id} | b | c |`),
+	};
+	for (const [name, document] of Object.entries(documents)) {
+		it(`${name}: every prefix, tokens and lines, and into one component at three widths`, () => {
+			streamPrefixes(name, document(`${name} ${Math.random()}`), () => 1, 72);
+			for (const width of [100, 40, 14]) {
+				streamLive(`${name}@${width}`, document(`${name} ${Math.random()}`), () => 1, width);
+			}
+		});
+	}
+
+	it("the first list's settled items and the first table's settled rows are the same objects", () => {
+		const list = documents.list!(`first list ${Math.random()}`);
+		let items: Tokens.ListItem[] | undefined;
+		let checks = 0;
+		for (let length = 100; length <= list.length; length += 7) {
+			const tokens = lexMarkdownForTest(list.slice(0, length));
+			assert.strictEqual(tokens[0]?.type, "list");
+			const now = (tokens[0] as Tokens.List).items;
+			if (items !== undefined) {
+				for (let i = 0; i < Math.min(items.length, now.length) - 2; i++) {
+					assert.strictEqual(now[i], items[i], `item ${i} at length ${length}`);
+					checks++;
+				}
+			}
+			items = now;
+		}
+		assert.ok(checks > 1000, `only ${checks} items were compared`);
+		const table = documents.table!(`first table ${Math.random()}`);
+		let rows: Tokens.TableCell[][] | undefined;
+		checks = 0;
+		for (let length = 100; length <= table.length; length += 5) {
+			const tokens = lexMarkdownForTest(table.slice(0, length));
+			assert.strictEqual(tokens[0]?.type, "table");
+			const now = (tokens[0] as Tokens.Table).rows;
+			if (rows !== undefined) {
+				for (let i = 0; i < Math.min(rows.length, now.length) - 1; i++) {
+					assert.strictEqual(now[i], rows[i], `row ${i} at length ${length}`);
+					checks++;
+				}
+			}
+			rows = now;
+		}
+		assert.ok(checks > 500, `only ${checks} rows were compared`);
+	});
+});
+
 describe("Markdown streaming: what is reused", () => {
 	it("a list's settled items are the same objects, and the lines before the last items do not change", () => {
 		const document = unique("reuse list", FIXTURES.list!);

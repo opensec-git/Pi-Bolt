@@ -161,6 +161,26 @@ describe("sanitizeTerminalTextFrom", () => {
 		}
 	});
 
+	it("gives the same result when told what was appended", () => {
+		for (let seed = 1; seed <= 400; seed++) {
+			const next = random(seed);
+			const full = randomText(next, 20 + Math.floor(next() * 120));
+			let told: SanitizedTerminalText | undefined;
+			let compared: SanitizedTerminalText | undefined;
+			let end = 0;
+			while (end < full.length) {
+				const start = end;
+				end = Math.min(full.length, end + Math.floor(next() * 13));
+				const text = full.slice(0, end);
+				const before = told;
+				told = sanitizeTerminalTextFrom(text, told, full.slice(start, end));
+				compared = sanitizeTerminalTextFrom(text, compared);
+				assert.deepStrictEqual(told, compared, `seed ${seed} at ${end}`);
+				if (told.added !== undefined) assert.strictEqual((before?.text ?? "") + told.added, told.text);
+			}
+		}
+	});
+
 	it("returns text without control characters as it is", () => {
 		const first = sanitizeTerminalTextFrom("plain ");
 		const second = sanitizeTerminalTextFrom("plain text", first);

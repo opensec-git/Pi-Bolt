@@ -449,15 +449,21 @@ const LIVE_LINE_EDITS_KEPT = 32;
 export class LiveLineArray implements LiveLines {
 	readonly lines: string[] = [];
 	revision = 0;
-	/** The first line changed by each of the last changes, the last one last: change `revision - k` at `starts.length - 1 - k`. */
-	private readonly starts: number[] = [];
+	/**
+	 * The first line changed by each of the last `recorded` changes, in a ring (a change for each frame of a reply
+	 * streaming in: no array is moved or grown for it): change `r` (the revision it made) at `(r - 1) % LIVE_LINE_EDITS_KEPT`.
+	 */
+	private readonly starts: number[] = new Array<number>(LIVE_LINE_EDITS_KEPT).fill(0);
+	private recorded = 0;
 
 	changedSince(revision: number): number {
 		if (revision === this.revision) return Number.POSITIVE_INFINITY;
 		const changes = this.revision - revision;
-		if (changes < 0 || changes > this.starts.length) return 0;
+		if (changes < 0 || changes > this.recorded) return 0;
 		let start = Number.POSITIVE_INFINITY;
-		for (let i = this.starts.length - changes; i < this.starts.length; i++) start = Math.min(start, this.starts[i]!);
+		for (let change = revision; change < this.revision; change++) {
+			start = Math.min(start, this.starts[change % LIVE_LINE_EDITS_KEPT]!);
+		}
 		return start;
 	}
 
@@ -469,9 +475,9 @@ export class LiveLineArray implements LiveLines {
 
 	/** Records an in-place update without discarding the unchanged lines that follow it. */
 	markEdited(start: number): void {
+		this.starts[this.revision % LIVE_LINE_EDITS_KEPT] = start;
 		this.revision++;
-		this.starts.push(start);
-		if (this.starts.length > LIVE_LINE_EDITS_KEPT) this.starts.shift();
+		if (this.recorded < LIVE_LINE_EDITS_KEPT) this.recorded++;
 	}
 }
 
@@ -1284,6 +1290,8 @@ markReportsChanges(Container);
  * TUI - Main class for managing terminal UI with differential rendering
  */
 const SEGMENT_RESET = "\x1b[0m\x1b]8;;\x07";
+/** What ends a written line without a hyperlink in it (applyLineResets()): SEGMENT_RESET without the hyperlink's closer. */
+const LINE_RESET = "\x1b[0m";
 
 /** Composite overlay content into a terminal line at a fixed column. */
 export function compositeTuiLine(
@@ -2480,16 +2488,17 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	protected applyLineResets(lines: string[]): string[] {
-		const reset = SEGMENT_RESET;
 		for (let i = 0; i < lines.length; i++) {
 			const line = lines[i];
 			if (!line) {
-				lines[i] = reset;
+				lines[i] = LINE_RESET;
 			} else if (!line.includes("\x1b")) {
-				lines[i] = normalizeTerminalOutput(line) + reset;
+				lines[i] = normalizeTerminalOutput(line) + LINE_RESET;
 			} else if (!isImageLine(line)) {
 				// Cursor markers are internal render metadata and must never reach terminal output.
-				lines[i] = normalizeTerminalOutput(line.replaceAll(CURSOR_MARKER, "")) + reset;
+				const written = normalizeTerminalOutput(line.replaceAll(CURSOR_MARKER, ""));
+				// (Only a line with a hyperlink in it can leave one open: the others are not given its closer.)
+				lines[i] = written + (written.includes("\x1b]8;") ? SEGMENT_RESET : LINE_RESET);
 			}
 		}
 		return lines;

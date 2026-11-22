@@ -1866,12 +1866,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			) {
 				return line;
 			}
-			const lineWidth = visibleWidth(line);
-			const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
+			// A row is not padded with spaces to the width (a Markdown line without a background is not): the selection
+			// covers the cells after its text as it covers the text.
+			const textWidth = visibleWidth(line);
+			const padded = textWidth < maxColumn ? line + " ".repeat(maxColumn - textWidth) : line;
+			const lineWidth = Math.max(textWidth, maxColumn);
+			const columns = this.getSelectionColumns(padded, row, screenSelection, minColumn, maxColumn);
 			if (columns.end <= columns.start) return line;
-			const before = sliceByColumn(line, 0, columns.start, true);
-			const selected = sliceByColumn(line, columns.start, columns.end - columns.start, true);
-			const after = sliceByColumn(line, columns.end, Math.max(0, lineWidth - columns.end), true);
+			const before = sliceByColumn(padded, 0, columns.start, true);
+			const selected = sliceByColumn(padded, columns.start, columns.end - columns.start, true);
+			const after = sliceByColumn(padded, columns.end, Math.max(0, lineWidth - columns.end), true);
 			return `${before}${this.applySelectionHighlight(selected)}${after}`;
 		});
 	}

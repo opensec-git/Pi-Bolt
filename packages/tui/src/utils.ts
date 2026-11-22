@@ -435,10 +435,11 @@ export function sanitizeTerminalText(text: string): string {
 const PENDING_ESCAPE_REGEX = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*|[\]PX^_][^\x07\x1b\x9c]*\x1b?|[\x20-\x2f]*)$/y;
 
 /**
- * text.startsWith(prefix), comparing the part of `text` as long as `prefix` with it. A message streaming in is the text before
- * with the text added to it (`text += delta`): the engine keeps that as the two strings joined, not as one copy of both,
- * until it is read; it then copies all of it into one. The part of it that is the text before is that string itself, which
- * compares with the text before without reading either. (startsWith() reads all of `text`, and so copies it.)
+ * text.startsWith(prefix), comparing the part of `text` as long as `prefix` with it. Not free for a text made by joining
+ * (`text += delta`): the engine keeps that as the strings joined until it is read, and reading any of it (a slice, a
+ * character) copies all of it into one string first. For a message streaming in, that is a copy of the whole message:
+ * callers that know what was added (sanitizeTerminalTextFrom()'s `added`) skip the comparison. (startsWith() on such a
+ * text is slower still: it reads it a character at a time.)
  */
 export function startsWithText(text: string, prefix: string): boolean {
 	return text.length >= prefix.length && text.slice(0, prefix.length) === prefix;
@@ -472,14 +473,23 @@ export interface SanitizedTerminalText {
  *
  * Example: "a\x1b[3" then "a\x1b[31mb". The first sanitises to "a[3" (an escape sequence that is not complete loses its
  * ESC), but the ESC is pending: the second is gone through from the ESC, and gives "ab", as all of it would.
+ *
+ * `appended`: when the caller knows that `text` is `previous.raw` with `appended` after it, `text` is not compared with
+ * `previous.raw` (startsWithText(), which copies all of a joined text) and not read: only `appended` is gone through.
  */
-export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTerminalText): SanitizedTerminalText {
+export function sanitizeTerminalTextFrom(
+	text: string,
+	previous?: SanitizedTerminalText,
+	appended?: string,
+): SanitizedTerminalText {
 	let start = 0;
 	let prefix = "";
 	let unchanged = true;
 	// (Whether the result is the previous text with more after it.)
 	let extendsPrevious = false;
-	if (previous !== undefined && startsWithText(text, previous.raw)) {
+	const known =
+		previous !== undefined && appended !== undefined && text.length === previous.raw.length + appended.length;
+	if (previous !== undefined && (known || startsWithText(text, previous.raw))) {
 		if (text.length === previous.raw.length) return { ...previous, added: "" };
 		start = previous.safeRaw;
 		unchanged = previous.unchanged;
@@ -490,7 +500,14 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 
 	// (Only the text from `start` is read: for a text made of the previous one and the text added to it, reading all of it
 	// would copy all of it. No expression here looks behind or anchors at the start, so they match the same there.)
-	const tail = start === 0 ? text : text.slice(start);
+	const tail =
+		start === 0
+			? text
+			: known
+				? start === previous.raw.length
+					? appended
+					: previous.raw.slice(start) + appended
+				: text.slice(start);
 	TERMINAL_CONTROL_REGEX.lastIndex = 0;
 	if (!TERMINAL_CONTROL_REGEX.test(tail)) {
 		const sanitized = unchanged ? text : prefix + tail;

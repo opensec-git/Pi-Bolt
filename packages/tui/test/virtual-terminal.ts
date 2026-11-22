@@ -170,10 +170,19 @@ export class VirtualTerminal implements Terminal {
 	 * what two terminals show.
 	 */
 	getStyledViewport(): string[][] {
+		return this.getStyledRows(this.xterm.buffer.active.viewportY, this.xterm.rows);
+	}
+
+	/** The scrollback and the viewport, every cell with its style, as getStyledViewport() gives them. */
+	getStyledScrollBuffer(): string[][] {
+		return this.getStyledRows(0, this.xterm.buffer.active.length);
+	}
+
+	private getStyledRows(first: number, count: number): string[][] {
 		const buffer = this.xterm.buffer.active;
 		const rows: string[][] = [];
-		for (let y = 0; y < this.xterm.rows; y++) {
-			const line = buffer.getLine(buffer.viewportY + y);
+		for (let y = 0; y < count; y++) {
+			const line = buffer.getLine(first + y);
 			const cells: string[] = [];
 			for (let x = 0; line && x < this.xterm.cols; x++) {
 				const cell = line.getCell(x);

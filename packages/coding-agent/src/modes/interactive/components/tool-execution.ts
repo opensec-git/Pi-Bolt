@@ -73,8 +73,8 @@ export class ToolExecutionComponent extends Container {
 	private cwd: string;
 	private executionStarted = false;
 	private argsComplete = false;
-	/** `updateArgs()` ran since the last display update; the next render applies it. */
-	private argsPending = false;
+	/** `updateArgs()` or a partial `updateResult()` ran since the last display update; the next render applies it. */
+	private displayPending = false;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
@@ -197,12 +197,17 @@ export class ToolExecutionComponent extends Container {
 		// object in between: the same object is the same arguments, and nothing on the screen changes.
 		if (args === this.args) return false;
 		this.thaw(false);
-		if (this.lastRendered !== undefined) this.lastRendered.current = false;
 		this.args = args;
-		this.argsPending = true;
-		reportRenderChange(this);
+		this.deferDisplay();
 		this.ui.requestRender();
 		return true;
+	}
+
+	/** Marks the display for an update at the next render (renderShared()), and reports the change. */
+	private deferDisplay(): void {
+		if (this.lastRendered !== undefined) this.lastRendered.current = false;
+		this.displayPending = true;
+		reportRenderChange(this);
 	}
 
 	markExecutionStarted(): void {
@@ -229,7 +234,15 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
-		this.updateDisplay();
+		if (!isPartial) {
+			this.updateDisplay();
+			return;
+		}
+		// A running tool's output comes as partial results (a command's every 100 ms, or more often): drawn at the next
+		// render, as updateArgs() draws new arguments, so the renderers run once a frame, not once an update. The caller
+		// asks for the render.
+		this.thaw(false);
+		this.deferDisplay();
 	}
 
 	setExpanded(expanded: boolean): void {
@@ -272,7 +285,7 @@ export class ToolExecutionComponent extends Container {
 			this.compacted !== undefined ||
 			this.result === undefined ||
 			this.isPartial ||
-			this.argsPending ||
+			this.displayPending ||
 			this.images !== undefined ||
 			this.shell?.kind === "self" ||
 			last === undefined ||
@@ -322,7 +335,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override renderShared(width: number): string[] {
-		if (this.argsPending) this.updateDisplay();
+		if (this.displayPending) this.updateDisplay();
 		const compacted = this.compacted;
 		if (compacted !== undefined) {
 			if (compacted.width === width) {
@@ -400,7 +413,7 @@ export class ToolExecutionComponent extends Container {
 		this.thaw(false);
 		const shell = this.shell ?? this.addShell();
 		if (this.lastRendered !== undefined) this.lastRendered.current = false;
-		this.argsPending = false;
+		this.displayPending = false;
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError

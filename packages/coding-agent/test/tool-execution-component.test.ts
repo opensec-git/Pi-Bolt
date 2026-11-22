@@ -122,6 +122,33 @@ describe("ToolExecutionComponent parity", () => {
 		expect(finished).not.toContain(png.data);
 	});
 
+	test("partial results are drawn at the next render, once for all the updates since the last one", () => {
+		let calls = 0;
+		const definition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("call", 0, 0),
+			renderResult: (result: { content: Array<{ type: string; text?: string }> }) => {
+				calls++;
+				return new Text(result.content.map((part) => part.text ?? "").join(""), 0, 0);
+			},
+		};
+		const row = new ToolExecutionComponent("tool", "id", {}, {}, definition, createFakeTui(), process.cwd());
+		let output = "";
+		for (let frame = 0; frame < 5; frame++) {
+			for (let update = 0; update < 10; update++) {
+				output += `line ${frame}.${update}\n`;
+				row.updateResult({ content: [{ type: "text", text: output }], isError: false }, true);
+			}
+			const rendered = stripAnsi(row.render(80).join("\n"));
+			expect(rendered).toContain(`line ${frame}.9`);
+			expect(calls).toBe(frame + 1);
+		}
+		// (A final result is drawn at once.)
+		row.updateResult({ content: [{ type: "text", text: `${output}done` }], isError: false });
+		expect(calls).toBe(6);
+		expect(stripAnsi(row.render(80).join("\n"))).toContain("done");
+	});
+
 	test("self-rendered empty tool rows take no layout space", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),

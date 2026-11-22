@@ -48,16 +48,24 @@ interface TrimmedText {
 	visible: boolean;
 	/** The white space `raw` ends with after its last visible character, when it has one. */
 	pending: string;
+	/** When `trimmed` is the text trimmed before (`from`) with `added` after it. */
+	grew?: { from: string; added: string };
+}
+
+/** A copy of a short `text` in memory of its own: a part cut from a string keeps all of that string in memory. */
+function ownCopy(text: string): string {
+	// (Reading the joined string copies it into a new one, only as long as `text` and the space.)
+	return ` ${text}`.slice(1);
 }
 
 /**
- * A text or thinking block of a message streaming in, trimmed without reading all of it for each chunk. A provider adds each
- * delta to the text (`text += delta`), and the engine keeps the result as the two strings joined until it is read; reading
- * it (trim(), a regular expression) then copies all of it into one string, a copy of the whole reply for each chunk. Here
- * each text the block is seen with (updateContent(), for each delta) is compared with the one seen before as a part of it
- * (startsWithText(): the text before is that part, so this reads neither), and what it adds is kept. Trimming then reads
- * the text added only: the result is the text trimmed before with what was added (and the white space before it) after
- * it, the same strings joined, which the Markdown component it is given reads in the same way. The comparisons are real:
+ * A text or thinking block of a message streaming in, trimmed without trimming all of it for each frame. A provider adds
+ * each delta to the text (`text += delta`), and the engine keeps the result as the strings joined until it is read;
+ * reading any of it (a comparison, a slice, trim()) then copies all of it into one string. follow(), for each delta, only
+ * keeps the text. trim(), once a frame, compares it with the text trimmed before (one copy of the text a frame, not one
+ * for each delta, and none at all for each later reader) and trims only what was added: the result is the text trimmed
+ * before with what was added (and the white space before it) after it, the same strings joined, and says so (`grew`), so
+ * the Markdown component it is given reads only what was added (Markdown.setText()'s `appended`). The comparison is real:
  * a text that is not the one before with more after it is trimmed in full.
  */
 class BlockText {
@@ -65,8 +73,6 @@ class BlockText {
 	raw: string;
 	/** The text as it was trimmed last (trim()). */
 	private trimmed?: TrimmedText;
-	/** What `raw` adds to `trimmed.raw`, when it is that text with more after it. */
-	private added?: string;
 
 	constructor(raw: string) {
 		this.raw = raw;
@@ -74,52 +80,48 @@ class BlockText {
 
 	/** The block's text is now `raw`. */
 	follow(raw: string): void {
-		if (raw === this.raw) return;
-		const before = this.raw;
 		this.raw = raw;
-		if (this.added !== undefined && raw.length > before.length && startsWithText(raw, before)) {
-			this.added += raw.slice(before.length);
-		} else {
-			this.added = undefined;
-		}
 	}
 
-	/** raw.trim(), whether it is not empty, from what was trimmed last and what was added since (follow()). */
+	/** raw.trim(), whether it is not empty, from what was trimmed last when `raw` is that text with more after it. */
 	trim(): TrimmedText {
 		const previous = this.trimmed;
 		const raw = this.raw;
-		const added = this.added;
+		if (previous?.raw === raw) return previous;
 		let result: TrimmedText;
-		if (previous === undefined || added === undefined) {
+		if (previous === undefined || raw.length < previous.raw.length || !startsWithText(raw, previous.raw)) {
 			const trimmed = raw.trim();
 			const visible = trimmed.length > 0;
 			result = { raw, trimmed, visible, pending: visible ? raw.slice(raw.trimEnd().length) : "" };
-		} else if (added === "") {
-			result = previous;
-		} else if (!previous.visible) {
-			// (White space is what trim() removes, which is what /\s/ matches.)
-			const start = added.search(/\S/);
-			if (start < 0) {
-				result = { raw, trimmed: "", visible: false, pending: "" };
-			} else {
-				const rest = added.slice(start);
-				const trimmed = rest.trimEnd();
-				result = { raw, trimmed, visible: true, pending: rest.slice(trimmed.length) };
-			}
 		} else {
-			const visibleAdded = added.trimEnd();
-			result =
-				visibleAdded.length === 0
-					? { raw, trimmed: previous.trimmed, visible: true, pending: previous.pending + added }
-					: {
-							raw,
-							trimmed: previous.trimmed + (previous.pending + visibleAdded),
-							visible: true,
-							pending: added.slice(visibleAdded.length),
-						};
+			const added = ownCopy(raw.slice(previous.raw.length));
+			if (!previous.visible) {
+				// (White space is what trim() removes, which is what /\s/ matches.)
+				const start = added.search(/\S/);
+				if (start < 0) {
+					result = { raw, trimmed: "", visible: false, pending: "" };
+				} else {
+					const rest = added.slice(start);
+					const trimmed = rest.trimEnd();
+					result = { raw, trimmed, visible: true, pending: rest.slice(trimmed.length) };
+				}
+			} else {
+				const visibleAdded = added.trimEnd();
+				if (visibleAdded.length === 0) {
+					result = { raw, trimmed: previous.trimmed, visible: true, pending: previous.pending + added };
+				} else {
+					const grown = previous.pending + visibleAdded;
+					result = {
+						raw,
+						trimmed: previous.trimmed + grown,
+						visible: true,
+						pending: added.slice(visibleAdded.length),
+						grew: { from: previous.trimmed, added: grown },
+					};
+				}
+			}
 		}
 		this.trimmed = result;
-		this.added = "";
 		return result;
 	}
 }
@@ -136,8 +138,8 @@ interface MarkdownBlock {
 /** A part of what buildContent() adds to the content container (planContent()). */
 type ContentPart =
 	| { kind: "spacer" }
-	| { kind: "text"; text: string }
-	| { kind: "thinking"; runIndex: number; hidden: boolean; text: string }
+	| { kind: "text"; text: string; grew?: TrimmedText["grew"] }
+	| { kind: "thinking"; runIndex: number; hidden: boolean; text: string; grew?: TrimmedText["grew"] }
 	| { kind: "toolCalls"; present: boolean }
 	| { kind: "error"; text: string };
 
@@ -512,16 +514,16 @@ export class AssistantMessageComponent extends Container {
 				if (!trimmed?.visible) continue;
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				addVisiblePart({ kind: "text", text: trimmed.trimmed });
+				addVisiblePart({ kind: "text", text: trimmed.trimmed, grew: trimmed.grew });
 			} else if (block.type === "thinking") {
-				const thinkingBlocks: string[] = [];
+				const thinkingBlocks: TrimmedText[] = [];
 				for (; i < content.length; i++) {
 					if (content[i].type !== "thinking") {
 						break;
 					}
 					const thinking = this.blockTexts[i]?.trim();
 					if (thinking?.visible) {
-						thinkingBlocks.push(thinking.trimmed);
+						thinkingBlocks.push(thinking);
 					}
 				}
 				i--;
@@ -537,8 +539,11 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 				// (One block's text as it is: the same text as joined, and the strings it was trimmed to, see BlockText.)
-				const text = hidden ? "" : thinkingBlocks.length === 1 ? thinkingBlocks[0] : thinkingBlocks.join("\n\n");
-				addVisiblePart({ kind: "thinking", runIndex, hidden, text });
+				const only = !hidden && thinkingBlocks.length === 1 ? thinkingBlocks[0] : undefined;
+				const text = hidden
+					? ""
+					: (only?.trimmed ?? thinkingBlocks.map((thinking) => thinking.trimmed).join("\n\n"));
+				addVisiblePart({ kind: "thinking", runIndex, hidden, text, grew: only?.grew });
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
 				needsSpacer = true;
@@ -601,8 +606,10 @@ export class AssistantMessageComponent extends Container {
 				if (part.kind !== "text" && (part.kind !== "thinking" || part.hidden)) continue;
 				const block = this.markdownBlocks[index++]!;
 				if (block.text !== part.text) {
+					// (The text grown from the one the component has: it reads only what was added.)
+					const appended = part.grew?.from === block.text ? part.grew.added : undefined;
 					block.text = part.text;
-					block.component.setText(part.text);
+					block.component.setText(part.text, appended);
 				}
 			}
 			return;

@@ -892,7 +892,10 @@ function lexAddedMarkdown(previous: LexedMarkdown, source: string, added?: strin
 			}
 		}
 	}
-	if (last <= 0) {
+	// With no block before the last one but blank lines, nothing before it can change: it is lexed again from where it
+	// begins. (An answer that starts with a list or a table.)
+	if (last < 0 && lastBlock >= 0) last = lastBlock;
+	if (last < 0) {
 		return undefined;
 	}
 	// (The tokens of a resumable source add up to it: where the kept ones end is counted from the end, over the last few.)
@@ -906,6 +909,10 @@ function lexAddedMarkdown(previous: LexedMarkdown, source: string, added?: strin
 	const resume = fastPaths ? blockResume(block) : undefined;
 	let lexedEnd = resume === undefined ? undefined : lexAddedToBlock(previous, source, added, offset, block, resume);
 	const resumed = lexedEnd !== undefined;
+	// Lexing again from the first block is lexing all of the source: that is left to lexMarkdown().
+	if (!resumed && last === 0) {
+		return undefined;
+	}
 	if (lexedEnd === undefined) {
 		const end = sourceEnd(previous, source, added, offset);
 		lastEnd = { start: offset, text: end };
@@ -1441,6 +1448,10 @@ export class Markdown implements Component {
 	private theme: MarkdownTheme;
 	private options: MarkdownOptions;
 	private defaultStylePrefix?: string;
+	/** What renderSettings() returned last (the fields it does not compare are set once, in the constructor). */
+	private settings?: RenderSettings;
+	/** What paddingLines() returned last, and for which settings. */
+	private padding?: { settings: RenderSettings; lines: string[] };
 
 	// Cache for rendered output
 	private cachedText?: string;
@@ -1518,10 +1529,15 @@ export class Markdown implements Component {
 		this.options = options ? { ...options } : {};
 	}
 
-	setText(text: string): void {
+	/**
+	 * Sets the text. `appended`, when the caller knows it: what `text` adds to the text set last, which `text` is with
+	 * `appended` after it. A reply streaming in is then not compared with the text before, which copies all of a text made
+	 * by joining (startsWithText()).
+	 */
+	setText(text: string, appended?: string): void {
 		// (A reply streaming in is set again for each chunk: only what was added is sanitised.)
 		const before = this.text;
-		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized);
+		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized, appended);
 		this.text = this.sanitized.text;
 		const added = this.sanitized.added;
 		if (added === undefined) this.paragraphWrap = undefined;
@@ -1564,10 +1580,28 @@ export class Markdown implements Component {
 		reportRenderChange(this);
 	}
 
-	/** Everything the lines of a block rendered at `width` depend on besides its token and the next token's type. */
+	/**
+	 * Everything the lines of a block rendered at `width` depend on besides its token and the next token's type: the object
+	 * returned the last time when none of it changed (a frame of a reply streaming in makes none).
+	 */
 	private renderSettings(width: number): RenderSettings {
 		const style = this.defaultTextStyle;
-		return {
+		const kept = this.settings;
+		if (
+			kept !== undefined &&
+			kept.generation === renderedMarkdownGeneration() &&
+			kept.width === width &&
+			kept.color === style?.color &&
+			kept.bgColor === style?.bgColor &&
+			kept.bold === style?.bold &&
+			kept.italic === style?.italic &&
+			kept.strikethrough === style?.strikethrough &&
+			kept.underline === style?.underline &&
+			kept.capabilities === getCapabilities()
+		) {
+			return kept;
+		}
+		this.settings = {
 			generation: renderedMarkdownGeneration(),
 			width,
 			paddingX: this.paddingX,
@@ -1583,6 +1617,7 @@ export class Markdown implements Component {
 			renderLatex: this.options.renderLatex,
 			capabilities: getCapabilities(),
 		};
+		return this.settings;
 	}
 
 	/**
@@ -1630,31 +1665,23 @@ export class Markdown implements Component {
 
 		const width = settings.width;
 		const leftMargin = " ".repeat(this.paddingX);
-		const rightMargin = " ".repeat(this.paddingX);
 		const bgFn = this.defaultTextStyle?.bgColor;
+		// With a background, a line is drawn to the full width in it, margins included. Without one, the cells after the
+		// text are not written: every row is cleared before it is written (erase-line), and what draws over or beside the
+		// lines pads them itself (compositeTuiLine(), Box). Spaces to the full width were about half the bytes written.
+		const rightMargin = bgFn ? leftMargin : "";
 		const lines: string[] = [];
-		const add = (line: string) => {
-			if (isImageLine(line)) {
-				lines.push(line);
-				return;
-			}
+		// (A line that is not an image line, with margins and background.)
+		const draw = (line: string) => {
 			const lineWithMargins = leftMargin + line + rightMargin;
-			let drawn: string;
-			if (bgFn) {
-				drawn = applyBackgroundToLine(lineWithMargins, width, bgFn);
-			} else {
-				// No background - just pad to width
-				const visibleLen = visibleWidth(lineWithMargins);
-				const paddingNeeded = Math.max(0, width - visibleLen);
-				drawn = lineWithMargins + " ".repeat(paddingNeeded);
-			}
+			const drawn = bgFn ? applyBackgroundToLine(lineWithMargins, width, bgFn) : lineWithMargins;
 			// (Blank lines and code fences are drawn alike in every message: one copy of each, internLine().)
 			lines.push(line.length <= INTERNED_LINE_LENGTH ? internLine(drawn) : drawn);
 		};
+		// (The lines a line that is not an image line wraps to are not image lines either.)
 		const addWrapped = (line: string) => {
-			// Wrap lines (NO padding, NO background yet)
 			for (const wrappedLine of this.wrapLine(line, contentWidth)) {
-				add(wrappedLine);
+				draw(wrappedLine);
 			}
 		};
 		const addRendered = (line: string) => {
@@ -1664,7 +1691,7 @@ export class Markdown implements Component {
 			}
 			// Image lines skip wrapping, so split them here: hard breaks after an image must stay separate rows.
 			for (const piece of line.split("\n")) {
-				if (isImageLine(piece)) add(piece);
+				if (isImageLine(piece)) lines.push(piece);
 				else addWrapped(piece);
 			}
 		};
@@ -1688,7 +1715,7 @@ export class Markdown implements Component {
 				const wrapped = wrapStreamingParagraph(paragraphText, contentWidth, checkpoint);
 				flatFrom = wrapped.shared;
 				for (let i = 0; i < flatFrom; i++) lines.push(previous!.drawn[i]!);
-				for (const line of wrapped.lines) add(line);
+				for (const line of wrapped.lines) draw(line);
 				this.paragraphWrap = wrapped.next ? { checkpoint: wrapped.next, settings, drawn: lines } : undefined;
 			}
 		} else if (parts === undefined) {
@@ -1899,17 +1926,23 @@ export class Markdown implements Component {
 		return facts;
 	}
 
-	/** The empty lines above and below the content. */
-	private paddingLines(width: number): string[] {
-		const bgFn = this.defaultTextStyle?.bgColor;
-		const emptyLine = " ".repeat(width);
+	/**
+	 * The empty lines above and below the content: the same array for the same settings (each frame of a reply streaming
+	 * in asks for them). Not to be modified.
+	 */
+	private paddingLines(settings: RenderSettings): string[] {
+		const kept = this.padding;
+		if (kept !== undefined && sameSettings(kept.settings, settings)) return kept.lines;
+		const width = settings.width;
+		const bgFn = settings.bgColor;
 		const emptyLines: string[] = [];
 		for (let i = 0; i < this.paddingY; i++) {
-			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
-			emptyLines.push(internLine(line));
+			// (Without a background, an empty line: renderBlock() does not pad lines either.)
+			emptyLines.push(internLine(bgFn ? applyBackgroundToLine(" ".repeat(width), width, bgFn) : ""));
 		}
 		// (The lines of the blocks are flat already: renderBlock().)
 		flattenLines(emptyLines);
+		this.padding = { settings, lines: emptyLines };
 		return emptyLines;
 	}
 
@@ -1990,7 +2023,7 @@ export class Markdown implements Component {
 		}
 
 		// Combine top padding, content, and bottom padding
-		const emptyLines = this.paddingLines(width);
+		const emptyLines = this.paddingLines(settings);
 		const result = emptyLines.concat(contentLines, emptyLines);
 		this.keepWraps();
 
@@ -2058,7 +2091,7 @@ export class Markdown implements Component {
 					reused--;
 				}
 			}
-			const padding = this.paddingLines(width);
+			const padding = this.paddingLines(settings);
 			const ends = live.ends;
 			// The lines from the first block rendered again on, and the change recorded from the first of them that is not
 			// the line it replaces: a list or table that grows is rendered again with the lines of its first items or rows

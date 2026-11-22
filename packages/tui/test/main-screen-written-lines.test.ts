@@ -10,7 +10,8 @@ import { VirtualTerminal } from "./virtual-terminal.ts";
 // makes the lines written from them when it writes or compares them: the lines written are not kept, which for a long
 // transcript would be a copy of all of its lines. What it writes is what it wrote when it kept them.
 
-const RESET = "\x1b[0m\x1b]8;;\x07";
+/** What a written line ends with: without a hyperlink in it, a style reset only (applyLineResets()). */
+const RESET = "\x1b[0m";
 
 class LoggingTerminal extends VirtualTerminal {
 	writes = "";
@@ -62,6 +63,23 @@ describe("Regular screen: lines written", () => {
 		const shown = screen.shownLinesForTest();
 		assert.strictEqual(shown.length, 201);
 		assert.strictEqual(shown[200], `${"one more".padEnd(40)}${RESET}`);
+		screen.stop();
+	});
+
+	it("end with the hyperlink's closer only when a hyperlink is in them", () => {
+		const terminal = new LoggingTerminal(40, 10);
+		const screen = new TuiMainScreen(terminal);
+		const link = "\x1b]8;;https://example.com\x07link";
+		screen.addChild(new Lines(["plain", "\x1b[1mbold\x1b[22m", link, "", `cut ${link.slice(0, -2)}`]));
+		screen.start();
+		screen.renderNow();
+		assert.deepStrictEqual(screen.shownLinesForTest(), [
+			`plain${RESET}`,
+			`\x1b[1mbold\x1b[22m${RESET}`,
+			`${link}\x1b[0m\x1b]8;;\x07`,
+			RESET,
+			`cut ${link.slice(0, -2)}\x1b[0m\x1b]8;;\x07`,
+		]);
 		screen.stop();
 	});
 

@@ -303,10 +303,11 @@ describe("Shaded code blocks", () => {
 
 	it("renders as before without codeBlockBg", () => {
 		const source = "```ts\nconst a = 1;\n```\n\ntext";
+		// (Without a background, lines are not padded to the width: rows are cleared before they are written.)
 		assert.deepStrictEqual(new Markdown(source, 1, 0, defaultMarkdownTheme).render(40).slice(0, 3), [
-			` ${defaultMarkdownTheme.codeBlockBorder("```ts")}${" ".repeat(34)}`,
-			`   ${defaultMarkdownTheme.codeBlock("const a = 1;")}${" ".repeat(25)}`,
-			` ${defaultMarkdownTheme.codeBlockBorder("```")}${" ".repeat(36)}`,
+			` ${defaultMarkdownTheme.codeBlockBorder("```ts")}`,
+			`   ${defaultMarkdownTheme.codeBlock("const a = 1;")}`,
+			` ${defaultMarkdownTheme.codeBlockBorder("```")}`,
 		]);
 	});
 });

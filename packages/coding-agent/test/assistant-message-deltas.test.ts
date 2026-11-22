@@ -1,6 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { renderLiveLines } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, it } from "vitest";
+import { Markdown, renderLiveLines } from "@earendil-works/pi-tui";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -120,4 +120,42 @@ describe("assistant message given each delta", () => {
 			expect(component.render(72)).toEqual(fresh(final, false, 72, hide));
 		});
 	}
+
+	it("gives a growing text's Markdown component what was appended, so it does not compare the whole text", () => {
+		const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme());
+		const block = { type: "thinking" as const, thinking: "" };
+		const text = { type: "text" as const, text: "" };
+		const setText = vi.spyOn(Markdown.prototype, "setText");
+		const given = new Map<Markdown, string>();
+		let told = 0;
+		let untold = 0;
+		try {
+			for (let step = 0; step < 200; step++) {
+				const target = step < 60 ? block : text;
+				if (target.type === "thinking") target.thinking += `word ${step} `;
+				else target.text += step % 7 === 0 ? "\n\n" : `more ${step} `;
+				component.updateContent(message(step < 60 ? [{ ...block }] : [{ ...block }, { ...text }]), true);
+				if (step % 3 !== 0) continue;
+				setText.mockClear();
+				component.render(80);
+				for (const call of setText.mock.calls) {
+					const markdown = setText.mock.contexts[setText.mock.calls.indexOf(call)] as Markdown;
+					const [value, appended] = call;
+					const before = given.get(markdown);
+					if (appended !== undefined) {
+						// (The text the component was made with is not seen here.)
+						if (before !== undefined) expect(value).toBe(`${before}${appended}`);
+						told++;
+					} else {
+						untold++;
+					}
+					given.set(markdown, value);
+				}
+			}
+		} finally {
+			setText.mockRestore();
+		}
+		expect(told).toBeGreaterThan(50);
+		expect(untold).toBeLessThan(5);
+	});
 });
