@@ -17,7 +17,8 @@
 #     an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead; where that cannot be
 #     downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks (a full disk) is said, and
 #     no .tar.gz is downloaded; stopped as it unpacks, it leaves neither xz nor tar running, nor any of the download;
-#   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature.
+#   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature;
+#   - the Paseo step (tests/installer/paseo.py) with each of sh, dash and BusyBox's sh that is installed.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
 # Usage: tests/installer/run.sh
@@ -256,4 +257,14 @@ if [ ! -e "$inst/channel" ]; then pass "PIBOLT_CHANNEL=stable takes it away"; el
 out=$(install_again good PIBOLT_CHANNEL=nightly)
 if grep -q "PIBOLT_CHANNEL must be stable or beta" <<<"$out"; then pass "another channel is refused"; else
 	fail "another channel is refused"; printf '%s\n' "$out"; fi
+# The Paseo step (tests/installer/paseo.py: no downloads, no Paseo), with each POSIX shell installed here, and the executable
+# installed above as its runtime (Node where there is none).
+runtime="$WORK/home/inst/$NAME/pi"
+[ -x "$runtime" ] || runtime=""
+for shell in sh dash "busybox sh"; do
+	command -v "${shell%% *}" >/dev/null 2>&1 || continue
+	if out=$(PIBOLT_TEST_SHELL="$shell" PIBOLT_TEST_BINARY="$runtime" python3 tests/installer/paseo.py 2>&1); then
+		pass "the Paseo step ($shell)"; else
+		fail "the Paseo step ($shell)"; printf '%s\n' "$out" | tail -n 40; fi
+done
 exit $status

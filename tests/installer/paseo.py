@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Test Paseo registration with isolated homes, no downloads and no running daemon.
 
-Run with: python3 tests/installer/paseo.py
+Run with: python3 tests/installer/paseo.py (tests/installer/run.sh runs it too)
 Node runs the installer's embedded JavaScript in place of the release's Bun runtime.
-Set PIBOLT_TEST_BINARY to a release's pi executable to test that runtime instead.
+Set PIBOLT_TEST_BINARY to a release's pi executable to test that runtime instead, and PIBOLT_TEST_SHELL to the shell that
+runs the installer's functions (default: sh; for instance dash, or "busybox sh").
 """
 
 import json
@@ -17,6 +18,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+SHELL = shlex.split(os.environ.get("PIBOLT_TEST_SHELL") or "sh")
 
 
 @unittest.skipIf(os.name == "nt", "POSIX installer")
@@ -78,7 +80,7 @@ installed_command=${TEST_COMMAND:-$BIN_DIR/pi-bolt}
 TERMUX=""
 ''' + setup + '\noffer_paseo\nprintf "offer finished\\n"\n')
         result = subprocess.run(
-            ["sh", str(self.runner)], cwd=self.root,
+            [*SHELL, str(self.runner)], cwd=self.root,
             env={**self.env, "PIBOLT_PASEO": choice, **env},
             capture_output=True, text=True, timeout=15, check=True,
         )
