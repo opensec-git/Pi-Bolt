@@ -97,10 +97,24 @@ function registerEagerLanguage(name: string): void {
 	if (hljs.getLanguage(language) === undefined) hljs.registerLanguage(language, eagerLanguages[language]);
 }
 
-/** Every eager grammar, as automatic detection and loading all grammars need. */
+/** Whether every eager grammar is registered, in the order of eagerLanguages. */
+let eagerLanguagesInOrder = false;
+
+/**
+ * Every eager grammar, in the order of eagerLanguages, as automatic detection and loading all grammars need. Automatic
+ * detection tries the grammars in the order they were registered and keeps the first of two that score the same, so the
+ * grammars registered one at a time on first use are registered again in that order: detection then picks what it picked
+ * when all of them were registered at the first code block.
+ */
 function registerEagerLanguages(): void {
-	if (pendingEagerCount === 0) return;
-	for (const name of Object.keys(eagerLanguages)) registerEagerLanguage(name);
+	if (eagerLanguagesInOrder) return;
+	eagerLanguagesInOrder = true;
+	for (const name of Object.keys(eagerLanguages)) {
+		if (!pendingEagerLanguages.has(name)) hljs.unregisterLanguage(name);
+	}
+	pendingEagerLanguages.clear();
+	pendingEagerCount = 0;
+	for (const [name, language] of Object.entries(eagerLanguages)) hljs.registerLanguage(name, language);
 }
 
 let allLanguagesPromise: Promise<void> | undefined;
