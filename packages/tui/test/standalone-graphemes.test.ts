@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { graphemesOfForTest, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../src/utils.ts";
+import {
+	graphemesOfForTest,
+	standaloneClustersForTest,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../src/utils.ts";
 
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const reference = (text: string) => [...segmenter.segment(text)].map(({ segment }) => segment);
@@ -21,6 +27,11 @@ describe("standalone grapheme clusters", () => {
 				const c = String.fromCodePoint(cp);
 				for (const text of [`a${c}b`, `${c}${c}`, `→${c}中`, `é${c}${c}x`]) {
 					assert.deepStrictEqual(graphemesOfForTest(text), reference(text), `U+${cp.toString(16)} in ${text}`);
+					assert.deepStrictEqual(
+						standaloneClustersForTest(text),
+						reference(text),
+						`U+${cp.toString(16)} in ${text}`,
+					);
 				}
 			}
 		}
@@ -32,6 +43,8 @@ describe("standalone grapheme clusters", () => {
 			const c = String.fromCharCode(cp);
 			const text = `a${c}😀${c}b`;
 			assert.deepStrictEqual(graphemesOfForTest(text), reference(text), `U+${cp.toString(16)}`);
+			const split = standaloneClustersForTest(text);
+			if (split) assert.deepStrictEqual(split, reference(text), `U+${cp.toString(16)}`);
 		}
 	});
 
@@ -72,7 +85,17 @@ describe("standalone grapheme clusters", () => {
 			const length = 1 + next(10);
 			for (let i = 0; i < length; i++) text += pieces[next(pieces.length)];
 			assert.deepStrictEqual(graphemesOfForTest(text), reference(text), JSON.stringify(text));
+			const split = standaloneClustersForTest(text);
+			if (split) assert.deepStrictEqual(split, reference(text), JSON.stringify(text));
 		}
+	});
+
+	it("gives a run that needs Intl.Segmenter to it whole", () => {
+		// Measuring, truncating and wrapping split only runs of standalone characters themselves.
+		assert.strictEqual(standaloneClustersForTest("Привет — мир"), undefined);
+		assert.strictEqual(standaloneClustersForTest("a → e\u0301 b"), undefined);
+		assert.strictEqual(standaloneClustersForTest("x👍\u{1f3fd}"), undefined);
+		assert.deepStrictEqual(standaloneClustersForTest("⠋ café 日本 😀"), [..."⠋ café 日本 😀"]);
 	});
 
 	it("measures and truncates a line with an emoji as before", () => {
