@@ -46,10 +46,29 @@ export interface ToolExecutionOptions {
 type ToolShell =
 	| { kind: "default"; container: Box }
 	| { kind: "self"; container: Container }
-	| { kind: "fallback"; text: Text };
+	| { kind: "fallback"; text: Text; region: MouseRegion };
+
+/** Upstream Pi's shell parts that a row's tool does not use (ToolExecutionComponent.unusedShellParts). */
+interface UnusedShellParts {
+	box?: Box;
+	text?: Text;
+	region?: MouseRegion;
+	container?: Container;
+}
+
+const pendingBg = (text: string) => theme.bg("toolPendingBg", text);
+
+/** What `imageComponents` and `imageSpacers` read for a row without images: nothing is added to it. */
+const NO_IMAGE_PARTS: readonly never[] = Object.freeze([]);
 
 export class ToolExecutionComponent extends Container {
 	private shell?: ToolShell;
+	/**
+	 * Upstream Pi makes every shell's parts for every row and mounts the one its tool uses; this row makes only that one
+	 * (addShell()). An extension may still read the others (`contentText` of a row with renderers, ...): they are made
+	 * then, and, as upstream, never mounted.
+	 */
+	private unusedShellParts?: UnusedShellParts;
 	private selfRenderHeight = 0;
 	/** What the self-rendered shell was joined from, and the joined lines (renderShared()). */
 	private selfRenderParts?: (readonly string[])[];
@@ -115,11 +134,12 @@ export class ToolExecutionComponent extends Container {
 	/** Mounts the shell used by this tool, after the spacer above it. */
 	private addShell(): ToolShell {
 		this.addChild(new Spacer(1));
-		if (this.toolDefinition === undefined) {
+		if (!this.hasRendererDefinition()) {
 			const text = new Text("", 1, 1);
-			this.addChild(this.createResultRegion(text));
-			this.shell = { kind: "fallback", text };
-		} else if (this.toolDefinition.renderShell === "self") {
+			const region = this.createResultRegion(text);
+			this.addChild(region);
+			this.shell = { kind: "fallback", text, region };
+		} else if (this.getRenderShell() === "self") {
 			const container = new Container();
 			this.addChild(container);
 			this.shell = { kind: "self", container };
@@ -139,6 +159,77 @@ export class ToolExecutionComponent extends Container {
 
 	private getResultRenderer(): ToolDefinition<any, any>["renderResult"] | undefined {
 		return this.toolDefinition?.renderResult;
+	}
+
+	// Upstream Pi's members from here to unusedParts(), private there, are what extensions that draw tool rows read and patch
+	// (#339). They hand out this row's live parts: what an extension changes in them is what the row draws, as upstream.
+
+	/** Whether the tool brings renderers: drawn in the default or the self-rendered shell, else in the fallback text. */
+	private hasRendererDefinition(): boolean {
+		return this.toolDefinition !== undefined;
+	}
+
+	/** The shell a tool with renderers is drawn in. */
+	private getRenderShell(): "default" | "self" {
+		return this.toolDefinition?.renderShell ?? "default";
+	}
+
+	/** The default shell's Box: the call and result components on the row's background. */
+	get contentBox(): Box {
+		const shell = this.mountedShell();
+		if (shell.kind === "default") return shell.container;
+		const unused = this.unusedParts();
+		unused.box ??= new Box(1, 1, pendingBg);
+		return unused.box;
+	}
+
+	/** The fallback shell's Text, for a tool without renderers: its name, arguments and output. */
+	get contentText(): Text {
+		const shell = this.mountedShell();
+		if (shell.kind === "fallback") return shell.text;
+		const unused = this.unusedParts();
+		unused.text ??= new Text("", 1, 1, pendingBg);
+		return unused.text;
+	}
+
+	/** The MouseRegion around `contentText`: a left click on a result expands or collapses it. */
+	get contentTextRegion(): MouseRegion {
+		const shell = this.mountedShell();
+		if (shell.kind === "fallback") return shell.region;
+		const text = this.contentText;
+		const unused = this.unusedParts();
+		unused.region ??= this.createResultRegion(text);
+		return unused.region;
+	}
+
+	/** The self-rendered shell's Container: the call and result components, framed by the tool itself. */
+	get selfRenderContainer(): Container {
+		const shell = this.mountedShell();
+		if (shell.kind === "self") return shell.container;
+		const unused = this.unusedParts();
+		unused.container ??= new Container();
+		return unused.container;
+	}
+
+	/** The images drawn under the result, in order; each comes after its spacer (imageSpacers). */
+	get imageComponents(): readonly Image[] {
+		return this.images?.map((image) => image.component) ?? NO_IMAGE_PARTS;
+	}
+
+	/** The spacer above each image (imageComponents). */
+	get imageSpacers(): readonly Spacer[] {
+		return this.images?.map((image) => image.spacer) ?? NO_IMAGE_PARTS;
+	}
+
+	/** The shell mounted on this row, made again first if compact() let go of it. */
+	private mountedShell(): ToolShell {
+		this.thaw();
+		return this.shell ?? this.addShell();
+	}
+
+	private unusedParts(): UnusedShellParts {
+		if (this.unusedShellParts === undefined) this.unusedShellParts = {};
+		return this.unusedShellParts;
 	}
 
 	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
