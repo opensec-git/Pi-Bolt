@@ -14,7 +14,8 @@
 #   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
 #   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz through a
 #     tar that reads it itself; an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead;
-#     where that cannot be downloaded either, nothing is installed and nothing is left; stopped as it unpacks, it leaves
+#     where that cannot be downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks
+#     (a full disk) is said, and no .tar.gz is downloaded; stopped as it unpacks, it leaves
 #     neither xz nor tar running, nor any of the download;
 #   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
@@ -144,10 +145,12 @@ fi
 
 if [ -n "$real_xz" ]; then
 	# (XZ Utils' xz, as far as the installer can tell, that writes the whole archive and then fails: tar ends well.) #328
+	# (What it says goes to a log, not into the progress bar.)
 	stub badxz xz "if [ \"\$1\" = --version ]; then exec '$real_xz' --version; fi
-'$real_xz' \"\$@\"; exit 1"
+'$real_xz' \"\$@\"; echo 'xz: corrupted data' >&2; exit 1"
 	out=$(install good PATH="$WORK/badxz:$PATH")
-	if installed && [ "$(dl tar.xz)" = 1 ] && [ "$(dl tar.gz)" = 1 ] && grep -q "could not unpack $NAME.tar.xz here" <<<"$out"; then
+	if installed && [ "$(dl tar.xz)" = 1 ] && [ "$(dl tar.gz)" = 1 ] && grep -q "could not unpack $NAME.tar.xz here" <<<"$out" &&
+		! grep -q "corrupted data" <<<"$out"; then
 		pass "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; else
 		fail "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; printf '%s\n' "$out"; fi
 	# (The same, and the .tar.gz cannot be downloaded: nothing installed, no half-unpacked build left.)
@@ -157,6 +160,14 @@ if [ -n "$real_xz" ]; then
 	if ! installed && [ -z "$left" ] && grep -q "download failed: .*/$NAME.tar.gz" <<<"$out"; then
 		pass "xz fails and no .tar.gz: nothing installed, nothing left"; else
 		fail "xz fails and no .tar.gz: nothing installed, nothing left"; printf '%s\n%s\n' "$out" "$left"; fi
+	# (A disk that is full: a write that failed, not the archive. The .tar.gz would fail the same way: not downloaded, and the
+	# error is said.)
+	stub fulldisk tar "if [ \"\$1\" = --version ]; then echo 'tar (GNU tar) 1.35'; exit 0; fi
+echo 'tar: $NAME/pi: Cannot write: No space left on device' >&2; exit 2"
+	out=$(install good PATH="$WORK/fulldisk:$PATH")
+	if ! installed && [ "$(dl tar.gz)" = 0 ] && grep -q "could not extract $NAME.tar.xz: .*No space left on device" <<<"$out"; then
+		pass "a full disk as it unpacks: no .tar.gz downloaded, the error said"; else
+		fail "a full disk as it unpacks: no .tar.gz downloaded, the error said"; printf '%s\n' "$out"; fi
 fi
 
 # (Stopped with TERM while it unpacks, through an xz that decodes slowly: xz and tar are stopped too, and nothing of the

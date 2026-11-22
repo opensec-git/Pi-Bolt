@@ -544,25 +544,28 @@ xz_unpacker() {
 	else return 1; fi
 }
 
-# extract FILE: unpacks FILE (in $TMP) with the bar moving. False, with nothing of it left, unless it unpacked and holds the
-# build's executable. tar is started with & itself, so that $PIDS is tar and the installer's traps stop it (a function started
+# extract FILE: unpacks FILE (in $TMP) with the bar moving, what xz and tar say in $TMP/unpack.log (in English, for
+# write_failed; not on the terminal, where it would break the bar). False, with nothing of it left, unless it unpacked and holds
+# the build's executable. tar is started with & itself, so that $PIDS is tar and the installer's traps stop it (a function started
 # with & is a shell of its own, which a kill does not pass on to what it runs); xz, before it in the pipeline, then ends at its
 # next write. A pipeline's status is tar's only, and tar can end well on what xz wrote before it failed: xz's failure is a file,
 # written before tar can end (the pipe stays open until the shell that runs xz has written it).
 extract() {
 	rm -f "$TMP/unxz.failed"
+	: >"$TMP/unpack.log"
 	case "$1:$(xz_unpacker || true)" in
 	*.tar.xz:xz)
 		# (-T0 decodes the blocks of a release's archive in parallel: XZ Utils from 5.4; earlier ones take it and use one thread.)
-		{ xz -T0 -dc "$TMP/$1" || : >"$TMP/unxz.failed"; } | tar -C "$TMP" -xf - &
+		{ LC_ALL=C xz -T0 -dc "$TMP/$1" 2>>"$TMP/unpack.log" || : >"$TMP/unxz.failed"; } |
+			LC_ALL=C tar -C "$TMP" -xf - 2>>"$TMP/unpack.log" &
 		PIDS=$!
 		;;
 	*.tar.xz:*)
-		tar -C "$TMP" -xf "$TMP/$1" &
+		LC_ALL=C tar -C "$TMP" -xf "$TMP/$1" 2>>"$TMP/unpack.log" &
 		PIDS=$!
 		;;
 	*)
-		tar -C "$TMP" -xzf "$TMP/$1" &
+		LC_ALL=C tar -C "$TMP" -xzf "$TMP/$1" 2>>"$TMP/unpack.log" &
 		PIDS=$!
 		;;
 	esac
@@ -576,6 +579,13 @@ extract() {
 	rm -rf "${TMP:?}/$NAME"
 	return 1
 }
+
+# Whether the last unpack failed writing (a full disk, a quota, a read-only or failing disk), not reading the archive: another
+# archive would fail the same way.
+write_failed() { grep -qiE 'no space left on device|quota exceeded|read-only file system|input/output error' "$TMP/unpack.log"; }
+
+# What the last unpack said last, as ": <line>" (nothing if it said nothing), for an error message.
+unpack_error() { tail -n 1 "$TMP/unpack.log" 2>/dev/null | sed 's/^/: /'; }
 
 # The npm package that holds this release's .tar.xz.
 npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_VERSION"; }
@@ -918,8 +928,9 @@ install_release() {
 	fi
 	if ! extract "$NAME.$ext"; then
 		# The release's .tar.gz needs no xz: an xz that cannot decode the archive (one xz_unpacker does not know) is not the end.
-		if [ "$ext" != tar.xz ] || [ "${PIBOLT_SOURCE:-auto}" = npm ] || ! grep -q " $NAME\.tar\.gz\$" "$TMP/SHA256SUMS"; then
-			fail "could not extract $NAME.$ext"
+		# A write that failed (a full disk) would fail the same way with it.
+		if [ "$ext" != tar.xz ] || [ "${PIBOLT_SOURCE:-auto}" = npm ] || write_failed || ! grep -q " $NAME\.tar\.gz\$" "$TMP/SHA256SUMS"; then
+			fail "could not extract $NAME.$ext$(unpack_error)"
 		fi
 		finish_progress
 		printf '  %scould not unpack %s.tar.xz here; downloading %s.tar.gz instead%s\n' "$dim" "$NAME" "$NAME" "$reset"
@@ -927,7 +938,7 @@ install_release() {
 		ext=tar.gz
 		# shellcheck disable=SC2046 # three words
 		download_release $(probe "$BASE/$NAME.$ext")
-		extract "$NAME.$ext" || fail "could not extract $NAME.$ext"
+		extract "$NAME.$ext" || fail "could not extract $NAME.$ext$(unpack_error)"
 	fi
 	draw_progress "$((step + 2))" 10000 "${dim}checking the executable$reset"
 	if [ -n "$TERMUX" ]; then
