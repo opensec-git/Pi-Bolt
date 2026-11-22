@@ -14,7 +14,7 @@
 #   PIBOLT_CHANNEL   stable (the latest release; the default) or beta (the newest release, pre-releases included), for this
 #                    installation and its updates (`pi-bolt update --channel` changes it)
 #   PIBOLT_VARIANT   x64 (default), x64-baseline (any x86-64 CPU; picked when the CPU has no AVX2 and the release has one) or
-#                    x64-jit
+#                    jit (x64-jit)
 #   PIBOLT_INSTALL   where to install (default: %USERPROFILE%\.pi-bolt)
 #   PIBOLT_NO_PATH=1 leave PATH as it is: do not add the installation, nor take another variant off (pi-bolt update sets it)
 #   PIBOLT_YES=1     do not ask: take the default action and do not offer to start Pi-Bolt
@@ -849,7 +849,8 @@ function Install-PiBolt {
 	$source = if ($env:PIBOLT_SOURCE) { $env:PIBOLT_SOURCE } else { 'auto' }
 	if ($source -notin 'auto', 'npm', 'github') { Stop-PiBolt 'PIBOLT_SOURCE must be auto, npm or github' }
 	$variant = $env:PIBOLT_VARIANT
-	if ($variant -and $variant -notin 'x64', 'x64-baseline', 'x64-jit') { Stop-PiBolt 'PIBOLT_VARIANT must be x64, x64-baseline or x64-jit' }
+	if ($variant -eq 'jit') { $variant = 'x64-jit' }
+	if ($variant -and $variant -notin 'x64', 'x64-baseline', 'x64-jit') { Stop-PiBolt 'PIBOLT_VARIANT must be x64, x64-baseline, x64-jit or jit' }
 	# Which release: the latest is looked up once (where its page redirects to), and everything is downloaded from that tag, so a
 	# release published meanwhile cannot mix two. The version is then checked against the signed checksums.
 	$shown = ''
@@ -913,7 +914,7 @@ function Install-PiBolt {
 			Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
 			if (Test-Path -LiteralPath $dir.FullName) { Write-Host "  ${dim}$($dir.FullName) is in use (is Pi-Bolt running?): close it, then remove the folder$reset" }
 		}
-		foreach ($item in 'cache', 'compile.json', 'channel') {
+		foreach ($item in 'cache', 'compile.json', 'channel', 'auto-update.json', 'auto-update.log', 'auto-update.lock') {
 			Remove-Item -LiteralPath (Join-Path $install $item) -Recurse -Force -ErrorAction SilentlyContinue
 		}
 		if ((Test-Path -LiteralPath $install) -and -not (Get-ChildItem -LiteralPath $install -Force)) { Remove-Item -LiteralPath $install -Force }
