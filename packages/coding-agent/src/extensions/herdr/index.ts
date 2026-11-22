@@ -25,7 +25,7 @@ import { isAbsolute } from "node:path";
 import { COMMAND_NAME, PRODUCT_NAME } from "../../config.ts";
 import type { ExtensionContext, ExtensionFactory } from "../../core/extensions/types.ts";
 import { isHerdrPi } from "./pi-name.ts";
-import { type HerdrRequest, type HerdrTransport, herdrFromEnvironment } from "./transport.ts";
+import { type HerdrAnswer, type HerdrRequest, type HerdrTransport, herdrFromEnvironment } from "./transport.ts";
 
 const SOURCE = "pi-bolt";
 const AGENT = "pi-bolt";
@@ -33,6 +33,9 @@ const PI_SOURCE = "herdr:pi";
 const PI_AGENT = "pi";
 
 type AgentState = "working" | "blocked" | "idle";
+
+/** A report to send, with or without the resume command; undefined once it is no longer wanted. */
+type Report = (withResume: boolean) => HerdrRequest | undefined;
 
 /**
  * pi-herdr (an extension that runs agents in Herdr panes) also reports this pane's state, as `pi`, and the last report holds
@@ -44,16 +47,26 @@ export function quietOtherHerdrReporters(env: NodeJS.ProcessEnv = process.env): 
 }
 
 /**
- * Two tries; true when Herdr took the report. Each try gets its own seq: Herdr may have applied a try whose answer was
- * lost, and would then refuse the same seq again. `request` returns undefined once the report is no longer wanted.
+ * Herdr's answer to a report whose resume command it did not record because the reporter does not hold the pane. Herdr
+ * has applied the rest of the report by then (its state or session, under its own rules), so sending the same report
+ * again changes nothing.
  */
-async function send(transport: HerdrTransport, request: () => HerdrRequest | undefined): Promise<boolean> {
+const RESUME_NOT_ACCEPTED = "resume_not_accepted";
+
+/**
+ * Two tries; Herdr's last answer. Each try gets its own seq: Herdr may have applied a try whose answer was lost, and would
+ * then refuse the same seq again. A refused resume command is not tried again. `request` returns undefined once the
+ * report is no longer wanted.
+ */
+async function send(transport: HerdrTransport, request: () => HerdrRequest | undefined): Promise<HerdrAnswer> {
+	let answer: HerdrAnswer = { taken: false };
 	for (const timeoutMs of [500, 1500]) {
 		const next = request();
-		if (!next) return false;
-		if (await transport(next, timeoutMs)) return true;
+		if (!next) return { taken: false };
+		answer = await transport(next, timeoutMs);
+		if (answer.taken || answer.code === RESUME_NOT_ACCEPTED) return answer;
 	}
-	return false;
+	return answer;
 }
 
 /**
@@ -107,6 +120,9 @@ export function createHerdrExtension(
 		const runningSubagents = new Set<string>();
 		let backgroundBusy = false;
 		let last: { state: AgentState; message?: string; sessionFile?: string } | undefined;
+		// Herdr did not record this session's resume command (#330): its state reports go without one until the session
+		// changes, rather than each being refused again.
+		let resumeRefused = false;
 
 		function updateSession(ctx: ExtensionContext) {
 			try {
@@ -136,11 +152,24 @@ export function createHerdrExtension(
 		// session report goes first: Herdr only anchors a full-lifecycle source (herdr:pi) with a session_start_source,
 		// and state reports before that are ignored.
 		let inFlight = false;
-		let queued: { report: typeof last; request: () => HerdrRequest | undefined } | undefined;
-		let queuedSession: { request: () => HerdrRequest | undefined } | undefined;
+		let queued: { report: typeof last; request: Report } | undefined;
+		let queuedSession: { request: Report } | undefined;
 		let sessionReported = false;
 		let metadataSent = false;
-		function sessionRequest(sessionStartSource?: string): HerdrRequest | undefined {
+
+		/**
+		 * Send a report with the resume command (unless this session's was refused); whether Herdr took it, and whether it
+		 * refused the command. Herdr records a command only from the source that holds the pane (#330): when another
+		 * source's session is on the pane, Herdr keeps the pane for it and answers resume_not_accepted. The report then
+		 * goes once more without the command, as the state report Herdr asks for: one refusal, never a loop.
+		 */
+		async function deliver(request: Report): Promise<{ taken: boolean; resumeRefused: boolean }> {
+			const answer = await send(transport, () => request(!resumeRefused));
+			if (answer.taken || answer.code !== RESUME_NOT_ACCEPTED) return { taken: answer.taken, resumeRefused: false };
+			return { taken: (await send(transport, () => request(false))).taken, resumeRefused: true };
+		}
+
+		function sessionRequest(withResume: boolean, sessionStartSource?: string): HerdrRequest | undefined {
 			if (!reporting) return undefined;
 			const sessionRef = sessionFile
 				? { agent_session_path: sessionFile }
@@ -148,7 +177,7 @@ export function createHerdrExtension(
 					? { agent_session_id: sessionId }
 					: undefined;
 			if (!sessionRef) return undefined;
-			const argv = resumeArgv(sessionFile, piIntegration);
+			const argv = withResume ? resumeArgv(sessionFile, piIntegration) : undefined;
 			return {
 				method: "pane.report_agent_session",
 				params: {
@@ -170,7 +199,7 @@ export function createHerdrExtension(
 				sessionReported = true;
 				return;
 			}
-			queuedSession = { request: () => sessionRequest(sessionStartSource) };
+			queuedSession = { request: (withResume) => sessionRequest(withResume, sessionStartSource) };
 		}
 		// No try after session_shutdown, as for a state report: its seq would be above pane.release_agent's.
 		function metadataRequest(): HerdrRequest | undefined {
@@ -198,16 +227,20 @@ export function createHerdrExtension(
 						// Keep the session report first: without it the source is not anchored and state reports are ignored.
 						// One Herdr refuses (an older Herdr without pane.report_agent_session, or a validation error) must
 						// not hold back the state report behind it, or the sidebar stays empty: the state still goes, and
-						// the session report is tried again with the next one.
-						sessionReported = await send(transport, request);
+						// the session report is tried again with the next one. A refused resume command still goes with the
+						// state report after it, which is what makes a source hold the pane.
+						sessionReported = (await deliver(request)).taken;
 						continue;
 					}
 					if (!queued) break;
 					const { report, request } = queued;
 					queued = undefined;
-					const sent = await send(transport, request);
+					const delivered = await deliver(request);
+					if (delivered.resumeRefused) resumeRefused = true;
+					const sent = delivered.taken;
 					// The guards on the display name need the state report to have made `pi` the pane's agent first.
-					if (sent && piIntegration && !metadataSent) metadataSent = await send(transport, metadataRequest);
+					if (sent && piIntegration && !metadataSent)
+						metadataSent = (await send(transport, metadataRequest)).taken;
 					if (!sent && !queued && last === report) last = undefined;
 				}
 			} finally {
@@ -231,6 +264,8 @@ export function createHerdrExtension(
 				return;
 			}
 			last = next;
+			// Another session's command gets its own try.
+			if (sessionChanged) resumeRefused = false;
 			if (piIntegration && (force || sessionChanged || !sessionReported)) queueSession(sessionStartSource);
 			const argv = resumeArgv(sessionFile, piIntegration);
 			const params = {
@@ -240,13 +275,17 @@ export function createHerdrExtension(
 				state: next.state,
 				...(next.message ? { message: next.message } : {}),
 				...(sessionFile ? { agent_session_path: sessionFile } : sessionId ? { agent_session_id: sessionId } : {}),
-				...(argv ? { resume_argv: argv } : {}),
 			};
 			queued = {
 				report: next,
 				// No try after session_shutdown: its seq would be above pane.release_agent's and take the pane back.
-				request: () =>
-					reporting ? { method: "pane.report_agent", params: { ...params, seq: nextSeq() } } : undefined,
+				request: (withResume) =>
+					reporting
+						? {
+								method: "pane.report_agent",
+								params: { ...params, ...(withResume && argv ? { resume_argv: argv } : {}), seq: nextSeq() },
+							}
+						: undefined,
 			};
 			void drain();
 		}

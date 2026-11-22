@@ -48,11 +48,14 @@ export type HerdrRequest =
 	  }
 	| { method: "pane.release_agent"; params: { pane_id: string; source: string; agent: string; seq: number } };
 
+/** Herdr's answer to one request: taken, or not, with Herdr's error code when it refused the request. */
+export type HerdrAnswer = { taken: true } | { taken: false; code?: string };
+
 /**
- * Send one request; true when Herdr took it. Never throws; waits at most `timeoutMs`, also when Pi-Bolt is quitting (the
- * release on quit must get through), and never longer.
+ * Send one request and return Herdr's answer. Never throws; waits at most `timeoutMs`, also when Pi-Bolt is quitting (the
+ * release on quit must get through), and never longer. No answer in time is `{ taken: false }` without a code.
  */
-export type HerdrTransport = (request: HerdrRequest, timeoutMs: number) => Promise<boolean>;
+export type HerdrTransport = (request: HerdrRequest, timeoutMs: number) => Promise<HerdrAnswer>;
 
 export interface HerdrEnvironment {
 	paneId: string;
@@ -80,20 +83,38 @@ let requestCount = 0;
 /** Longest unanswered input read before giving up; Herdr's answers are a few hundred bytes. */
 const MAX_ANSWER_LENGTH = 64 * 1024;
 
+const NOT_TAKEN: HerdrAnswer = { taken: false };
+
 /**
- * What one line from Herdr's socket says about request `id`: true for `{"id", "result"}`, false for `{"id", "error"}` (or
- * any other line with that id), undefined for a line that is not about this request.
+ * What one line from Herdr's socket says about request `id`: taken for `{"id", "result"}`, not taken for `{"id", "error"}`
+ * (with its code) or any other line with that id, undefined for a line that is not about this request.
  */
-export function herdrAnswer(id: string, line: string): boolean | undefined {
-	let answer: unknown;
+export function herdrAnswer(id: string, line: string): HerdrAnswer | undefined {
+	const answer = parseLine(line);
+	if (!answer || answer.id !== id) return undefined;
+	const { result, error } = answer;
+	return error == null && result !== undefined ? { taken: true } : refused(error);
+}
+
+/** The error code in the output of a `herdr pane` command that failed: its last line `{"id", "error": {"code"}}`. */
+export function herdrCommandError(output: string): HerdrAnswer {
+	const lines = output.trim().split("\n");
+	return refused(parseLine(lines[lines.length - 1])?.error);
+}
+
+// Wire input from Herdr: checked here, typed after.
+function parseLine(line: string): { id?: unknown; result?: unknown; error?: unknown } | undefined {
 	try {
-		answer = JSON.parse(line);
+		const value: unknown = JSON.parse(line);
+		return typeof value === "object" && value !== null ? value : undefined;
 	} catch {
 		return undefined;
 	}
-	if (typeof answer !== "object" || answer === null || (answer as { id?: unknown }).id !== id) return undefined;
-	const { result, error } = answer as { result?: unknown; error?: unknown };
-	return error == null && result !== undefined;
+}
+
+function refused(error: unknown): HerdrAnswer {
+	const code = typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+	return typeof code === "string" ? { taken: false, code } : NOT_TAKEN;
 }
 
 export function socketTransport(endpoint: string): HerdrTransport {
@@ -101,20 +122,20 @@ export function socketTransport(endpoint: string): HerdrTransport {
 		new Promise((resolve) => {
 			let done = false;
 			let socket: Socket | undefined;
-			const timeout = setTimeout(() => finish(false), timeoutMs);
+			const timeout = setTimeout(() => finish(NOT_TAKEN), timeoutMs);
 			timeout.unref?.();
-			function finish(taken: boolean) {
+			function finish(answer: HerdrAnswer) {
 				if (done) return;
 				done = true;
 				clearTimeout(timeout);
 				socket?.destroy();
-				resolve(taken);
+				resolve(answer);
 			}
 			try {
 				// node:net loads on first report: only a Herdr pane needs it.
 				socket = process.getBuiltinModule("node:net").createConnection(endpoint);
 			} catch {
-				finish(false);
+				finish(NOT_TAKEN);
 				return;
 			}
 			const id = `pi-bolt:${process.pid}:${++requestCount}`;
@@ -122,7 +143,7 @@ export function socketTransport(endpoint: string): HerdrTransport {
 			// The answer is one line with this id: Herdr took the request only when it carries a result, not an error.
 			let buffered = "";
 			socket.setEncoding("utf8");
-			socket.on("error", () => finish(false));
+			socket.on("error", () => finish(NOT_TAKEN));
 			socket.on("connect", () => socket?.write(`${line}\n`));
 			socket.on("data", (chunk: string) => {
 				buffered += chunk;
@@ -134,9 +155,9 @@ export function socketTransport(endpoint: string): HerdrTransport {
 						return;
 					}
 				}
-				if (buffered.length > MAX_ANSWER_LENGTH) finish(false);
+				if (buffered.length > MAX_ANSWER_LENGTH) finish(NOT_TAKEN);
 			});
-			socket.on("end", () => finish(herdrAnswer(id, buffered) ?? false));
+			socket.on("end", () => finish(herdrAnswer(id, buffered) ?? NOT_TAKEN));
 		});
 }
 
@@ -145,25 +166,32 @@ export function executableTransport(bin: string): HerdrTransport {
 		new Promise((resolve) => {
 			let done = false;
 			let child: ReturnType<typeof spawn> | undefined;
-			const finish = (taken: boolean) => {
+			const finish = (answer: HerdrAnswer) => {
 				if (done) return;
 				done = true;
 				clearTimeout(timeout);
-				resolve(taken);
+				resolve(answer);
 			};
 			const timeout = setTimeout(() => {
 				child?.kill();
-				finish(false);
+				finish(NOT_TAKEN);
 			}, timeoutMs);
 			timeout.unref?.();
 			try {
-				child = spawn(bin, herdrArguments(request), { stdio: "ignore", windowsHide: true });
+				child = spawn(bin, herdrArguments(request), { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
 			} catch {
-				finish(false);
+				finish(NOT_TAKEN);
 				return;
 			}
-			child.on("error", () => finish(false));
-			child.on("exit", (code) => finish(code === 0));
+			// A refused request exits non-zero with Herdr's error answer on stderr.
+			let stderr = "";
+			child.stderr?.setEncoding("utf8");
+			child.stderr?.on("data", (chunk: string) => {
+				if (stderr.length < MAX_ANSWER_LENGTH) stderr += chunk;
+			});
+			child.on("error", () => finish(NOT_TAKEN));
+			// close, not exit: stderr is complete only then.
+			child.on("close", (code) => finish(code === 0 ? { taken: true } : herdrCommandError(stderr)));
 		});
 }
 
