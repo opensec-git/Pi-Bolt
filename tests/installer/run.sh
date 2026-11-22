@@ -12,11 +12,11 @@
 #   - an update keeps the build it replaces as <name>.previous (for pi-bolt update --rollback), and the same build installed
 #     again does not replace the one kept;
 #   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
-#   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz through a
-#     tar that reads it itself; an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead;
-#     where that cannot be downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks
-#     (a full disk) is said, and no .tar.gz is downloaded; stopped as it unpacks, it leaves
-#     neither xz nor tar running, nor any of the download;
+#   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz
+#     through a tar that reads it itself; with PIBOLT_SOURCE=npm (whose package is a .tar.xz) the installer says why it cannot;
+#     an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead; where that cannot be
+#     downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks (a full disk) is said, and
+#     no .tar.gz is downloaded; stopped as it unpacks, it leaves neither xz nor tar running, nor any of the download;
 #   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
@@ -134,6 +134,11 @@ out=$(install good PATH="$WORK/busybox-tar-too:$PATH")
 if installed && [ "$(dl tar.gz)" = 1 ] && [ "$(dl tar.xz)" = 0 ] && ! grep -q '^xz .*-d' "$WORK/calls"; then
 	pass "BusyBox's xz and tar: the .tar.gz is installed"; else
 	fail "BusyBox's xz and tar: the .tar.gz is installed"; printf '%s\n' "$out"; cat "$WORK/calls" 2>/dev/null; fi
+# (The same, with PIBOLT_SOURCE=npm: npm's package is a .tar.xz, which nothing here unpacks, and that is what is said.)
+out=$(install good PATH="$WORK/busybox-tar-too:$PATH" PIBOLT_SOURCE=npm)
+if ! installed && grep -q "npm has Pi-Bolt as a .tar.xz, which nothing here can unpack" <<<"$out"; then
+	pass "PIBOLT_SOURCE=npm where nothing unpacks a .tar.xz: says so"; else
+	fail "PIBOLT_SOURCE=npm where nothing unpacks a .tar.xz: says so"; printf '%s\n' "$out"; fi
 # (BusyBox's xz, and a tar that reads a .tar.xz itself, as macOS's: the .tar.xz, through tar.) #328
 if tar --version 2>/dev/null | grep -q liblzma; then
 	rm -f "$WORK/calls"

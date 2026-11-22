@@ -529,7 +529,8 @@ plan_download() {
 		esac
 	fi
 	if [ -z "$where" ] && [ "${PIBOLT_SOURCE:-auto}" = npm ]; then
-		echo fail-npm >"$TMP/plan"
+		# (npm has the .tar.xz only: where nothing unpacks it, that is why, not npm.)
+		if [ "$ext" = tar.gz ] && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then echo fail-npm-xz >"$TMP/plan"; else echo fail-npm >"$TMP/plan"; fi
 		return
 	fi
 	[ -n "$where" ] || where="github $(probe "$BASE/$NAME.$ext")"
@@ -897,6 +898,7 @@ install_release() {
 	read -r source ext final total ranges <"$TMP/plan" 2>/dev/null || source=fail
 	[ "$source" != fail ] || fail "download failed: $BASE/SHA256SUMS"
 	[ "$source" != fail-npm ] || fail "npm does not have Pi-Bolt $SHOWN_VERSION: $(npm_url)"
+	[ "$source" != fail-npm-xz ] || fail "PIBOLT_SOURCE is npm, and npm has Pi-Bolt as a .tar.xz, which nothing here can unpack (it takes XZ Utils' xz, or a tar with liblzma): install xz, or use PIBOLT_SOURCE=github"
 	if [ "$source" = npm ]; then
 		# The package is a .tgz with the release's .tar.xz in it, checked against the release's checksums like any download.
 		if download "$final" "$final" "$total" "$ranges" "$TMP/npm.tgz" &&
