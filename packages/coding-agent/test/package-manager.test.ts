@@ -1,5 +1,15 @@
 import { EventEmitter } from "node:events";
-import { chmodSync, existsSync, mkdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
@@ -1339,6 +1349,59 @@ Content`,
 
 			expect(packageManager.getInstalledPath("npm:@scope/pkg", "user")).toBeUndefined();
 			expect(runCommandSyncSpy).toHaveBeenNthCalledWith(2, "mise", ["exec", "node@22", "--", "npm", "root", "-g"]);
+		});
+
+		it("should keep global lookups across starts for the same npm command and environment", () => {
+			const globalRoot = join(tempDir, "global", "lib", "node_modules");
+			mkdirSync(join(globalRoot, "legacy-pkg"), { recursive: true });
+			const pnpmPath = join(tempDir, "pnpm", "global", "5", "node_modules", "pnpm-pkg");
+			mkdirSync(pnpmPath, { recursive: true });
+			const calls: string[] = [];
+			const start = (npmCommand: string[]) => {
+				const manager = new DefaultPackageManager({
+					cwd: tempDir,
+					agentDir,
+					settingsManager: SettingsManager.inMemory({ npmCommand }),
+				});
+				vi.spyOn(manager as any, "runCommandSync").mockImplementation((...callArgs: unknown[]) => {
+					const [command, args] = callArgs as [string, string[]];
+					calls.push([command, ...args].join(" "));
+					return args.includes("root")
+						? globalRoot
+						: JSON.stringify([{ dependencies: { "pnpm-pkg": { path: pnpmPath } } }]);
+				});
+				return manager;
+			};
+
+			expect(start(["npm"]).getInstalledPath("npm:legacy-pkg", "user")).toBe(join(globalRoot, "legacy-pkg"));
+			expect(start(["npm"]).getInstalledPath("npm:legacy-pkg", "user")).toBe(join(globalRoot, "legacy-pkg"));
+			expect(start(["npm"]).getInstalledPath("npm:missing-pkg", "user")).toBeUndefined();
+			expect(calls).toEqual(["npm root -g"]);
+
+			// A day later: looked up again.
+			const cacheFile = join(agentDir, "cache", "npm-global-lookups.json");
+			const saved = JSON.parse(readFileSync(cacheFile, "utf-8")) as { at: number };
+			writeFileSync(cacheFile, JSON.stringify({ ...saved, at: saved.at - 25 * 60 * 60 * 1000 }));
+			start(["npm"]).getInstalledPath("npm:legacy-pkg", "user");
+			start(["npm"]).getInstalledPath("npm:legacy-pkg", "user");
+			expect(calls).toEqual(["npm root -g", "npm root -g"]);
+
+			// Another PATH is another environment: looked up again.
+			vi.stubEnv("PATH", `${join(tempDir, "bin")}${process.env.PATH ? `:${process.env.PATH}` : ""}`);
+			try {
+				start(["npm"]).getInstalledPath("npm:legacy-pkg", "user");
+			} finally {
+				vi.unstubAllEnvs();
+			}
+			expect(calls).toEqual(["npm root -g", "npm root -g", "npm root -g"]);
+
+			// pnpm's list is kept the same way, under the pnpm command's own key.
+			expect(start(["pnpm"]).getInstalledPath("npm:pnpm-pkg", "user")).toBe(pnpmPath);
+			expect(start(["pnpm"]).getInstalledPath("npm:pnpm-pkg", "user")).toBe(pnpmPath);
+			// Not in the list: pnpm's root is looked at (and kept) too.
+			expect(start(["pnpm"]).getInstalledPath("npm:other-pkg", "user")).toBeUndefined();
+			expect(start(["pnpm"]).getInstalledPath("npm:other-pkg", "user")).toBeUndefined();
+			expect(calls.slice(3)).toEqual(["pnpm list -g --depth 0 --json", "pnpm root -g"]);
 		});
 
 		it("should install user npm packages into the pi-managed npm root", async () => {

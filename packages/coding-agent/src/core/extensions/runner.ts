@@ -314,6 +314,79 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 	);
 }
 
+/** One copyData pass: the copies made so far, by what they were made of; and whether the latest copy is a tree of plain data. */
+interface DataCopy {
+	seen: Map<object, unknown>;
+	tree: boolean;
+}
+
+/**
+ * A deep copy of `value` that a handler may change without changing `value`, as structuredClone makes, except that
+ * strings are shared (they cannot change). Plain objects and arrays are copied here; anything else (a Uint8Array, a
+ * Date, a class instance) by structuredClone, which also throws for functions and symbols as before. A value met twice
+ * is copied once, so shared parts and cycles stay as they are. `copying.tree` turns false when the copy has such a
+ * part or anything but plain data, which sameData cannot compare.
+ */
+function copyData(value: unknown, copying: DataCopy): unknown {
+	if (typeof value === "function" || typeof value === "symbol") return structuredClone(value);
+	if (typeof value !== "object" || value === null) return value;
+	const known = copying.seen.get(value);
+	if (known !== undefined) {
+		copying.tree = false;
+		return known;
+	}
+	if (Array.isArray(value)) {
+		const copy = new Array<unknown>(value.length);
+		copying.seen.set(value, copy);
+		for (let i = 0; i < value.length; i++) copy[i] = copyData(value[i], copying);
+		return copy;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	if (prototype !== Object.prototype && prototype !== null) {
+		copying.tree = false;
+		const copy = structuredClone(value);
+		copying.seen.set(value, copy);
+		return copy;
+	}
+	const record = value as Record<string, unknown>;
+	const copy: Record<string, unknown> = {};
+	copying.seen.set(value, copy);
+	for (const key of Object.keys(record)) {
+		const item = copyData(record[key], copying);
+		// (Assigning "__proto__", a key JSON.parse can make, would set the prototype instead.)
+		if (key === "__proto__")
+			Object.defineProperty(copy, key, { value: item, enumerable: true, writable: true, configurable: true });
+		else copy[key] = item;
+	}
+	return copy;
+}
+
+/**
+ * Whether `value` is equal to `tree` (a tree of plain data, from copyData): the same keys in the same order, the same
+ * primitives, plain objects and arrays only. Strings shared with it compare at once. The walk follows `tree`, so a
+ * cycle in `value` ends it.
+ */
+function sameData(value: unknown, tree: unknown): boolean {
+	if (Object.is(value, tree)) return true;
+	if (typeof value !== "object" || value === null || typeof tree !== "object" || tree === null) return false;
+	if (Array.isArray(tree)) {
+		if (!Array.isArray(value) || value.length !== tree.length) return false;
+		for (let i = 0; i < tree.length; i++) if (!sameData(value[i], tree[i])) return false;
+		return true;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	if (Array.isArray(value) || (prototype !== Object.prototype && prototype !== null)) return false;
+	const valueKeys = Object.keys(value);
+	const treeKeys = Object.keys(tree);
+	if (valueKeys.length !== treeKeys.length) return false;
+	for (let i = 0; i < treeKeys.length; i++) {
+		const key = treeKeys[i];
+		if (valueKeys[i] !== key) return false;
+		if (!sameData((value as Record<string, unknown>)[key], (tree as Record<string, unknown>)[key])) return false;
+	}
+	return true;
+}
+
 function sameMessages(left: AgentMessage[], right: AgentMessage[]): boolean {
 	return left.length === right.length && left.every((message, index) => message === right[index]);
 }
@@ -454,6 +527,11 @@ export class ExtensionRunner {
 	private readonly pageQueues = new Map<string, Promise<void>>();
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
+	/**
+	 * Per message given to emitContext, a copy that no handler is given: what emitContext returns for that message while
+	 * the handlers leave it unchanged, so an unchanged message is the same object in every request (keepStableCopies).
+	 */
+	private readonly stableContextCopies = new WeakMap<AgentMessage, AgentMessage>();
 
 	constructor(
 		extensions: Extension[],
@@ -1660,10 +1738,19 @@ export class ExtensionRunner {
 	 */
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
 		// The copy only protects the transcript from handlers that edit it in place. Without
-		// handlers it would duplicate the whole context, images included, on every request.
+		// handlers it would duplicate the whole context on every request.
 		if (!this.hasHandlers("context") && !this.hasHandlers("context_with_system")) return messages;
 		const ctx = this.createContext();
-		let currentMessages = structuredClone(messages);
+		// Each handler run gets its own deep copy, as structuredClone made, but one that shares the strings (they cannot
+		// change): a 9 MB conversation is mostly strings (images, tool output), which a copy would duplicate per request.
+		const copying: DataCopy = { seen: new Map(), tree: true };
+		const originals = new Map<AgentMessage, AgentMessage>();
+		let currentMessages = messages.map((message) => {
+			copying.tree = true;
+			const copy = copyData(message, copying) as AgentMessage;
+			if (copying.tree) originals.set(copy, message);
+			return copy;
+		});
 
 		for (const { ext, handlers } of snapshotEventHandlers(this.extensions, "context")) {
 			for (const handler of handlers) {
@@ -1721,7 +1808,36 @@ export class ExtensionRunner {
 			}
 		}
 
-		return currentMessages;
+		return this.keepStableCopies(currentMessages, originals);
+	}
+
+	/**
+	 * `messages` (what the handlers returned) with each copy that is still equal to its message's stable copy replaced by
+	 * that stable copy. So an unchanged message reaches the provider as the same object in every request, as it does
+	 * without handlers, and what was made of it can be reused (pi-ai's request-cache.ts and request-body.ts). Handlers
+	 * never get a stable copy, so none can change it; and it is only returned while it equals what the handlers left.
+	 * `originals` maps each copy handed out to the message it was made of.
+	 */
+	private keepStableCopies(
+		messages: AgentMessage[],
+		originals: ReadonlyMap<AgentMessage, AgentMessage>,
+	): AgentMessage[] {
+		return messages.map((message) => {
+			const original = originals.get(message);
+			if (original === undefined) return message;
+			let stable = this.stableContextCopies.get(original);
+			if (stable !== undefined && sameData(message, stable)) return stable;
+			// The first request with this message, or a handler changed the copy, or something changed the message in place
+			// since its stable copy was made: only then is a new one made.
+			if (stable === undefined || !sameData(original, stable)) {
+				const copying: DataCopy = { seen: new Map(), tree: true };
+				stable = copyData(original, copying) as AgentMessage;
+				if (!copying.tree) return message;
+				this.stableContextCopies.set(original, stable);
+				if (sameData(message, stable)) return stable;
+			}
+			return message;
+		});
 	}
 
 	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {

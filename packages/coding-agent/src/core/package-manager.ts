@@ -74,6 +74,20 @@ interface NpmCommand {
 
 const NETWORK_TIMEOUT_MS = 10000;
 
+/** The package manager's global lookups for one npm command and environment (getGlobalLookups). */
+interface GlobalLookups {
+	key: string;
+	/** When the first of them ran (Date.now()). */
+	at: number;
+	/** The global node_modules folder (`npm root -g`, or Bun's). */
+	root?: string;
+	/** pnpm's global packages, by name (`pnpm list -g`). */
+	pnpmPackages?: Record<string, string>;
+}
+
+/** How long global lookups are kept: a global package installed outside Pi meanwhile is found after this at most. */
+const GLOBAL_LOOKUPS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 /** End of a captured command's output kept for its error message. */
 const CAPTURED_OUTPUT_TAIL_CHARS = 8000;
 
@@ -987,8 +1001,8 @@ export class DefaultPackageManager implements PackageManager {
 	private agentDir: string;
 	private settingsManager: SettingsManager;
 	private builtinExtensions: string[];
-	private globalNpmRoot: string | undefined;
-	private globalNpmRootCommandKey: string | undefined;
+	/** The global lookups for the latest npm command (getGlobalLookups). */
+	private globalLookups: GlobalLookups | undefined;
 	private npmOnPath: boolean | undefined;
 	private progressCallback: ProgressCallback | undefined;
 	private commandOutput: PackageCommandOutput;
@@ -2696,33 +2710,83 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private getGlobalNpmRoot(): string {
-		const npmCommand = this.getNpmCommand();
-		const commandKey = [npmCommand.command, ...npmCommand.args].join("\0");
-		if (this.globalNpmRoot && this.globalNpmRootCommandKey === commandKey) {
-			return this.globalNpmRoot;
+		const lookups = this.getGlobalLookups();
+		if (lookups.root === undefined) {
+			if (this.getPackageManagerName() === "bun") {
+				const binDir = this.runNpmCommandSync(["pm", "bin", "-g"]).trim();
+				lookups.root = join(dirname(binDir), "install", "global", "node_modules");
+			} else {
+				lookups.root = this.runNpmCommandSync(["root", "-g"]).trim();
+			}
+			this.saveGlobalLookups(lookups);
 		}
-		if (this.getPackageManagerName() === "bun") {
-			const binDir = this.runNpmCommandSync(["pm", "bin", "-g"]).trim();
-			this.globalNpmRoot = join(dirname(binDir), "install", "global", "node_modules");
-		} else {
-			this.globalNpmRoot = this.runNpmCommandSync(["root", "-g"]).trim();
-		}
-		this.globalNpmRootCommandKey = commandKey;
-		return this.globalNpmRoot;
+		return lookups.root;
 	}
 
 	private getPnpmGlobalPackagePath(packageName: string): string | undefined {
 		if (this.getPackageManagerName() !== "pnpm") {
 			return undefined;
 		}
-
-		const output = this.runNpmCommandSync(["list", "-g", "--depth", "0", "--json"]);
-		const entries = JSON.parse(output) as Array<{ dependencies?: Record<string, { path?: string }> }>;
-		for (const entry of entries) {
-			const path = entry.dependencies?.[packageName]?.path;
-			if (path) return path;
+		const lookups = this.getGlobalLookups();
+		if (lookups.pnpmPackages === undefined) {
+			const output = this.runNpmCommandSync(["list", "-g", "--depth", "0", "--json"]);
+			const entries = JSON.parse(output) as Array<{ dependencies?: Record<string, { path?: string }> }>;
+			const packages: Record<string, string> = {};
+			for (const entry of entries) {
+				for (const [name, dependency] of Object.entries(entry.dependencies ?? {})) {
+					if (dependency?.path && !Object.hasOwn(packages, name)) packages[name] = dependency.path;
+				}
+			}
+			lookups.pnpmPackages = packages;
+			this.saveGlobalLookups(lookups);
 		}
-		return undefined;
+		return Object.hasOwn(lookups.pnpmPackages, packageName) ? lookups.pnpmPackages[packageName] : undefined;
+	}
+
+	/**
+	 * What the package manager's global lookups returned for the current npm command. Each lookup runs the package
+	 * manager (`npm root -g`, `pnpm list -g`: 100 to 300 ms), and a start runs them whenever a user package is not in
+	 * Pi's npm root (a legacy global install, or a package missing offline). So they are kept in the agent's cache
+	 * folder, for the same command, PATH, npm settings in the environment and user .npmrc, for a day. A path they give
+	 * is only used if it exists.
+	 */
+	private getGlobalLookups(): GlobalLookups {
+		const npmCommand = this.getNpmCommand();
+		const env = getEnv();
+		const userConfig = env.npm_config_userconfig ?? env.NPM_CONFIG_USERCONFIG ?? join(homedir(), ".npmrc");
+		const key = JSON.stringify([
+			npmCommand.command,
+			...npmCommand.args,
+			env.PATH ?? env.Path ?? "",
+			Object.entries(env)
+				.filter(([name]) => /^(npm_config_|pnpm_|bun_install)/i.test(name))
+				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+			statSync(userConfig, { throwIfNoEntry: false })?.mtimeMs ?? null,
+		]);
+		if (this.globalLookups?.key === key) return this.globalLookups;
+		let saved: GlobalLookups | undefined;
+		try {
+			saved = JSON.parse(readFileSync(this.getGlobalLookupsPath(), "utf-8")) as GlobalLookups;
+		} catch {
+			// None yet, or unreadable: look again.
+		}
+		const fresh = saved?.key === key && Date.now() - saved.at < GLOBAL_LOOKUPS_MAX_AGE_MS;
+		this.globalLookups = fresh && saved ? saved : { key, at: Date.now() };
+		return this.globalLookups;
+	}
+
+	private saveGlobalLookups(lookups: GlobalLookups): void {
+		const path = this.getGlobalLookupsPath();
+		try {
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, JSON.stringify(lookups));
+		} catch {
+			// The next start looks again.
+		}
+	}
+
+	private getGlobalLookupsPath(): string {
+		return join(this.agentDir, "cache", "npm-global-lookups.json");
 	}
 
 	private getManagedNpmInstallPath(source: NpmSource, scope: SourceScope): string {

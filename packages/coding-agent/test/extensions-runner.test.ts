@@ -6,6 +6,7 @@ import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { createEventBus } from "../src/core/event-bus.ts";
@@ -1396,6 +1397,195 @@ describe("ExtensionRunner", () => {
 
 			await runner.emit({ type: "agent_end", messages: [] });
 			expect(calls).toEqual(["A", "C", "B"]);
+		});
+	});
+
+	describe("context copies", () => {
+		const image = "iVBORw0KGgo".repeat(1000);
+
+		function conversation(): AgentMessage[] {
+			return [
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "look" },
+						{ type: "image", data: image, mimeType: "image/png" },
+					],
+					timestamp: 1,
+				},
+				{
+					role: "toolResult",
+					toolCallId: "call_1",
+					toolName: "read",
+					content: [{ type: "text", text: "x".repeat(10_000) }],
+					// Not JSON, as typed, but an extension can put anything in a message it makes.
+					details: { bytes: new Uint8Array([1, 2, 3]), lines: 1 },
+					isError: false,
+					timestamp: 2,
+				} as unknown as AgentMessage,
+				{ role: "user", content: [{ type: "text", text: "second" }], timestamp: 3 },
+			];
+		}
+
+		async function runnerWith(handler: (messages: AgentMessage[]) => AgentMessage[] | undefined) {
+			const runtime = createExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					pi.on("context", (event) => {
+						const messages = handler(event.messages);
+						return messages ? { messages } : undefined;
+					});
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			return new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+		}
+
+		it("gives every handler run a private deep copy, images and binary details included", async () => {
+			const messages = conversation();
+			const before = structuredClone(messages);
+			const seen: AgentMessage[][] = [];
+			const runner = await runnerWith((visible) => {
+				seen.push(visible);
+				const first = visible[0] as Extract<AgentMessage, { role: "user" }>;
+				(first.content as Array<{ type: string; data?: string }>)[1].data = "replaced";
+				const result = visible[1] as AgentMessage & { details: { bytes: Uint8Array } };
+				result.details.bytes[0] = 9;
+				visible.push({ role: "user", content: [{ type: "text", text: "added" }], timestamp: 4 });
+				return undefined;
+			});
+
+			const first = await runner.emitContext(messages);
+			const second = await runner.emitContext(messages);
+
+			expect(messages).toEqual(before);
+			expect((messages[1] as AgentMessage & { details: { bytes: Uint8Array } }).details.bytes).toEqual(
+				new Uint8Array([1, 2, 3]),
+			);
+			// Each run saw the messages as they are, not as the previous run left its copy.
+			expect(seen[1]).not.toBe(seen[0]);
+			expect(seen[1][0]).not.toBe(seen[0][0]);
+			expect(first).toHaveLength(4);
+			expect(second).toHaveLength(4);
+			expect((first[0] as { content: Array<{ data?: string }> }).content[1].data).toBe("replaced");
+			expect((second[0] as { content: Array<{ data?: string }> }).content[1].data).toBe("replaced");
+		});
+
+		it("returns an unchanged message as the same copy on every request, never the original", async () => {
+			const messages = conversation();
+			const handed: AgentMessage[][] = [];
+			const runner = await runnerWith((visible) => {
+				handed.push(visible);
+				return undefined;
+			});
+
+			const first = await runner.emitContext(messages);
+			const second = await runner.emitContext(messages);
+
+			expect(first).toEqual(messages);
+			expect(second).toEqual(messages);
+			for (let i = 0; i < messages.length; i++) expect(first[i]).not.toBe(messages[i]);
+			for (const i of [0, 2]) {
+				expect(second[i]).toBe(first[i]);
+				// Handlers never get the copy that is returned.
+				expect(handed[1][i]).not.toBe(second[i]);
+			}
+			// A binary detail is not plain data: that message is returned as the handler's copy, made anew each time.
+			expect(second[1]).not.toBe(first[1]);
+			expect(second[1]).toBe(handed[1][1]);
+		});
+
+		it("keeps returned copies unchanged when a handler edits its copy later", async () => {
+			const messages = conversation().filter((message) => message.role === "user");
+			const handed: AgentMessage[][] = [];
+			const runner = await runnerWith((visible) => {
+				handed.push(visible);
+				return undefined;
+			});
+
+			const first = await runner.emitContext(messages);
+			// A handler that kept its copy and changes it after the request was built.
+			(handed[0][1] as { content: Array<{ text?: string }> }).content[0].text = "late edit";
+			const second = await runner.emitContext(messages);
+
+			expect(second[1]).toBe(first[1]);
+			expect((second[1] as { content: Array<{ text?: string }> }).content[0].text).toBe("second");
+		});
+
+		it("returns a handler's edit, and the stable copy again once the handler stops editing", async () => {
+			const messages = conversation().filter((message) => message.role === "user");
+			let edit = true;
+			const runner = await runnerWith((visible) => {
+				if (edit) (visible[1] as { content: Array<{ text?: string }> }).content[0].text = "edited";
+				return undefined;
+			});
+
+			const plain = await (await runnerWith(() => undefined)).emitContext(messages);
+			const edited = await runner.emitContext(messages);
+			const editedAgain = await runner.emitContext(messages);
+			edit = false;
+			const unedited = await runner.emitContext(messages);
+			const uneditedAgain = await runner.emitContext(messages);
+
+			expect((edited[1] as { content: Array<{ text?: string }> }).content[0].text).toBe("edited");
+			expect(editedAgain[1]).not.toBe(edited[1]);
+			expect(editedAgain[0]).toBe(edited[0]);
+			expect(unedited).toEqual(plain);
+			expect(uneditedAgain[1]).toBe(unedited[1]);
+		});
+
+		it("follows a message changed in place between requests", async () => {
+			const messages = conversation().filter((message) => message.role === "user");
+			const runner = await runnerWith(() => undefined);
+
+			const first = await runner.emitContext(messages);
+			(messages[1] as { content: Array<{ text?: string }> }).content[0].text = "changed in place";
+			const second = await runner.emitContext(messages);
+			const third = await runner.emitContext(messages);
+
+			expect((first[1] as { content: Array<{ text?: string }> }).content[0].text).toBe("second");
+			expect((second[1] as { content: Array<{ text?: string }> }).content[0].text).toBe("changed in place");
+			expect(second[0]).toBe(first[0]);
+			expect(third[1]).toBe(second[1]);
+		});
+
+		it("copies shared parts and cycles as structuredClone did", async () => {
+			const shared = { note: "shared" };
+			const details: Record<string, unknown> = { a: shared, b: shared };
+			details.self = details;
+			const message = {
+				role: "toolResult",
+				toolCallId: "call_1",
+				toolName: "read",
+				content: [{ type: "text", text: "ok" }],
+				details,
+				isError: false,
+				timestamp: 1,
+			} as AgentMessage;
+			const runner = await runnerWith(() => undefined);
+
+			const [copy] = await runner.emitContext([message]);
+			const copied = (copy as AgentMessage & { details: Record<string, unknown> }).details;
+
+			expect(copied).not.toBe(details);
+			expect(copied.self).toBe(copied);
+			expect(copied.a).toBe(copied.b);
+			expect(copied.a).not.toBe(shared);
+		});
+
+		it("copies a __proto__ key as a key", async () => {
+			const message = JSON.parse(
+				'{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1,"__proto__":{"polluted":true}}',
+			) as AgentMessage;
+			const runner = await runnerWith(() => undefined);
+
+			const [copy] = await runner.emitContext([message]);
+
+			expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+			expect(Object.keys(copy)).toEqual(Object.keys(message));
+			expect((copy as unknown as { polluted?: boolean }).polluted).toBeUndefined();
 		});
 	});
 
