@@ -31,7 +31,7 @@
   <a href="#quick-start"><img alt="Scoop" src="https://img.shields.io/badge/Scoop-opensec--git-3d8fd1?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D" /></a>
   <a href="#quick-start"><img alt="npm" src="https://img.shields.io/badge/npm-pi--bolt-CB3837?style=flat-square&logo=npm&logoColor=white" /></a>
   <a href="#quick-start"><img alt="mise" src="https://img.shields.io/badge/mise-github%20backend-6c47ff?style=flat-square" /></a>
-  <a href="https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git"><img alt="AUR" src="https://img.shields.io/badge/AUR-pi--bolt-1793d1?style=flat-square&logo=archlinux&logoColor=white" /></a>
+  <a href="https://aur.archlinux.org/packages/pi-bolt-bin"><img alt="AUR" src="https://img.shields.io/badge/AUR-pi--bolt-1793d1?style=flat-square&logo=archlinux&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -94,9 +94,9 @@ Or:
   `mise upgrade --bump github:opensec-git/Pi-Bolt`
 - npm: `npm install -g --allow-scripts=pi-bolt pi-bolt`, updated with `npm install -g --allow-scripts=pi-bolt pi-bolt@latest`
 - Bun: `bun add -g --trust pi-bolt`
-- Arch Linux: the community AUR package
-  [`pi-bolt-avx2-bin-release-git`](https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git) (the x86-64 AVX2 build,
-  signature checked), `paru -S pi-bolt-avx2-bin-release-git`
+- Arch Linux: the community AUR package [`pi-bolt-bin`](https://aur.archlinux.org/packages/pi-bolt-bin) (the x86-64
+  baseline and ARM64 builds), `paru -S pi-bolt-bin`, or [`pi-bolt-avx2-bin`](https://aur.archlinux.org/packages/pi-bolt-avx2-bin)
+  for the x86-64 AVX2 build; both check the download against the release's checksum
 
 Then, in your project:
 
