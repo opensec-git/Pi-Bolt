@@ -344,7 +344,8 @@ These are the rules for any code bundled into a single executable. Most plugins 
 `gen-plugin-manifest.mjs` also take the older names Pi's loader takes: [what it copies](#what-it-copies)). List these as
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
-`node_modules`. A second copy would mean duplicate classes and registries.
+`node_modules`. A second copy would mean duplicate classes and registries. An extension loaded from its files gets Pi's own
+modules by these names in every module it loads, its JavaScript in `node_modules` included, not a copy installed beside it.
 
 **Use static imports.** The bundler follows `import x from "./file.ts"` and `await import("./file.ts")` with a literal path. It
 cannot follow an import or `require()` of a path computed at run time. Replace
