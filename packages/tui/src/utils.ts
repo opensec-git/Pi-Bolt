@@ -98,13 +98,24 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 	if (!hasAnsi && !hasTabs) {
 		let result = "";
 		let width = 0;
-		for (const { segment } of getGraphemeSegmenter().segment(text)) {
-			const w = graphemeWidth(segment);
-			if (width + w > maxWidth) {
-				break;
+		if (isStandaloneRun(text)) {
+			for (const segment of text) {
+				const w = graphemeWidth(segment);
+				if (width + w > maxWidth) {
+					break;
+				}
+				result += segment;
+				width += w;
 			}
-			result += segment;
-			width += w;
+		} else {
+			for (const { segment } of getGraphemeSegmenter().segment(text)) {
+				const w = graphemeWidth(segment);
+				if (width + w > maxWidth) {
+					break;
+				}
+				result += segment;
+				width += w;
+			}
 		}
 		return { text: result, width };
 	}
@@ -145,17 +156,33 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 			end++;
 		}
 
-		for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
-			const w = graphemeWidth(segment);
-			if (width + w > maxWidth) {
-				return { text: result, width };
+		const run = text.slice(i, end);
+		if (isStandaloneRun(run)) {
+			for (const segment of run) {
+				const w = graphemeWidth(segment);
+				if (width + w > maxWidth) {
+					return { text: result, width };
+				}
+				if (pendingAnsi) {
+					result += pendingAnsi;
+					pendingAnsi = "";
+				}
+				result += segment;
+				width += w;
 			}
-			if (pendingAnsi) {
-				result += pendingAnsi;
-				pendingAnsi = "";
+		} else {
+			for (const { segment } of getGraphemeSegmenter().segment(run)) {
+				const w = graphemeWidth(segment);
+				if (width + w > maxWidth) {
+					return { text: result, width };
+				}
+				if (pendingAnsi) {
+					result += pendingAnsi;
+					pendingAnsi = "";
+				}
+				result += segment;
+				width += w;
 			}
-			result += segment;
-			width += w;
 		}
 		i = end;
 	}
@@ -224,23 +251,63 @@ function isStandaloneGraphemeRun(text: string): boolean {
 }
 
 /**
- * Segment a run that contains complex units. A standalone unit whose neighbours are standalone too
- * is its own cluster, since no grapheme rule joins two standalone units. Only the stretches between
- * such units go through Intl.Segmenter; cutting there is safe because both cut edges are boundaries.
+ * Whether a code point outside the BMP forms a grapheme cluster on its own between standalone units: pictographs and
+ * emoji, without the emoji modifiers (which extend the emoji before them) and the regional indicators (which pair).
+ * Only a joiner, a variation selector or a modifier can join such an emoji to its neighbours, and none of those is
+ * standalone. test/standalone-graphemes.test.ts checks every code point against Intl.Segmenter.
+ */
+function isStandalonePictograph(codePoint: number): boolean {
+	return (
+		(codePoint >= 0x1f300 && codePoint <= 0x1f3fa) ||
+		(codePoint >= 0x1f400 && codePoint <= 0x1f64f) ||
+		(codePoint >= 0x1f680 && codePoint <= 0x1f6ff) ||
+		(codePoint >= 0x1f900 && codePoint <= 0x1f9ff) ||
+		(codePoint >= 0x1fa70 && codePoint <= 0x1faff)
+	);
+}
+
+/** Code units of the standalone character at `index`: 1 (a standalone unit), 2 (a standalone pictograph) or 0. */
+function standaloneLength(text: string, index: number): number {
+	const code = text.charCodeAt(index);
+	if (isStandaloneGraphemeUnit(code)) return 1;
+	// High surrogates of U+1F000..U+1FBFF.
+	if (code >= 0xd83c && code <= 0xd83e && isStandalonePictograph(text.codePointAt(index)!)) return 2;
+	return 0;
+}
+
+/** Whether the text before `index` is empty or ends with a standalone character. */
+function standaloneBefore(text: string, index: number): boolean {
+	if (index === 0) return true;
+	const code = text.charCodeAt(index - 1);
+	if (isStandaloneGraphemeUnit(code)) return true;
+	return code >= 0xdc00 && code <= 0xdfff && index >= 2 && standaloneLength(text, index - 2) === 2;
+}
+
+/**
+ * Segment a run that contains complex units. A standalone character whose neighbours are standalone too is its own
+ * cluster, since no grapheme rule joins two standalone characters. Only the stretches between such characters go
+ * through Intl.Segmenter; cutting there is safe because both cut edges are boundaries. A reply with an emoji in it then
+ * never needs Intl.Segmenter, whose first use loads ICU's data.
  */
 function* segmentGraphemes(text: string): Generator<string> {
-	const standalone = (index: number) =>
-		index < 0 || index >= text.length || isStandaloneGraphemeUnit(text.charCodeAt(index));
 	let complexStart = -1;
-	for (let i = 0; i < text.length; i++) {
-		if (standalone(i) && standalone(i - 1) && standalone(i + 1)) {
+	let i = 0;
+	while (i < text.length) {
+		const length = standaloneLength(text, i);
+		if (
+			length > 0 &&
+			standaloneBefore(text, i) &&
+			(i + length === text.length || standaloneLength(text, i + length) > 0)
+		) {
 			if (complexStart >= 0) {
 				for (const { segment } of getGraphemeSegmenter().segment(text.slice(complexStart, i))) yield segment;
 				complexStart = -1;
 			}
-			yield text[i]!;
-		} else if (complexStart < 0) {
-			complexStart = i;
+			yield length === 1 ? text[i]! : text.slice(i, i + 2);
+			i += length;
+		} else {
+			if (complexStart < 0) complexStart = i;
+			i++;
 		}
 	}
 	if (complexStart >= 0) {
@@ -255,6 +322,32 @@ function* segmentGraphemes(text: string): Generator<string> {
  */
 function graphemesOf(text: string): Iterable<string> {
 	return isStandaloneGraphemeRun(text) ? text : segmentGraphemes(text);
+}
+
+/**
+ * Whether every code point of `text` is a grapheme cluster of its own: it holds standalone characters only. Measuring,
+ * truncating and wrapping split such a run per code point without Intl.Segmenter (whose first use loads ICU's data) and give
+ * any other run to Intl.Segmenter whole, as one call: cutting it around its standalone stretches, as graphemesOf does for
+ * slicing, costs more than that one call for text that needs the segmenter anyway (Cyrillic, Arabic, Indic). Each loops over
+ * the run or over the segmenter's segments, never over a mix of both in one loop, which made the loops slower.
+ */
+function isStandaloneRun(text: string): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const length = standaloneLength(text, i);
+		if (length === 0) return false;
+		i += length - 1;
+	}
+	return true;
+}
+
+/** The code points of `text` when it is a standalone run (isStandaloneRun), else undefined. Exported for its test. */
+export function standaloneClustersForTest(text: string): string[] | undefined {
+	return isStandaloneRun(text) ? [...text] : undefined;
+}
+
+/** graphemesOf as an array. Exported for its test. */
+export function graphemesOfForTest(text: string): string[] {
+	return [...graphemesOf(text)];
 }
 
 // Widths of single non-ASCII BMP characters; bounded by the 64K code units.
@@ -338,6 +431,20 @@ function clusterWidth(segment: string): number {
 	return width;
 }
 
+/** The width of a standalone run (isStandaloneRun): its code points are its clusters. */
+function standaloneRunWidth(text: string): number {
+	let width = 0;
+	for (const segment of text) width += graphemeWidth(segment);
+	return width;
+}
+
+/** The width of a run of any text, cluster by cluster as Intl.Segmenter splits it. */
+function segmentedWidth(text: string): number {
+	let width = 0;
+	for (const { segment } of getGraphemeSegmenter().segment(text)) width += graphemeWidth(segment);
+	return width;
+}
+
 /**
  * Calculate the visible width of a string in terminal columns.
  */
@@ -364,10 +471,7 @@ export function visibleWidth(str: string): number {
 	const clean = stripTerminalSequences(str.includes("\t") ? str.replaceAll("\t", "   ") : str);
 
 	// Calculate width
-	let width = 0;
-	for (const { segment } of getGraphemeSegmenter().segment(clean)) {
-		width += graphemeWidth(segment);
-	}
+	const width = isStandaloneRun(clean) ? standaloneRunWidth(clean) : segmentedWidth(clean);
 
 	// Cache result
 	if (!cacheable) return width;
@@ -1153,10 +1257,6 @@ export function getActiveBackgroundAnsi(text: string): string {
 	return tracker.getActiveBackgroundCode();
 }
 
-function* graphemeSegments(text: string): Generator<string> {
-	for (const { segment } of getGraphemeSegmenter().segment(text)) yield segment;
-}
-
 /**
  * Split text into words while keeping ANSI codes attached. `widths`, if given, gets each token's visible width where it is
  * known without measuring it again (printable ASCII and ANSI codes only: one column a character), and -1 elsewhere.
@@ -1240,7 +1340,7 @@ function splitIntoTokensWithAnsi(text: string, widths?: number[]): string[] {
 				start = runEnd;
 			}
 		} else {
-			for (const segment of graphemeSegments(chunk)) {
+			const take = (segment: string): void => {
 				const segmentIsSpace = segment === " ";
 				if (!segmentIsSpace && cjkBreakRegex.test(segment)) {
 					flushCurrent();
@@ -1248,9 +1348,14 @@ function splitIntoTokensWithAnsi(text: string, widths?: number[]): string[] {
 					pendingAnsi = "";
 					tokens.push(token);
 					widths?.push(-1);
-					continue;
+					return;
 				}
 				addSegment(segment, segmentIsSpace, -1);
+			};
+			if (isStandaloneRun(chunk)) {
+				for (const segment of chunk) take(segment);
+			} else {
+				for (const { segment } of getGraphemeSegmenter().segment(chunk)) take(segment);
 			}
 		}
 
@@ -1805,11 +1910,16 @@ function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): s
 				currentWidth += count;
 			}
 		} else {
-			for (const { segment } of getGraphemeSegmenter().segment(chunk)) {
+			const take = (segment: string): void => {
 				const cells = visibleWidth(segment);
 				if (currentWidth + cells > width) finishRow();
 				currentLine += segment;
 				currentWidth += cells;
+			};
+			if (isStandaloneRun(chunk)) {
+				for (const segment of chunk) take(segment);
+			} else {
+				for (const { segment } of getGraphemeSegmenter().segment(chunk)) take(segment);
 			}
 			i = end;
 		}
@@ -1955,18 +2065,35 @@ export function truncateToWidth(
 	const hasTabs = text.includes("\t");
 
 	if (!hasAnsi && !hasTabs) {
-		for (const { segment } of getGraphemeSegmenter().segment(text)) {
-			const width = graphemeWidth(segment);
-			if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
-				result += segment;
-				keptWidth += width;
-			} else {
-				keepContiguousPrefix = false;
+		if (isStandaloneRun(text)) {
+			for (const segment of text) {
+				const width = graphemeWidth(segment);
+				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+					result += segment;
+					keptWidth += width;
+				} else {
+					keepContiguousPrefix = false;
+				}
+				visibleSoFar += width;
+				if (visibleSoFar > maxWidth) {
+					overflowed = true;
+					break;
+				}
 			}
-			visibleSoFar += width;
-			if (visibleSoFar > maxWidth) {
-				overflowed = true;
-				break;
+		} else {
+			for (const { segment } of getGraphemeSegmenter().segment(text)) {
+				const width = graphemeWidth(segment);
+				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+					result += segment;
+					keptWidth += width;
+				} else {
+					keepContiguousPrefix = false;
+				}
+				visibleSoFar += width;
+				if (visibleSoFar > maxWidth) {
+					overflowed = true;
+					break;
+				}
 			}
 		}
 		exhaustedInput = !overflowed;
@@ -2010,24 +2137,48 @@ export function truncateToWidth(
 				end++;
 			}
 
-			for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
-				const width = graphemeWidth(segment);
-				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
-					if (pendingAnsi) {
-						result += pendingAnsi;
+			const run = text.slice(i, end);
+			if (isStandaloneRun(run)) {
+				for (const segment of run) {
+					const width = graphemeWidth(segment);
+					if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+						if (pendingAnsi) {
+							result += pendingAnsi;
+							pendingAnsi = "";
+						}
+						result += segment;
+						keptWidth += width;
+					} else {
+						keepContiguousPrefix = false;
 						pendingAnsi = "";
 					}
-					result += segment;
-					keptWidth += width;
-				} else {
-					keepContiguousPrefix = false;
-					pendingAnsi = "";
-				}
 
-				visibleSoFar += width;
-				if (visibleSoFar > maxWidth) {
-					overflowed = true;
-					break;
+					visibleSoFar += width;
+					if (visibleSoFar > maxWidth) {
+						overflowed = true;
+						break;
+					}
+				}
+			} else {
+				for (const { segment } of getGraphemeSegmenter().segment(run)) {
+					const width = graphemeWidth(segment);
+					if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+						if (pendingAnsi) {
+							result += pendingAnsi;
+							pendingAnsi = "";
+						}
+						result += segment;
+						keptWidth += width;
+					} else {
+						keepContiguousPrefix = false;
+						pendingAnsi = "";
+					}
+
+					visibleSoFar += width;
+					if (visibleSoFar > maxWidth) {
+						overflowed = true;
+						break;
+					}
 				}
 			}
 			if (overflowed) {
