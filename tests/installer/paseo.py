@@ -73,6 +73,7 @@ setup_style
 INSTALL=$TEST_INSTALL
 BIN_DIR=$TEST_BIN
 NAME=build
+installed_command=${TEST_COMMAND:-$BIN_DIR/pi-bolt}
 TERMUX=""
 ''' + setup + '\noffer_paseo\nprintf "offer finished\\n"\n')
         result = subprocess.run(
@@ -147,6 +148,12 @@ TERMUX=""
         self.run_offer()
         self.assert_provider()
         self.assertFalse(marker.exists(), "registration must not load the caller's Bun preloads")
+
+    def test_no_path_install_uses_its_own_command(self):
+        # With PIBOLT_NO_PATH=1 nothing is linked into BIN_DIR: the provider runs the installed build itself.
+        command = self.build / "pi"
+        self.run_offer(TEST_COMMAND=str(command))
+        self.assertEqual(json.loads(self.config.read_text())["agents"]["providers"]["pi-bolt"]["command"], [str(command)])
 
     def test_termux_uses_its_launcher(self):
         self.run_offer(setup='TERMUX=1')

@@ -1292,7 +1292,8 @@ EOF
 	# resolve relative installer paths before changing directories.
 	paseo_exe="$INSTALL/$NAME/$(command_of_build)"
 	paseo_config="${PASEO_HOME:-$HOME/.paseo}/config.json"
-	paseo_command="$BIN_DIR/pi-bolt"
+	# (The command this installation is run with: $BIN_DIR/pi-bolt is not this installation's with PIBOLT_NO_PATH=1.)
+	paseo_command="$installed_command"
 	case "$paseo_exe" in /*) ;; *) paseo_exe="$PWD/$paseo_exe" ;; esac
 	case "$paseo_config" in /*) ;; *) paseo_config="$PWD/$paseo_config" ;; esac
 	case "$paseo_command" in /*) ;; *) paseo_command="$PWD/$paseo_command" ;; esac
