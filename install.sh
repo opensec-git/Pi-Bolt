@@ -1314,15 +1314,18 @@ offer_paseo() {
 		ask '\nAdd Pi-Bolt as a Paseo provider in %s? [Y/n] ' "$(tilde "$config")"
 		case "$answer" in n | N | no | NO) return 0 ;; esac
 	fi
-	if out=$(register_paseo "$config" 2>&1); then
-		case "$(printf '%s\n' "$out" | tail -n 1)" in
-		kept) printf '  %sPaseo already has a pi-bolt provider: left unchanged%s\n' "$dim" "$reset" ;;
-		*) printf '  %s%s%s added Pi-Bolt to Paseo (%s): run %spaseo reload%s to use it\n' "$green" "$CHECK" "$reset" "$(tilde "$config")" "$bold" "$reset" ;;
-		esac
-	else
-		printf '  %scould not add Pi-Bolt to Paseo (Pi-Bolt itself is installed): %s%s\n' "$red" "$(printf '%s' "$out" | tail -n 1)" "$reset"
+	# (What the script says is what it did: an exit status alone is not taken for it, as in verify_signature.)
+	paseo_status=0
+	out=$(register_paseo "$config" 2>&1) || paseo_status=$?
+	said=$(printf '%s\n' "$out" | tail -n 1)
+	case "$paseo_status:$said" in
+	0:added) printf '  %s%s%s added Pi-Bolt to Paseo (%s): run %spaseo reload%s to use it\n' "$green" "$CHECK" "$reset" "$(tilde "$config")" "$bold" "$reset" ;;
+	0:kept) printf '  %sPaseo already has a pi-bolt provider: left unchanged%s\n' "$dim" "$reset" ;;
+	*)
+		printf '  %scould not add Pi-Bolt to Paseo (Pi-Bolt itself is installed): %s%s\n' "$red" "${said:-no answer}" "$reset"
 		printf '  %sConfigure Paseo manually: https://github.com/opensec-git/Pi-Bolt#paseo%s\n' "$dim" "$reset"
-	fi
+		;;
+	esac
 }
 
 offer_start() {

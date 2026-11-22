@@ -222,6 +222,16 @@ ask() { answer=yes; }
         self.assertEqual(target.read_text(), '{}\n')
         self.assertIn("not a regular file", output)
 
+    def test_only_what_the_script_says_counts(self):
+        # A runtime that ends well without running the script (or says something else) has not added anything.
+        for name in ("pi", "pi-termux"):
+            (self.build / name).write_text('#!/bin/sh\necho "something else"\nexit 0\n')
+        output = self.run_offer()
+        self.assertIn("could not add Pi-Bolt to Paseo", output)
+        self.assertIn("something else", output)
+        self.assertNotIn("added Pi-Bolt", output)
+        self.assertFalse(self.config.exists())
+
     def test_write_failure_does_not_fail_installation(self):
         self.paseo.write_text("not a directory")
         output = self.run_offer()
