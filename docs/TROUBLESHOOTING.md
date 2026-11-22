@@ -174,6 +174,13 @@ file named `pi.exe`, a hardlink or a copy. When that did not happen, a startup w
 `pi-bolt` after all. On Windows the session is stored only for the run started as `pi.exe`: the reported resume command
 starts `pi-bolt`, so a restored pane reports as `pi-bolt` again.
 
+**Pi-Bolt does not show up in a Herdr pane where another agent ran.** When another agent's Herdr integration (Cursor's, for
+example) left its session on the pane, Herdr keeps the pane for that session: it takes a report from another agent only when
+the agent it sees in the pane's foreground is one it ships an integration for, and Pi-Bolt is not one of them. Pi-Bolt's
+reports reach Herdr but do not take the pane; Herdr refuses the resume command once per session (`resume_not_accepted` in
+Herdr's log), and Pi-Bolt sends its state without it until it opens another session. Start Pi-Bolt in a new pane, or start it
+with `pi-bolt --herdr-pi` (above), which Herdr lets take the pane from the other agent.
+
 **Startup is slower than expected.** Check that the compiled code is used (above). Check `PI_TIMING=1` for slow extension
 factories. A cold page cache (the first start after boot or install) adds the time to read the executable from disk.
 
