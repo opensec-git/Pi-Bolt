@@ -35,6 +35,10 @@
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none. They are installed at the versions the release pins (its extensions.txt, covered by the
 #                    signed checksums), and only if the registry's tarball has the pinned integrity.
+#   PIBOLT_PASEO     yes or no: whether to add Pi-Bolt as a Paseo provider, where Paseo is installed (its home folder or the
+#                    paseo command). Without it, asks when Paseo is detected and a terminal is available; unattended installs
+#                    skip it. Uses ${PASEO_HOME:-$HOME/.paseo}/config.json,
+#                    preserves existing providers, and does not reload or restart Paseo. The npm launcher skips this step.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh), from 0.6.0. A
 # release from before has no signature: it is installed only with PIBOLT_UNVERIFIED.
@@ -204,6 +208,7 @@ main() {
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
 	compiled_extensions_note "$COMPILED_BEFORE"
 	offer_extensions
+	offer_paseo
 	if [ "${PIBOLT_NO_PATH:-0}" = 1 ]; then
 		printf '\nRun it with: %s%s%s\n' "$bold" "$(tilde "$installed_command")" "$reset"
 	elif [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
@@ -513,7 +518,7 @@ npm_probe() {
 }
 
 # What to download, worked out in the background while the bar moves: the checksums, then the smaller .tar.xz if the release
-# has one and xz is installed (otherwise .tar.gz), where from and how big it is. The .tar.xz is also published on npm, as the
+# has one and it can be unpacked here (xz_unpacker; otherwise .tar.gz), where from and how big it is. The .tar.xz is also published on npm, as the
 # package pi-bolt-PLATFORM-VARIANT (pi-bolt-linux-x64, pi-bolt-darwin-arm64, ...) of the same version: that is tried first. Writes "SOURCE EXT FINAL SIZE RANGES" to $TMP/plan.
 plan_download() {
 	if ! fetch "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" 2>/dev/null; then
@@ -521,7 +526,7 @@ plan_download() {
 		return
 	fi
 	ext=tar.gz
-	if can_unxz && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
+	if xz_unpacker >/dev/null && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
 	where=""
 	if [ "$ext" = tar.xz ] && [ "${PIBOLT_SOURCE:-auto}" != github ] && [ -z "${PIBOLT_DOWNLOAD_BASE:-}" ]; then
 		case "$SHOWN_VERSION" in
@@ -529,22 +534,72 @@ plan_download() {
 		esac
 	fi
 	if [ -z "$where" ] && [ "${PIBOLT_SOURCE:-auto}" = npm ]; then
-		echo fail-npm >"$TMP/plan"
+		# (npm has the .tar.xz only: where nothing unpacks it, that is why, not npm.)
+		if [ "$ext" = tar.gz ] && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then echo fail-npm-xz >"$TMP/plan"; else echo fail-npm >"$TMP/plan"; fi
 		return
 	fi
 	[ -n "$where" ] || where="github $(probe "$BASE/$NAME.$ext")"
 	printf '%s\n' "${where%% *} $ext ${where#* }" >"$TMP/plan.part" && mv "$TMP/plan.part" "$TMP/plan"
 }
 
-# Whether a .tar.xz can be unpacked: with xz, or with a tar that reads it itself (bsdtar with liblzma: macOS's tar).
-can_unxz() { command -v xz >/dev/null 2>&1 || tar --version 2>/dev/null | grep -q liblzma; }
+# What unpacks a .tar.xz here: "xz" (XZ Utils' xz), or "tar" (a tar that reads it itself: bsdtar with liblzma, macOS's tar);
+# false if nothing does. Not another xz: BusyBox's cannot decode the x86 filter of the x86-64 archives, and has no -T.
+xz_unpacker() {
+	if xz --version 2>/dev/null | grep -q 'XZ Utils'; then printf xz
+	elif tar --version 2>/dev/null | grep -q liblzma; then printf tar
+	else return 1; fi
+}
+
+# extract FILE: unpacks FILE (in $TMP) with the bar moving, what xz and tar say in $TMP/unpack.log (in English, for
+# write_failed; not on the terminal, where it would break the bar). False, with nothing of it left, unless it unpacked and holds
+# the build's executable. tar is started with & itself, so that $PIDS is tar and the installer's traps stop it (a function started
+# with & is a shell of its own, which a kill does not pass on to what it runs); xz, before it in the pipeline, then ends at its
+# next write. A pipeline's status is tar's only, and tar can end well on what xz wrote before it failed: xz's failure is a file,
+# written before tar can end (the pipe stays open until the shell that runs xz has written it).
+extract() {
+	rm -f "$TMP/unxz.failed"
+	: >"$TMP/unpack.log"
+	case "$1:$(xz_unpacker || true)" in
+	*.tar.xz:xz)
+		# (-T0 decodes the blocks of a release's archive in parallel: XZ Utils from 5.4; earlier ones take it and use one thread.)
+		{ LC_ALL=C xz -T0 -dc "$TMP/$1" 2>>"$TMP/unpack.log" || : >"$TMP/unxz.failed"; } |
+			LC_ALL=C tar -C "$TMP" -xf - 2>>"$TMP/unpack.log" &
+		PIDS=$!
+		;;
+	*.tar.xz:*)
+		LC_ALL=C tar -C "$TMP" -xf "$TMP/$1" 2>>"$TMP/unpack.log" &
+		PIDS=$!
+		;;
+	*)
+		LC_ALL=C tar -C "$TMP" -xzf "$TMP/$1" 2>>"$TMP/unpack.log" &
+		PIDS=$!
+		;;
+	esac
+	draw_progress "$step" 10000 "${dim}extracting$reset"
+	while [ -t 1 ] && running; do
+		step=$((step + 1))
+		draw_progress "$step" 10000 "${dim}extracting$reset"
+		sleep 0.08
+	done
+	all_succeeded && [ ! -e "$TMP/unxz.failed" ] && [ -f "$TMP/$NAME/pi" ] && return 0
+	rm -rf "${TMP:?}/$NAME"
+	return 1
+}
+
+# Whether the last unpack failed writing (a full disk, a quota, a read-only or failing disk), not reading the archive: another
+# archive would fail the same way.
+write_failed() { grep -qiE 'no space left on device|quota exceeded|read-only file system|input/output error' "$TMP/unpack.log"; }
+
+# What the last unpack said last, as ": <line>" (nothing if it said nothing), for an error message.
+unpack_error() { tail -n 1 "$TMP/unpack.log" 2>/dev/null | sed 's/^/: /'; }
 
 # The npm package that holds this release's .tar.xz.
 npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_VERSION"; }
 
 # start_download URL FINAL SIZE RANGES: starts fetching into $TMP/part.N in the background, the process IDs in $PIDS. A big file
 # from a server that sends parts comes in PIBOLT_CONNECTIONS parts at once (default 4): over a long distance, one connection
-# is limited by the round trip and several are faster.
+# is limited by the round trip and several are faster. (curl itself in the background, with net_curl's timeout, not the
+# function: a kill of the shell a function runs in does not reach curl.)
 start_download() {
 	PIDS=""
 	rm -f "$TMP"/part.*
@@ -556,12 +611,15 @@ start_download() {
 			from=$((n * chunk))
 			to=$((from + chunk - 1))
 			[ "$to" -lt "$3" ] || to=$(($3 - 1))
-			net_curl -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
+			curl --connect-timeout 8 -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
 			PIDS="$PIDS $!"
 			n=$((n + 1))
 		done
+	elif command -v curl >/dev/null 2>&1; then
+		curl --connect-timeout 8 -fsSL --retry 2 -o "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		PIDS=$!
 	else
-		fetch "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		wget -q -O "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
 		PIDS=$!
 	fi
 }
@@ -569,6 +627,14 @@ start_download() {
 running() {
 	for pid in $PIDS; do kill -0 "$pid" 2>/dev/null && return 0; done
 	return 1
+}
+
+# Stops what runs in the background (the processes in $PIDS, the signature's download, the plan) and waits for every process
+# the installer started, so that nothing writes into the download folder as it is removed (xz before tar in a pipeline ends at
+# its next write once tar is stopped).
+stop_background() {
+	kill $PIDS $SIG_PID ${plan_pid:-} 2>/dev/null || true
+	wait 2>/dev/null || true
 }
 
 all_succeeded() { # true if every process in $PIDS succeeded
@@ -629,9 +695,10 @@ signed_release() {
 	esac
 }
 
-# An OpenSSL 3 or later: the one on PATH, or Homebrew's.
-openssl3() {
-	for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+# An OpenSSL 3 or later: openssl on PATH, openssl3 on PATH (beside an older openssl: AlmaLinux and RHEL 8's openssl3 package),
+# or Homebrew's. (Not named openssl3 itself: a function of that name would be found before the command.)
+find_openssl3() {
+	for candidate in openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
 		command -v "$candidate" >/dev/null 2>&1 || continue
 		case "$("$candidate" version 2>/dev/null)" in
 		"OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*)
@@ -700,7 +767,7 @@ verify_signature() {
 	# (An Ed25519 signature is 64 bytes: anything else, such as a page of HTML served in its place, is not one.)
 	[ "$(wc -c <"$TMP/SHA256SUMS.sig" | tr -d ' ')" = 64 ] || fail "$bad"
 	printf '%s\n' "$RELEASE_KEY" >"$TMP/release.pub"
-	if ssl=$(openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
+	if ssl=$(find_openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
 		"$ssl" pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 || fail "$bad"
 		SIGNED=1
 		return 0
@@ -791,6 +858,17 @@ download() {
 	total=$(wc -c <"$5" | tr -d ' ')
 }
 
+# download_release FINAL SIZE RANGES: fetches $NAME.$ext from the release (GitHub, or the mirror) into $TMP and checks it against
+# the checksums; stops the install if it cannot.
+download_release() {
+	download "$BASE/$NAME.$ext" "$1" "$2" "$3" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
+	FROM=GitHub
+	[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
+	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
+	(cd "$TMP" && check_sum "$NAME.$ext") ||
+		fail "checksum mismatch: the download is corrupt or incomplete"
+}
+
 install_release() {
 	SIGNED="" UNSIGNED="" NOVERIFY=""
 	# The download is kept next to where it is installed: a /tmp mounted noexec could not run the check of the executable
@@ -799,9 +877,10 @@ install_release() {
 	TMP="$(mktemp -d "$INSTALL/.download.XXXXXX" 2>/dev/null || mktemp -d)"
 	PIDS=""
 	SIG_PID=""
-	# (Whatever ends the script, a failed step too, takes the download with it.)
-	trap 'kill $PIDS $SIG_PID 2>/dev/null || true; rm -rf "$TMP"' EXIT
-	trap 'kill $PIDS $SIG_PID 2>/dev/null || true; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
+	# (Whatever ends the script, a failed step too, takes the download with it: what runs in the background is stopped, and
+	# waited for, so that nothing writes into the folder as it is removed.)
+	trap 'stop_background; rm -rf "$TMP"' EXIT
+	trap 'stop_background; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
 	[ -t 1 ] && printf '%s[?25l' "$ESC"
 	if [ ! -t 1 ]; then
 		# Not a terminal (a log, CI): plain lines instead of an animated bar.
@@ -824,6 +903,7 @@ install_release() {
 	read -r source ext final total ranges <"$TMP/plan" 2>/dev/null || source=fail
 	[ "$source" != fail ] || fail "download failed: $BASE/SHA256SUMS"
 	[ "$source" != fail-npm ] || fail "npm does not have Pi-Bolt $SHOWN_VERSION: $(npm_url)"
+	[ "$source" != fail-npm-xz ] || fail "PIBOLT_SOURCE is npm, and npm has Pi-Bolt as a .tar.xz, which nothing here can unpack (it takes XZ Utils' xz, or a tar with liblzma): install xz, or use PIBOLT_SOURCE=github"
 	if [ "$source" = npm ]; then
 		# The package is a .tgz with the release's .tar.xz in it, checked against the release's checksums like any download.
 		if download "$final" "$final" "$total" "$ranges" "$TMP/npm.tgz" &&
@@ -842,14 +922,7 @@ install_release() {
 			final=$1 total=$2 ranges=$3
 		fi
 	fi
-	if [ "$source" = github ]; then
-		download "$BASE/$NAME.$ext" "$final" "$total" "$ranges" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
-		FROM=GitHub
-		[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
-		draw_progress "$step" 10000 "${dim}verifying checksum$reset"
-		(cd "$TMP" && check_sum "$NAME.$ext") ||
-			fail "checksum mismatch: the download is corrupt or incomplete"
-	fi
+	[ "$source" != github ] || download_release "$final" "$total" "$ranges"
 	if [ -n "$SIG_PID" ] && kill -0 "$SIG_PID" 2>/dev/null; then
 		draw_progress "$step" 10000 "${dim}fetching the signature$reset"
 	fi
@@ -860,23 +933,20 @@ install_release() {
 	if fetch "$TMP/extensions.txt" "$BASE/extensions.txt" 2>/dev/null && (cd "$TMP" && check_sum extensions.txt); then
 		PINS=$(grep -E '^[a-z0-9][a-z0-9._-]* [0-9]+\.[0-9]+\.[0-9]+ sha512-[A-Za-z0-9+/]+=*$' "$TMP/extensions.txt" || true)
 	fi
-	if [ "$ext" = tar.xz ]; then
-		if command -v xz >/dev/null 2>&1; then
-			(xz -T0 -dc "$TMP/$NAME.$ext" 2>/dev/null || xz -dc "$TMP/$NAME.$ext") | tar -C "$TMP" -xf - &
-		else
-			tar -C "$TMP" -xf "$TMP/$NAME.$ext" &
+	if ! extract "$NAME.$ext"; then
+		# The release's .tar.gz needs no xz: an xz that cannot decode the archive (one xz_unpacker does not know) is not the end.
+		# A write that failed (a full disk) would fail the same way with it.
+		if [ "$ext" != tar.xz ] || [ "${PIBOLT_SOURCE:-auto}" = npm ] || write_failed || ! grep -q " $NAME\.tar\.gz\$" "$TMP/SHA256SUMS"; then
+			fail "could not extract $NAME.$ext$(unpack_error)"
 		fi
-	else
-		tar -C "$TMP" -xzf "$TMP/$NAME.$ext" &
+		finish_progress
+		printf '  %scould not unpack %s.tar.xz here; downloading %s.tar.gz instead%s\n' "$dim" "$NAME" "$NAME" "$reset"
+		rm -f "$TMP/$NAME.$ext"
+		ext=tar.gz
+		# shellcheck disable=SC2046 # three words
+		download_release $(probe "$BASE/$NAME.$ext")
+		extract "$NAME.$ext" || fail "could not extract $NAME.$ext$(unpack_error)"
 	fi
-	PIDS=$!
-	draw_progress "$step" 10000 "${dim}extracting$reset"
-	while [ -t 1 ] && running; do
-		step=$((step + 1))
-		draw_progress "$step" 10000 "${dim}extracting$reset"
-		sleep 0.08
-	done
-	all_succeeded || fail "could not extract $NAME.$ext"
 	draw_progress "$((step + 2))" 10000 "${dim}checking the executable$reset"
 	if [ -n "$TERMUX" ]; then
 		set_interpreter "$TMP/$NAME/pi" "$LOADER" || fail "could not set the executable's loader to $LOADER"
@@ -1164,6 +1234,115 @@ offer_extensions() {
 			printf '  %sInstall it later with: pi-bolt install --pi-bolt npm:%s%s\n' "$dim" "$package" "$reset"
 		fi
 	done
+}
+
+# register_paseo CONFIG: adds the pi-bolt provider to Paseo's CONFIG; prints "added", or "kept" when it has one ("missing
+# PATH" when that one runs a command that is not there). Paseo drives
+# Pi-Bolt through its Pi provider. Run the JSON edit with the installed executable's own Bun runtime, so neither Node nor jq is
+# needed. A separate process keeps the temporary file's trap and variables out of the installer.
+register_paseo() (
+	paseo_tmp=$(mktemp -d) || return 1
+	case "$paseo_tmp" in /*) ;; *) paseo_tmp="$PWD/$paseo_tmp" ;; esac
+	trap 'rm -rf "$paseo_tmp"' EXIT
+	trap 'exit 130' INT TERM
+	cat >"$paseo_tmp/register.cjs" <<'EOF'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.resolve(process.argv[2]);
+const command = path.resolve(process.argv[3]);
+let temporary;
+try {
+	let config = {};
+	let stat;
+	try {
+		stat = fs.lstatSync(configPath);
+		if (!stat.isFile()) throw new Error("config.json is not a regular file; edit it manually");
+		config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	// Existing JSON is user input: reject malformed containers rather than replacing them.
+	function object(value, name) {
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(name + " must be an object");
+	}
+	object(config, "config");
+	if (!Object.hasOwn(config, "agents")) config.agents = {};
+	object(config.agents, "agents");
+	if (!Object.hasOwn(config.agents, "providers")) config.agents.providers = {};
+	object(config.agents.providers, "agents.providers");
+	if (Object.hasOwn(config.agents.providers, "pi-bolt")) {
+		const kept = config.agents.providers["pi-bolt"];
+		const first = kept && typeof kept === "object" && Array.isArray(kept.command) ? kept.command[0] : undefined;
+		// (A path that is gone: an installation removed or moved since. A name is looked up on Paseo's PATH, not here.)
+		if (typeof first === "string" && path.isAbsolute(first) && !fs.existsSync(first)) console.log("missing " + first);
+		else console.log("kept");
+		process.exit(0);
+	}
+	// The new file is renamed over the old one: that would split a file with other hard links, and replace one its owner made
+	// read-only. Those are left to the user.
+	if (stat && stat.nlink > 1) throw new Error("config.json has other hard links; edit it manually");
+	if (stat && (stat.mode & 0o200) === 0) throw new Error("config.json is read-only; edit it manually");
+	config.agents.providers["pi-bolt"] = { extends: "pi", label: "Pi-Bolt", command: [command] };
+	fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
+	temporary = fs.mkdtempSync(configPath + ".pi-bolt-");
+	const staged = path.join(temporary, "config.json");
+	fs.writeFileSync(staged, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+	fs.chmodSync(staged, stat ? stat.mode & 0o777 : 0o600);
+	fs.renameSync(staged, configPath);
+	console.log("added");
+} catch (error) {
+	console.error(error.message);
+	process.exitCode = 1;
+} finally {
+	if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
+}
+EOF
+	# Bun reads bunfig.toml (including preloads) from its working directory. Keep the caller's project out of this run;
+	# resolve relative installer paths before changing directories.
+	paseo_exe="$INSTALL/$NAME/$(command_of_build)"
+	paseo_config=$1
+	# (The command this installation is run with: $BIN_DIR/pi-bolt is not this installation's with PIBOLT_NO_PATH=1.)
+	paseo_command="$installed_command"
+	case "$paseo_exe" in /*) ;; *) paseo_exe="$PWD/$paseo_exe" ;; esac
+	case "$paseo_config" in /*) ;; *) paseo_config="$PWD/$paseo_config" ;; esac
+	case "$paseo_command" in /*) ;; *) paseo_command="$PWD/$paseo_command" ;; esac
+	cd "$paseo_tmp" && BUN_BE_BUN=1 "$paseo_exe" ./register.cjs "$paseo_config" "$paseo_command"
+)
+
+offer_paseo() {
+	choice="${PIBOLT_PASEO:-}"
+	case "$choice" in
+	"" | yes | no) ;;
+	*) printf '  %sPIBOLT_PASEO must be yes or no: Paseo configuration unchanged%s\n' "$dim" "$reset"; return 0 ;;
+	esac
+	[ "$choice" != no ] || return 0
+	[ -n "$choice" ] || has_tty || return 0
+	# Only where Paseo is installed, PIBOLT_PASEO=yes too: one set for every machine leaves no Paseo home where there is none.
+	if [ ! -d "${PASEO_HOME:-$HOME/.paseo}" ] && ! command -v paseo >/dev/null 2>&1; then
+		[ -z "$choice" ] || printf '  %sPIBOLT_PASEO is yes, and Paseo is not installed here: nothing added to it%s\n' "$dim" "$reset"
+		return 0
+	fi
+	config="${PASEO_HOME:-$HOME/.paseo}/config.json"
+	if [ -z "$choice" ]; then
+		ask '\nAdd Pi-Bolt as a Paseo provider in %s? [Y/n] ' "$(tilde "$config")"
+		case "$answer" in n | N | no | NO) return 0 ;; esac
+	fi
+	# (What the script says is what it did: an exit status alone is not taken for it, as in verify_signature.)
+	paseo_status=0
+	out=$(register_paseo "$config" 2>&1) || paseo_status=$?
+	said=$(printf '%s\n' "$out" | tail -n 1)
+	case "$paseo_status:$said" in
+	0:added) printf '  %s%s%s added Pi-Bolt to Paseo (%s): run %spaseo reload%s to use it\n' "$green" "$CHECK" "$reset" "$(tilde "$config")" "$bold" "$reset" ;;
+	0:kept) printf '  %sPaseo already has a pi-bolt provider: left unchanged%s\n' "$dim" "$reset" ;;
+	"0:missing "*)
+		printf '  %sPaseo already has a pi-bolt provider, left unchanged: it runs %s, which is not there; change its command to %s%s\n' \
+			"$red" "${said#missing }" "$installed_command" "$reset"
+		;;
+	*)
+		printf '  %scould not add Pi-Bolt to Paseo (Pi-Bolt itself is installed): %s%s\n' "$red" "${said:-no answer}" "$reset"
+		printf '  %sConfigure Paseo manually: https://github.com/opensec-git/Pi-Bolt#paseo%s\n' "$dim" "$reset"
+		;;
+	esac
 }
 
 offer_start() {

@@ -138,7 +138,8 @@ platforms.linux-arm64 = { rename_exe = { pi = "pi-bolt" }, filter_bins = "pi-bol
   <li>Downloads the release for your platform and CPU, from the npm registry's CDN with GitHub as a fallback.</li>
   <li>Checks it against the release's <code>SHA256SUMS</code>, and checks the Ed25519 signature of <code>SHA256SUMS</code>
     against Pi-Bolt's release key. A download that does not verify is not installed. (On macOS and Linux, the signature check
-    needs OpenSSL 3 or an earlier Pi-Bolt; without either, the installer checks the checksums only and says so.)</li>
+    needs OpenSSL 3, as <code>openssl</code> or <code>openssl3</code>, OpenSSH 8.1 or later, or an earlier Pi-Bolt; with none
+    of them, it installs nothing unless you confirm the checksums yourself, and says how.)</li>
   <li>Installs it to <code>~/.pi-bolt</code> and links <code>pi-bolt</code> into <code>~/.local/bin</code>. On Windows, it
     installs to <code>%USERPROFILE%\.pi-bolt</code> and asks before adding it to your PATH. It needs no administrator
     rights.</li>
@@ -289,8 +290,9 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
     <tr><td><code>PIBOLT_INSTALL</code></td><td>Where to install. Default: <code>~/.pi-bolt</code> (Windows: <code>%USERPROFILE%\.pi-bolt</code>).</td></tr>
     <tr><td><code>PIBOLT_BIN_DIR</code></td><td>macOS and Linux: where to link <code>pi-bolt</code>. Default: <code>~/.local/bin</code>.</td></tr>
     <tr><td><code>PIBOLT_NO_PATH=1</code></td><td>Windows: do not add Pi-Bolt to your PATH.</td></tr>
-    <tr><td><code>PIBOLT_YES=1</code></td><td>Do not ask: take the default action, install no extensions, and do not offer to start Pi-Bolt.</td></tr>
+    <tr><td><code>PIBOLT_YES=1</code></td><td>Do not ask: take the default action, install no extensions and add nothing to Paseo (unless <code>PIBOLT_EXTENSIONS</code> or <code>PIBOLT_PASEO</code> is <code>yes</code>), and do not offer to start Pi-Bolt.</td></tr>
     <tr><td><code>PIBOLT_EXTENSIONS</code></td><td><code>yes</code> or <code>no</code>: whether to install OpenSec's optional extensions without asking.</td></tr>
+    <tr><td><code>PIBOLT_PASEO</code></td><td>macOS and Linux: <code>yes</code> or <code>no</code>: whether to add Pi-Bolt as a <a href="integrations.html#paseo">Paseo</a> provider without asking, where Paseo is installed.</td></tr>
     <tr><td><code>PIBOLT_SOURCE</code></td><td>Where to download the executable from: <code>auto</code> (npm, then GitHub; the default), <code>npm</code> or <code>github</code>. Checksums and signatures always come from the GitHub release.</td></tr>
     <tr><td><code>PIBOLT_NPM_REGISTRY</code></td><td>An npm registry or mirror. Default: <code>https://registry.npmjs.org</code>.</td></tr>
     <tr><td><code>PIBOLT_CONNECTIONS</code></td><td>macOS and Linux: connections to download over at once. Default: 4.</td></tr>
