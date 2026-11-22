@@ -358,6 +358,16 @@ Pi gives an extension its own modules by the names above, wherever a copy of the
   runs need them, and the runtime has one set of names for the whole process. A library of an extension loaded from its files
   that needs its own version of `typebox` then gets Pi's.
 
+What this means for code in an extension or a library it uses:
+
+- `require.resolve()` of one of Pi's names returns the name itself, as Pi's module has no file. `import.meta.resolve()` still
+  returns the copy installed beside the module, or fails where there is none. Neither finds Pi's own folder.
+- A module built against another version of Pi gets the version of Pi that runs it. An export that version does not have is
+  `undefined` in a module jiti loads, and fails the import (`Export named '...' not found`) in a module the runtime links.
+  Unless the extension catches that error, it fails to load with it.
+- A worker an extension starts (`new Worker(...)`) resolves Pi's names as Node does: from the copy installed beside its
+  modules, or not at all.
+
 ## Compatibility checklist
 
 These are the rules for any code bundled into a single executable. Most plugins already follow them.
