@@ -335,6 +335,39 @@ scripts/train-profile.sh --plugins my-plugins/plugins.ts --out profiles/my-plugi
 scripts/build-pi.sh --plugins my-plugins/plugins.ts --profile profiles/my-plugins --out out/pi-bolt-plugins
 ```
 
+## Pi's packages in an extension's modules
+
+Pi gives an extension its own modules by the names above, wherever a copy of the package is installed. Which modules get them:
+
+- **Pi's own packages** (`@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core`, `pi-tui`, and their former
+  `@mariozechner/` names): every module of the extension and of the libraries it uses gets Pi's. That covers the
+  TypeScript jiti compiles and the JavaScript the runtime loads as it is (an ES module of a `"type": "module"` package, a
+  `.mjs`, a `.cjs`, a required CommonJS file), in `node_modules` or not, with `import`, `import()` and `require()`. A copy
+  npm or bun installed beside the extension is not loaded.
+- **Their subpaths:** Pi gives the ones its own modules are: `@earendil-works/pi-ai/compat`, `/models`, `/oauth`,
+  `/providers/all`, `/session-resources`, `/bun-oauth` and `/bedrock-provider`, and
+  `@earendil-works/pi-coding-agent/pi-ai-extension-view`. Any other subpath (`@earendil-works/pi-ai/providers/<name>`,
+  `/api/<name>`, `/utils/<name>`, `/lazy-oauth`, `/lazy-bedrock-provider`, `@earendil-works/pi-coding-agent/rpc-entry`) comes
+  from the copy installed beside the module, and fails to load where there is none. Its module is then not Pi's, and the
+  modules it imports from its own package are not Pi's either.
+- **`typebox` and `@sinclair/typebox`** are packages of their own, which a library may need in another version. A module jiti
+  compiles gets Pi's. JavaScript the runtime loads as it is gets the copy installed beside it, when there is one, and Pi's when
+  there is none.
+- **With an extension compiled in** (`pi-bolt compile`), the runtime gives every module Pi's `typebox` and
+  `@sinclair/typebox` as well, from the moment that extension loads. The modules a compiled-in extension loads from disk as it
+  runs need them, and the runtime has one set of names for the whole process. A library of an extension loaded from its files
+  that needs its own version of `typebox` then gets Pi's.
+
+What this means for code in an extension or a library it uses:
+
+- `require.resolve()` of one of Pi's names returns the name itself, as Pi's module has no file. `import.meta.resolve()` still
+  returns the copy installed beside the module, or fails where there is none. Neither finds Pi's own folder.
+- A module built against another version of Pi gets the version of Pi that runs it. An export that version does not have is
+  `undefined` in a module jiti loads, and fails the import (`Export named '...' not found`) in a module the runtime links.
+  Unless the extension catches that error, it fails to load with it.
+- A worker an extension starts (`new Worker(...)`) resolves Pi's names as Node does: from the copy installed beside its
+  modules, or not at all.
+
 ## Compatibility checklist
 
 These are the rules for any code bundled into a single executable. Most plugins already follow them.
@@ -344,7 +377,8 @@ These are the rules for any code bundled into a single executable. Most plugins 
 `gen-plugin-manifest.mjs` also take the older names Pi's loader takes: [what it copies](#what-it-copies)). List these as
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
-`node_modules`. A second copy would mean duplicate classes and registries.
+`node_modules`. A second copy would mean duplicate classes and registries. How an extension loaded from its files gets these
+packages: [Pi's packages in an extension's modules](#pis-packages-in-an-extensions-modules).
 
 **Use static imports.** The bundler follows `import x from "./file.ts"` and `await import("./file.ts")` with a literal path. It
 cannot follow an import or `require()` of a path computed at run time. Replace

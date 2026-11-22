@@ -30,7 +30,7 @@ import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } fr
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import { compiledExtensionFor, firstLineOf } from "./compiled.ts";
-import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
+import { PI_MODULE_NAMES, PI_PACKAGE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
 import { loadJitiBunLoader } from "./jiti-bun-loader.lazy.ts";
 import type {
@@ -668,6 +668,11 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		: isTypeScriptSourceRuntime
 			? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
 			: { alias: getAliases() };
+	if (isBunBinary) {
+		// Pi-Bolt (#331): what jiti hands to the runtime as it is (an ES module imported, a CommonJS module required), in
+		// node_modules or not, gets Pi's own packages, not a copy installed beside the extension (compiled-modules.ts).
+		provideModulesToFiles(PI_PACKAGE_NAMES, getVirtualModules, await getVirtualModules());
+	}
 	const jiti = createJitiImpl(import.meta.url, {
 		moduleCache: false,
 		...resolutionOptions,

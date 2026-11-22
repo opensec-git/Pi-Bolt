@@ -65,6 +65,146 @@ else
 	status=1
 fi
 
+# #331: every module of an extension gets Pi's own modules by the names Pi gives them, not an older copy of Pi's package that
+# npm or bun installed beside it: the JavaScript modules jiti hands to the runtime as they are too (an ES module of a "type":
+# "module" package, imported statically or with import(); a .cjs, required), in node_modules or not.
+sdk_case() { # FOLDER: a package folder with an older @earendil-works/pi-coding-agent in a node_modules above it
+	local ext=$1
+	mkdir -p "$ext/dist"
+	printf '{"name": "sdk-alias", "type": "module"}\n' >"$ext/package.json"
+	printf 'import { VERSION } from "@earendil-works/pi-coding-agent";\nexport { VERSION };\n' >"$ext/dist/static.js"
+	printf 'export const VERSION = (await import("@earendil-works/pi-coding-agent")).VERSION;\n' >"$ext/dist/dynamic.js"
+	printf 'exports.VERSION = require("@earendil-works/pi-coding-agent").VERSION;\n' >"$ext/dist/required.cjs"
+	cat >"$ext/sdk-alias.ts" <<'TS'
+import { createRequire } from "node:module";
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import * as staticJs from "./dist/static.js";
+const dynamicJs = await import("./dist/static.js");
+const nested = await import("./dist/dynamic.js");
+const requiredCjs = createRequire(import.meta.url)("./dist/required.cjs");
+export default function () {
+	console.log(
+		`sdk-alias: host=${VERSION} static=${staticJs.VERSION} dynamic=${dynamicJs.VERSION} nested=${nested.VERSION} require=${requiredCjs.VERSION}`,
+	);
+	process.exit(0);
+}
+TS
+}
+old_sdk() { # NODE_MODULES: an @earendil-works/pi-coding-agent 0.0.1 in it, for import and for require
+	local sdk="$1/@earendil-works/pi-coding-agent"
+	mkdir -p "$sdk"
+	printf '{"name": "@earendil-works/pi-coding-agent", "version": "0.0.1", "type": "module", "exports": {".": {"import": "./index.js", "require": "./index.cjs"}}}\n' >"$sdk/package.json"
+	printf 'export const VERSION = "0.0.1";\n' >"$sdk/index.js"
+	printf 'exports.VERSION = "0.0.1";\n' >"$sdk/index.cjs"
+}
+sdk_check() { # NAME FOLDER
+	local name=$1 ext=$2 out host
+	out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+		"$PI" -ne -e "$ext/sdk-alias.ts" --offline --no-session -p hi 2>&1 </dev/null)
+	host=$(sed -n 's/^sdk-alias: host=\([^ ]*\) .*/\1/p' <<<"$out")
+	if [ -n "$host" ] && [ "$host" != 0.0.1 ] &&
+		grep -q "^sdk-alias: host=$host static=$host dynamic=$host nested=$host require=$host$" <<<"$out"; then
+		echo "PASS $name"
+	else
+		echo "FAIL $name"
+		grep -m3 "sdk-alias\|error\|rror:" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+		status=1
+	fi
+}
+sdk="$home/extensions/sdk-alias"
+old_sdk "$sdk/node_modules"
+sdk_case "$sdk/node_modules/sdk-alias"
+sdk_check "an extension's modules in node_modules get Pi's SDK, not the copy beside them (#331)" "$sdk/node_modules/sdk-alias"
+sdk_case "$sdk/local"
+sdk_check "an extension's modules outside node_modules get Pi's SDK, not the copy above them (#331)" "$sdk/local"
+# #331: a library the extension uses keeps its own @sinclair/typebox (npm put one of another version beside it), as on Pi on
+# Node, with import and with require; its imports of Pi's own packages get Pi's. The extension's own modules, imported, which
+# find no @sinclair/typebox on disk, get Pi's (jiti loads them transformed then, as on Pi on Node).
+lib="$sdk/node_modules/third-lib"
+mkdir -p "$lib/node_modules/@sinclair/typebox"
+printf '{"name": "@sinclair/typebox", "version": "0.34.0", "type": "module", "exports": {".": {"import": "./index.js", "require": "./index.cjs"}}}\n' \
+	>"$lib/node_modules/@sinclair/typebox/package.json"
+printf 'export const Origin = "0.34";\n' >"$lib/node_modules/@sinclair/typebox/index.js"
+printf 'exports.Origin = "0.34";\n' >"$lib/node_modules/@sinclair/typebox/index.cjs"
+printf '{"name": "third-lib", "type": "module", "exports": {".": {"import": "./esm.js", "require": "./cjs.cjs"}}}\n' >"$lib/package.json"
+printf 'import * as tb from "@sinclair/typebox";\nexport { VERSION } from "@earendil-works/pi-coding-agent";\nexport const typebox = tb.Origin ?? "pi";\n' >"$lib/esm.js"
+printf 'exports.typebox = require("@sinclair/typebox").Origin ?? "pi";\nexports.VERSION = require("@earendil-works/pi-coding-agent").VERSION;\n' >"$lib/cjs.cjs"
+own="$sdk/node_modules/sdk-alias"
+printf 'import * as tb from "@sinclair/typebox";\nexport const typebox = tb.Origin ?? (typeof tb.Type?.Object === "function" ? "pi" : "?");\n' >"$own/dist/typebox.js"
+printf 'const tb = require("@sinclair/typebox");\nexports.typebox = tb.Origin ?? (typeof tb.Type?.Object === "function" ? "pi" : "?");\n' >"$own/dist/typebox.cjs"
+cat >"$own/libs.ts" <<'TS'
+import { createRequire } from "node:module";
+import { VERSION } from "@earendil-works/pi-coding-agent";
+import * as esm from "third-lib";
+import * as own from "./dist/typebox.js";
+import ownCjs from "./dist/typebox.cjs";
+const cjs = createRequire(import.meta.url)("third-lib");
+const sdk = (version: string) => (version === VERSION ? "pi" : version);
+export default function () {
+	console.log(
+		`sdk-libs: lib-esm=${esm.typebox},${sdk(esm.VERSION)} lib-cjs=${cjs.typebox},${sdk(cjs.VERSION)} own=${own.typebox},${ownCjs.typebox}`,
+	);
+	process.exit(0);
+}
+TS
+out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+	"$PI" -ne -e "$own/libs.ts" --offline --no-session -p hi 2>&1 </dev/null)
+if grep -q "^sdk-libs: lib-esm=0.34,pi lib-cjs=0.34,pi own=pi,pi$" <<<"$out"; then
+	echo "PASS a library keeps its own typebox and gets Pi's own packages; the extension's modules get Pi's typebox (#331)"
+else
+	echo "FAIL a library keeps its own typebox and gets Pi's own packages; the extension's modules get Pi's typebox (#331)"
+	grep -m3 "sdk-libs\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+	status=1
+fi
+# #331: a library that imports pi-ai and one of the subpaths Pi has (session-resources) gets both from Pi, not the root from Pi
+# and the subpath from the copy beside it. A subpath Pi does not give (utils/*) comes from that copy.
+ai="$sdk/node_modules/@earendil-works/pi-ai"
+mkdir -p "$ai/utils"
+printf '{"name": "@earendil-works/pi-ai", "version": "0.0.1", "type": "module", "exports": {".": "./index.js", "./session-resources": "./session-resources.js", "./utils/*": "./utils/*.js"}}\n' >"$ai/package.json"
+for module in index session-resources utils/retry; do printf 'export const Origin = "0.0.1";\n' >"$ai/$module.js"; done
+sub="$sdk/node_modules/sub-lib"
+mkdir -p "$sub"
+printf '{"name": "sub-lib", "type": "module", "main": "index.js"}\n' >"$sub/package.json"
+cat >"$sub/index.js" <<'JS'
+import * as root from "@earendil-works/pi-ai";
+import * as resources from "@earendil-works/pi-ai/session-resources";
+import * as retry from "@earendil-works/pi-ai/utils/retry";
+export const origins = [root, resources, retry].map((module) => module.Origin ?? "pi").join(",");
+JS
+cat >"$own/subpaths.ts" <<'TS'
+import { origins } from "sub-lib";
+export default function () {
+	console.log(`sdk-subpaths: ${origins}`);
+	process.exit(0);
+}
+TS
+out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+	"$PI" -ne -e "$own/subpaths.ts" --offline --no-session -p hi 2>&1 </dev/null)
+if grep -q "^sdk-subpaths: pi,pi,0.0.1$" <<<"$out"; then
+	echo "PASS a library gets pi-ai and the subpaths Pi has from Pi, other subpaths from disk (#331)"
+else
+	echo "FAIL a library gets pi-ai and the subpaths Pi has from Pi, other subpaths from disk (#331)"
+	grep -m3 "sdk-subpaths\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+	status=1
+fi
+# (A require() cannot wait for Pi's modules to load: one before any import gets them too.)
+cat >"$sdk/local/require-first.ts" <<'TS'
+import { createRequire } from "node:module";
+export default function () {
+	console.log(`require-first: ${createRequire(import.meta.url)("./dist/required.cjs").VERSION}`);
+	process.exit(0);
+}
+TS
+out=$(env -i HOME="$home" PATH=/usr/bin:/bin PI_CODING_AGENT_DIR="$home/agent" DO_NOT_TRACK=1 BUN_ENABLE_CRASH_REPORTING=0 \
+	"$PI" -ne -e "$sdk/local/require-first.ts" --offline --no-session -p hi 2>&1 </dev/null)
+if grep -q "^require-first: [0-9]" <<<"$out" && ! grep -q "^require-first: 0\.0\.1$" <<<"$out"; then
+	echo "PASS a require() of Pi's SDK before any import gets Pi's (#331)"
+else
+	echo "FAIL a require() of Pi's SDK before any import gets Pi's (#331)"
+	grep -m3 "require-first\|rror" <<<"$out" | cut -c1-300 | sed 's/^/   /'
+	status=1
+fi
+
 # Without the JIT, a package that works only through bun:ffi does not load, so that its extension takes its Node.js alternative
 # (pi-fff: @ff-labs/fff-bun, then @ff-labs/fff-node); with the JIT it loads.
 ffi="$home/extensions/jit-only"
