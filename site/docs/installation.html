@@ -138,7 +138,8 @@ platforms.linux-arm64 = { rename_exe = { pi = "pi-bolt" }, filter_bins = "pi-bol
   <li>Downloads the release for your platform and CPU, from the npm registry's CDN with GitHub as a fallback.</li>
   <li>Checks it against the release's <code>SHA256SUMS</code>, and checks the Ed25519 signature of <code>SHA256SUMS</code>
     against Pi-Bolt's release key. A download that does not verify is not installed. (On macOS and Linux, the signature check
-    needs OpenSSL 3 or an earlier Pi-Bolt; without either, the installer checks the checksums only and says so.)</li>
+    needs OpenSSL 3, as <code>openssl</code> or <code>openssl3</code>, OpenSSH 8.1 or later, or an earlier Pi-Bolt; with none
+    of them, it installs nothing unless you confirm the checksums yourself, and says how.)</li>
   <li>Installs it to <code>~/.pi-bolt</code> and links <code>pi-bolt</code> into <code>~/.local/bin</code>. On Windows, it
     installs to <code>%USERPROFILE%\.pi-bolt</code> and asks before adding it to your PATH. It needs no administrator
     rights.</li>

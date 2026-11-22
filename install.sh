@@ -665,9 +665,10 @@ signed_release() {
 	esac
 }
 
-# An OpenSSL 3 or later: the one on PATH, or Homebrew's.
-openssl3() {
-	for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+# An OpenSSL 3 or later: openssl on PATH, openssl3 on PATH (beside an older openssl: AlmaLinux and RHEL 8's openssl3 package),
+# or Homebrew's. (Not named openssl3 itself: a function of that name would be found before the command.)
+find_openssl3() {
+	for candidate in openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
 		command -v "$candidate" >/dev/null 2>&1 || continue
 		case "$("$candidate" version 2>/dev/null)" in
 		"OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*)
@@ -736,7 +737,7 @@ verify_signature() {
 	# (An Ed25519 signature is 64 bytes: anything else, such as a page of HTML served in its place, is not one.)
 	[ "$(wc -c <"$TMP/SHA256SUMS.sig" | tr -d ' ')" = 64 ] || fail "$bad"
 	printf '%s\n' "$RELEASE_KEY" >"$TMP/release.pub"
-	if ssl=$(openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
+	if ssl=$(find_openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
 		"$ssl" pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 || fail "$bad"
 		SIGNED=1
 		return 0

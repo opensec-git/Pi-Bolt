@@ -24,7 +24,7 @@ NAME=pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM.tar.gz
 # verify_signature FILE SIG KEY: dies unless SIG is KEY's signature of FILE.
 verify_signature() {
 	local openssl candidate
-	for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+	for candidate in openssl openssl3 /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
 		command -v "$candidate" >/dev/null 2>&1 || continue
 		case "$("$candidate" version 2>/dev/null)" in "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) openssl=$candidate; break ;; esac
 	done

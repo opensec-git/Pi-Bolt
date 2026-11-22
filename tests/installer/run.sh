@@ -14,7 +14,8 @@
 #   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
 #   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz through a
 #     tar that reads it itself; an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead;
-#     where that cannot be downloaded either, nothing is installed and nothing is left.
+#     where that cannot be downloaded either, nothing is installed and nothing is left;
+#   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
 # Usage: tests/installer/run.sh
@@ -109,8 +110,8 @@ if ! installed && grep -q "set PIBOLT_VERSION to the release it serves" <<<"$out
 	pass "a mirror, and the latest release not known: not installed"; else
 	fail "a mirror, and the latest release not known: not installed"; printf '%s\n' "$out"; fi
 
-# Programs that stand in for others, first on PATH: BusyBox's xz and tar, and an xz that fails after writing everything (#328).
-# Each notes how it was called in $WORK/calls.
+# Programs that stand in for others, first on PATH: BusyBox's xz and tar (#328), an xz that fails after writing everything,
+# and OpenSSL 1.1 as openssl beside OpenSSL 3 as openssl3 (#323). Each notes how it was called in $WORK/calls.
 real_tar=$(command -v tar) real_xz=$(command -v xz || true)
 stub() { # stub DIR NAME BODY: DIR/NAME, a shell script running BODY
 	mkdir -p "$WORK/$1"
@@ -155,6 +156,21 @@ if [ -n "$real_xz" ]; then
 	if ! installed && [ -z "$left" ] && grep -q "download failed: .*/$NAME.tar.gz" <<<"$out"; then
 		pass "xz fails and no .tar.gz: nothing installed, nothing left"; else
 		fail "xz fails and no .tar.gz: nothing installed, nothing left"; printf '%s\n%s\n' "$out" "$left"; fi
+fi
+
+# (OpenSSL 1.1 as openssl, OpenSSL 3 as openssl3: openssl3 checks the signature.) #323
+real_ssl=""
+for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+	case "$("$candidate" version 2>/dev/null)" in "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) real_ssl=$(command -v "$candidate"); break ;; esac
+done
+if [ -n "$real_ssl" ]; then
+	stub openssl3 openssl 'echo "OpenSSL 1.1.1k  FIPS 25 Mar 2021"; [ "$1" = version ] || exit 1'
+	stub openssl3 openssl3 "exec '$real_ssl' \"\$@\""
+	rm -f "$WORK/calls"
+	out=$(install good PATH="$WORK/openssl3:$PATH")
+	if installed && grep -q "signature verified" <<<"$out" && grep -q '^openssl3 pkeyutl -verify' "$WORK/calls"; then
+		pass "OpenSSL 3 as openssl3, beside OpenSSL 1.1: signature verified with it"; else
+		fail "OpenSSL 3 as openssl3, beside OpenSSL 1.1: signature verified with it"; printf '%s\n' "$out"; cat "$WORK/calls" 2>/dev/null; fi
 fi
 
 bin="$WORK/home/b\"\$(touch $WORK/pwned)\`touch $WORK/pwned\`"
