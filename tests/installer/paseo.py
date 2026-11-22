@@ -121,6 +121,37 @@ TERMUX=""
                 self.assertEqual(self.config.read_bytes(), before)
                 self.assertIn("left unchanged", output)
 
+    def test_kept_provider_with_a_missing_command_is_reported(self):
+        gone = str(self.root / "removed" / "pi-bolt")
+        self.save({"agents": {"providers": {"pi-bolt": {"extends": "pi", "command": [gone]}}}})
+        before = self.config.read_bytes()
+        output = self.run_offer()
+        self.assertEqual(self.config.read_bytes(), before)
+        self.assertIn(f"it runs {gone}, which is not there", output)
+        self.assertIn(str(self.bin / "pi-bolt"), output)
+
+    def test_hard_linked_or_read_only_config_is_not_replaced(self):
+        for case in ("hard link", "read-only"):
+            with self.subTest(case=case):
+                self.save({"version": 1})
+                before = self.config.read_bytes()
+                other = self.root / "other.json"
+                if case == "hard link":
+                    other.unlink(missing_ok=True)
+                    os.link(self.config, other)
+                else:
+                    self.config.chmod(0o400)
+                output = self.run_offer()
+                self.assertEqual(self.config.read_bytes(), before)
+                self.assertIn("hard links" if case == "hard link" else "read-only", output)
+                self.assertIn("Configure Paseo manually", output)
+                if case == "hard link":
+                    self.assertTrue(os.path.samefile(self.config, other))
+                    other.unlink()
+                else:
+                    self.assertEqual(self.config.stat().st_mode & 0o777, 0o400)
+                    self.config.chmod(0o600)
+
     def test_reinstall_is_idempotent(self):
         self.run_offer()
         before = self.config.read_bytes(), self.config.stat().st_mtime_ns

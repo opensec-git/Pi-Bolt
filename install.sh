@@ -1235,7 +1235,8 @@ offer_extensions() {
 	done
 }
 
-# register_paseo CONFIG: adds the pi-bolt provider to Paseo's CONFIG; prints "added", or "kept" when it has one. Paseo drives
+# register_paseo CONFIG: adds the pi-bolt provider to Paseo's CONFIG; prints "added", or "kept" when it has one ("missing
+# PATH" when that one runs a command that is not there). Paseo drives
 # Pi-Bolt through its Pi provider. Run the JSON edit with the installed executable's own Bun runtime, so neither Node nor jq is
 # needed. A separate process keeps the temporary file's trap and variables out of the installer.
 register_paseo() (
@@ -1251,12 +1252,11 @@ const command = path.resolve(process.argv[3]);
 let temporary;
 try {
 	let config = {};
-	let mode = 0o600;
+	let stat;
 	try {
-		const stat = fs.lstatSync(configPath);
+		stat = fs.lstatSync(configPath);
 		if (!stat.isFile()) throw new Error("config.json is not a regular file; edit it manually");
 		config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-		mode = stat.mode & 0o777;
 	} catch (error) {
 		if (error.code !== "ENOENT") throw error;
 	}
@@ -1270,15 +1270,23 @@ try {
 	if (!Object.hasOwn(config.agents, "providers")) config.agents.providers = {};
 	object(config.agents.providers, "agents.providers");
 	if (Object.hasOwn(config.agents.providers, "pi-bolt")) {
-		console.log("kept");
+		const kept = config.agents.providers["pi-bolt"];
+		const first = kept && typeof kept === "object" && Array.isArray(kept.command) ? kept.command[0] : undefined;
+		// (A path that is gone: an installation removed or moved since. A name is looked up on Paseo's PATH, not here.)
+		if (typeof first === "string" && path.isAbsolute(first) && !fs.existsSync(first)) console.log("missing " + first);
+		else console.log("kept");
 		process.exit(0);
 	}
+	// The new file is renamed over the old one: that would split a file with other hard links, and replace one its owner made
+	// read-only. Those are left to the user.
+	if (stat && stat.nlink > 1) throw new Error("config.json has other hard links; edit it manually");
+	if (stat && (stat.mode & 0o200) === 0) throw new Error("config.json is read-only; edit it manually");
 	config.agents.providers["pi-bolt"] = { extends: "pi", label: "Pi-Bolt", command: [command] };
 	fs.mkdirSync(path.dirname(configPath), { recursive: true, mode: 0o700 });
 	temporary = fs.mkdtempSync(configPath + ".pi-bolt-");
 	const staged = path.join(temporary, "config.json");
 	fs.writeFileSync(staged, JSON.stringify(config, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-	fs.chmodSync(staged, mode);
+	fs.chmodSync(staged, stat ? stat.mode & 0o777 : 0o600);
 	fs.renameSync(staged, configPath);
 	console.log("added");
 } catch (error) {
@@ -1321,6 +1329,10 @@ offer_paseo() {
 	case "$paseo_status:$said" in
 	0:added) printf '  %s%s%s added Pi-Bolt to Paseo (%s): run %spaseo reload%s to use it\n' "$green" "$CHECK" "$reset" "$(tilde "$config")" "$bold" "$reset" ;;
 	0:kept) printf '  %sPaseo already has a pi-bolt provider: left unchanged%s\n' "$dim" "$reset" ;;
+	"0:missing "*)
+		printf '  %sPaseo already has a pi-bolt provider, left unchanged: it runs %s, which is not there; change its command to %s%s\n' \
+			"$red" "${said#missing }" "$installed_command" "$reset"
+		;;
 	*)
 		printf '  %scould not add Pi-Bolt to Paseo (Pi-Bolt itself is installed): %s%s\n' "$red" "${said:-no answer}" "$reset"
 		printf '  %sConfigure Paseo manually: https://github.com/opensec-git/Pi-Bolt#paseo%s\n' "$dim" "$reset"
