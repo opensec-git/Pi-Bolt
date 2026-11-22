@@ -54,6 +54,13 @@ export function quietOtherHerdrReporters(env: NodeJS.ProcessEnv = process.env): 
 const RESUME_NOT_ACCEPTED = "resume_not_accepted";
 
 /**
+ * How long a session's state reports go without the resume command after Herdr refused it. Herdr's answers do not say
+ * whether Pi-Bolt holds the pane, so the next state report after this offers the command again: at most one refused
+ * request per window, and a pane that became free gets its command within it.
+ */
+export const RESUME_RETRY_MS = 10 * 60 * 1000;
+
+/**
  * Two tries; Herdr's last answer. Each try gets its own seq: Herdr may have applied a try whose answer was lost, and would
  * then refuse the same seq again. A refused resume command is not tried again. `request` returns undefined once the
  * report is no longer wanted.
@@ -98,6 +105,7 @@ export function createHerdrExtension(
 	env: NodeJS.ProcessEnv = process.env,
 	platform: NodeJS.Platform = process.platform,
 	reportsAsPi: () => boolean = isHerdrPi,
+	now: () => number = Date.now,
 ): ExtensionFactory {
 	return (pi) => {
 		const herdr = herdrFromEnvironment(env, platform);
@@ -120,9 +128,13 @@ export function createHerdrExtension(
 		const runningSubagents = new Set<string>();
 		let backgroundBusy = false;
 		let last: { state: AgentState; message?: string; sessionFile?: string } | undefined;
-		// Herdr did not record this session's resume command (#330): its state reports go without one until the session
-		// changes, rather than each being refused again.
-		let resumeRefused = false;
+		// The last time Herdr refused the resume command of a state report, and for which session file (#330). Only an
+		// answer changes it: a refusal sets it, a state report taken with the command clears it. A report without an
+		// answer (timeout, no socket) leaves it as it is.
+		let resumeRefusal: { sessionFile: string | undefined; at: number } | undefined;
+		function offerResume(file: string | undefined): boolean {
+			return !resumeRefusal || resumeRefusal.sessionFile !== file || now() - resumeRefusal.at >= RESUME_RETRY_MS;
+		}
 
 		function updateSession(ctx: ExtensionContext) {
 			try {
@@ -152,19 +164,22 @@ export function createHerdrExtension(
 		// session report goes first: Herdr only anchors a full-lifecycle source (herdr:pi) with a session_start_source,
 		// and state reports before that are ignored.
 		let inFlight = false;
-		let queued: { report: typeof last; request: Report } | undefined;
+		let queued: { report: NonNullable<typeof last>; request: Report } | undefined;
 		let queuedSession: { request: Report } | undefined;
 		let sessionReported = false;
 		let metadataSent = false;
 
 		/**
-		 * Send a report with the resume command (unless this session's was refused); whether Herdr took it, and whether it
-		 * refused the command. Herdr records a command only from the source that holds the pane (#330): when another
-		 * source's session is on the pane, Herdr keeps the pane for it and answers resume_not_accepted. The report then
-		 * goes once more without the command, as the state report Herdr asks for: one refusal, never a loop.
+		 * Send a report, with the resume command when `withResume`; whether Herdr took it, and whether it refused the
+		 * command. Herdr records a command only from the source that holds the pane (#330): when another source's
+		 * session is on the pane, Herdr keeps the pane for it and answers resume_not_accepted. The report then goes once
+		 * more without the command, as the state report Herdr asks for: one refusal, never a loop.
 		 */
-		async function deliver(request: Report): Promise<{ taken: boolean; resumeRefused: boolean }> {
-			const answer = await send(transport, () => request(!resumeRefused));
+		async function deliver(
+			request: Report,
+			withResume: boolean,
+		): Promise<{ taken: boolean; resumeRefused: boolean }> {
+			const answer = await send(transport, () => request(withResume));
 			if (answer.taken || answer.code !== RESUME_NOT_ACCEPTED) return { taken: answer.taken, resumeRefused: false };
 			return { taken: (await send(transport, () => request(false))).taken, resumeRefused: true };
 		}
@@ -229,14 +244,16 @@ export function createHerdrExtension(
 						// not hold back the state report behind it, or the sidebar stays empty: the state still goes, and
 						// the session report is tried again with the next one. A refused resume command still goes with the
 						// state report after it, which is what makes a source hold the pane.
-						sessionReported = (await deliver(request)).taken;
+						sessionReported = (await deliver(request, offerResume(sessionFile))).taken;
 						continue;
 					}
 					if (!queued) break;
 					const { report, request } = queued;
 					queued = undefined;
-					const delivered = await deliver(request);
-					if (delivered.resumeRefused) resumeRefused = true;
+					const withResume = offerResume(report.sessionFile);
+					const delivered = await deliver(request, withResume);
+					if (delivered.resumeRefused) resumeRefusal = { sessionFile: report.sessionFile, at: now() };
+					else if (delivered.taken && withResume) resumeRefusal = undefined;
 					const sent = delivered.taken;
 					// The guards on the display name need the state report to have made `pi` the pane's agent first.
 					if (sent && piIntegration && !metadataSent)
@@ -264,8 +281,6 @@ export function createHerdrExtension(
 				return;
 			}
 			last = next;
-			// Another session's command gets its own try.
-			if (sessionChanged) resumeRefused = false;
 			if (piIntegration && (force || sessionChanged || !sessionReported)) queueSession(sessionStartSource);
 			const argv = resumeArgv(sessionFile, piIntegration);
 			const params = {

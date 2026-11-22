@@ -5,7 +5,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { COMMAND_NAME, PRODUCT_NAME } from "../src/config.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
-import { createHerdrExtension, quietOtherHerdrReporters, resumeArgv } from "../src/extensions/herdr/index.ts";
+import {
+	createHerdrExtension,
+	quietOtherHerdrReporters,
+	RESUME_RETRY_MS,
+	resumeArgv,
+} from "../src/extensions/herdr/index.ts";
 import { isHerdrPiIntegration } from "../src/extensions/herdr/integration-file.ts";
 import {
 	type HerdrRequest,
@@ -30,9 +35,14 @@ function tempDir(): string {
 	return dir;
 }
 
-/** A Herdr socket that answers every request (by default, that it took it) and keeps what it got. */
+type Answer = (request: Request) => Record<string, unknown> | undefined | Promise<Record<string, unknown> | undefined>;
+
+/**
+ * A Herdr socket that answers every request (by default, that it took it) and keeps what it got. An answer of undefined
+ * closes the connection without one.
+ */
 async function fakeHerdr(
-	answer: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({ result: {} }),
+	answer: Answer = () => ({ result: {} }),
 ): Promise<{ socketPath: string; requests: Request[] }> {
 	const socketPath = join(tempDir(), "herdr.sock");
 	const requests: Request[] = [];
@@ -45,7 +55,7 @@ async function fakeHerdr(
 				buffered = buffered.slice(newline + 1);
 				requests.push(request);
 				void Promise.resolve(answer(request)).then((reply) =>
-					socket.write(`${JSON.stringify({ id: request.id, ...reply })}\n`),
+					reply ? socket.write(`${JSON.stringify({ id: request.id, ...reply })}\n`) : socket.end(),
 				);
 			}
 		});
@@ -97,18 +107,13 @@ async function until(check: () => boolean) {
 }
 
 async function startedInHerdr(
-	options: {
-		mode?: string;
-		sessionFile?: string;
-		answer?: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>>;
-		piIntegration?: boolean;
-	} = {},
+	options: { mode?: string; sessionFile?: string; answer?: Answer; piIntegration?: boolean; now?: () => number } = {},
 ) {
 	const herdr = await fakeHerdr(options.answer);
 	const env = { HERDR_ENV: "1", HERDR_SOCKET_PATH: herdr.socketPath, HERDR_PANE_ID: "w1:p2" };
 	const fake = fakePi();
 	let idle = true;
-	createHerdrExtension(env, process.platform, () => options.piIntegration === true)(fake.pi);
+	createHerdrExtension(env, process.platform, () => options.piIntegration === true, options.now)(fake.pi);
 	const ctx = context({ mode: options.mode, idle: () => idle, sessionFile: options.sessionFile ?? "/work/s.jsonl" });
 	await fake.fire("session_start", { type: "session_start", reason: "startup" }, ctx);
 	const states = () => herdr.requests.filter((r) => r.method === "pane.report_agent").map((r) => r.params.state);
@@ -466,28 +471,39 @@ const CURSOR_SESSION = { source: "herdr:cursor", agent: "cursor", value: "probe-
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 const carriesResume = (requests: Request[]) => requests.map((r) => "resume_argv" in r.params);
 
-/** One turn of the session in `ctx`: working, then idle. */
+/** One turn of the session in `ctx`: working, then idle, each reported (a refused report and its resend count once). */
 async function turn(run: Awaited<ReturnType<typeof startedInHerdr>>, ctx: unknown = run.ctx) {
-	const reports = run.states().length;
+	const reported = (state: string) => {
+		const states = run.states();
+		return () => run.states().length > states.length && run.states().at(-1) === state;
+	};
+	const working = reported("working");
 	run.setIdle(false);
 	await run.fire("agent_start", { type: "agent_start" }, ctx);
-	await until(() => run.states().length === reports + 1);
+	await until(working);
+	const idle = reported("idle");
 	run.setIdle(true);
 	await run.fire("agent_settled", { type: "agent_settled", aborted: false }, ctx);
-	await until(() => run.states().length === reports + 2);
+	await until(idle);
+	// A refused report's resend follows its refusal.
+	await new Promise((resolve) => setTimeout(resolve, 10));
 }
 
 describe("Herdr pane with another agent's session", () => {
 	// #330: Herdr refused every report for its resume command, and each one was sent again: the reporter retried the
 	// same refused request after every state change, for as long as Pi-Bolt ran.
-	test("one refusal per session, then state reports without the command", async () => {
+	test("one refusal, then state reports without the command until the retry window ends", async () => {
 		const herdr = herdrPane({ session: CURSOR_SESSION });
-		const run = await startedInHerdr({ answer: herdr.answer });
+		const clock = { now: 0 };
+		const run = await startedInHerdr({ answer: herdr.answer, now: () => clock.now });
 		await until(() => run.herdr.requests.length === 2);
 		await settle();
 		// The refused report, then the same report without the command, as Herdr's answer asks.
 		expect(carriesResume(run.herdr.requests)).toEqual([true, false]);
-		for (let i = 0; i < 5; i++) await turn(run);
+		for (let i = 0; i < 5; i++) {
+			clock.now += 60_000;
+			await turn(run);
+		}
 		await settle();
 		expect(run.herdr.requests.length).toBe(12);
 		expect(carriesResume(run.herdr.requests.slice(2))).toEqual(Array(10).fill(false));
@@ -495,7 +511,7 @@ describe("Herdr pane with another agent's session", () => {
 		// Herdr keeps the other agent's session: a source it has no session for cannot take the pane from it.
 		expect(herdr.pane).toEqual({ session: CURSOR_SESSION });
 
-		// A new session tries its command once, the same way.
+		// Another session file is not held back by this session's refusal.
 		await run.fire("session_shutdown", { type: "session_shutdown", reason: "new" });
 		const next = context({ idle: () => run.ctx.isIdle(), sessionFile: "/work/t.jsonl" });
 		await run.fire("session_start", { type: "session_start", reason: "new" }, next);
@@ -538,22 +554,61 @@ describe("Herdr pane with another agent's session", () => {
 		expect(herdr.pane).toEqual({});
 	});
 
-	// #330: once the other session is gone, state reports take the pane; the command comes with the next session.
-	test("the pane is taken once the other session is released", async () => {
+	// #330 (review): once the other session is gone, state reports take the pane, and the same session's command
+	// follows with the first state report after the retry window.
+	test("a pane that becomes free gets the command within the retry window", async () => {
 		const herdr = herdrPane({ session: CURSOR_SESSION });
-		const run = await startedInHerdr({ answer: herdr.answer });
+		const clock = { now: 0 };
+		const run = await startedInHerdr({ answer: herdr.answer, now: () => clock.now });
 		await until(() => run.herdr.requests.length === 2);
 		herdr.answer({ id: "x", method: "pane.release_agent", params: { ...CURSOR_SESSION, pane_id: "w1:p2" } });
+		clock.now = RESUME_RETRY_MS - 1;
 		await turn(run);
 		expect(herdr.pane).toEqual({ holder: { source: "pi-bolt", agent: "pi-bolt" }, state: "idle" });
-		await run.fire("session_shutdown", { type: "session_shutdown", reason: "new" });
-		await run.fire(
-			"session_start",
-			{ type: "session_start", reason: "new" },
-			context({ sessionFile: "/work/t.jsonl" }),
-		);
-		await until(() => herdr.pane.resume !== undefined);
-		expect(herdr.pane.resume).toEqual([COMMAND_NAME, "--session", "/work/t.jsonl"]);
+		clock.now = RESUME_RETRY_MS;
+		await turn(run);
+		await settle();
+		expect(carriesResume(run.herdr.requests.slice(2))).toEqual([false, false, true, true]);
+		expect(herdr.pane.resume).toEqual([COMMAND_NAME, "--session", "/work/s.jsonl"]);
+		expect(herdr.rejected.length).toBe(1);
+	});
+
+	// #330 (review): a pane that stays with the other agent costs one refused request per window, not one per report.
+	test("refusals are bounded by the retry window", async () => {
+		const herdr = herdrPane({ session: CURSOR_SESSION });
+		const clock = { now: 0 };
+		const run = await startedInHerdr({ answer: herdr.answer, now: () => clock.now });
+		await until(() => run.herdr.requests.length === 2);
+		// Two hours, a turn every two minutes: 60 turns, 120 state reports.
+		for (let i = 0; i < 60; i++) {
+			clock.now += 2 * 60_000;
+			await turn(run);
+		}
+		await settle();
+		// The first refusal, then one per ten minutes.
+		expect(herdr.rejected.length).toBe(13);
+		expect(run.herdr.requests.length).toBe(2 + 120 + 12);
+	});
+
+	// #330 (review): a resend without an answer cleared `last`, and the next report took that as a session change and
+	// offered the refused command again at once.
+	test("a report without an answer does not reset the retry window", async () => {
+		const herdr = herdrPane({ session: CURSOR_SESSION });
+		const clock = { now: 0 };
+		let silent = true;
+		const run = await startedInHerdr({
+			now: () => clock.now,
+			// The plain resend gets no answer (both tries); everything else is answered as Herdr would.
+			answer: (request) => (silent && !("resume_argv" in request.params) ? undefined : herdr.answer(request)),
+		});
+		await until(() => run.herdr.requests.length === 3);
+		await settle();
+		expect(carriesResume(run.herdr.requests)).toEqual([true, false, false]);
+		silent = false;
+		clock.now = RESUME_RETRY_MS - 1;
+		await turn(run);
+		await settle();
+		expect(carriesResume(run.herdr.requests.slice(3))).toEqual([false, false]);
 		expect(herdr.rejected.length).toBe(1);
 	});
 
