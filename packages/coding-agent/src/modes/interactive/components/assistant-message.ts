@@ -160,8 +160,11 @@ export class AssistantMessageComponent extends Container {
 	private contentIsStale = false;
 	/** Thinking runs a click showed (false) or hid (true), by run index; made on first use (thinkingVisibilityOverrides). */
 	private visibilityOverrides?: Map<number, boolean>;
-	/** An extension assigned `contentContainer` (#339): compact() would mount a container of its own instead. */
-	private contentAssigned = false;
+	/**
+	 * An extension assigned `contentContainer` or `thinkingVisibilityOverrides` (#339): compact() would mount a container of
+	 * its own, and the copy that replaces a compacted message holds a copy of the Map.
+	 */
+	private fieldsAssigned = false;
 	/** The children's lines with the prompt markers added, and the lines they were added to. */
 	private markedShared?: { from: string[]; lines: string[] };
 	/** renderLive()'s lines: the children's live lines with the prompt markers added, and what they were made from. */
@@ -235,7 +238,7 @@ export class AssistantMessageComponent extends Container {
 		// (Upstream filled the mounted container at the last update: so does this, first.)
 		this.thaw();
 		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
-		this.contentAssigned = true;
+		this.fieldsAssigned = true;
 		this.content = container;
 		// The next build makes its components into `container`, as upstream's updateContent() does: the streaming shortcut
 		// would only give new text to the components in the mounted container, and those stay there.
@@ -254,6 +257,8 @@ export class AssistantMessageComponent extends Container {
 
 	/** As upstream: the next updates draw from `overrides`, and the setting clears it. */
 	set thinkingVisibilityOverrides(overrides: Map<number, boolean>) {
+		this.thaw();
+		this.fieldsAssigned = true;
 		this.visibilityOverrides = overrides;
 	}
 
@@ -403,7 +408,7 @@ export class AssistantMessageComponent extends Container {
 			this.compacted !== undefined ||
 			this.isStreaming ||
 			this.contentIsStale ||
-			this.contentAssigned ||
+			this.fieldsAssigned ||
 			this.lastMessage === undefined ||
 			last?.live === undefined ||
 			!last.current
@@ -450,11 +455,14 @@ export class AssistantMessageComponent extends Container {
 		return copy;
 	}
 
-	/** Makes again the components compact() let go of; the containers this is in render it again. */
+	/**
+	 * Makes again the components compact() let go of; the containers this is in render it again. Through updateContent(),
+	 * which extensions patch to change the rows (#339): the rows made again are what they made.
+	 */
 	private thaw(): void {
 		if (this.compacted === undefined) return;
 		this.compacted = undefined;
-		if (this.lastMessage) this.buildContent(this.lastMessage);
+		if (this.lastMessage) this.updateContent(this.lastMessage, this.isStreaming);
 		reportRenderChange(this);
 	}
 

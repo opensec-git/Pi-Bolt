@@ -166,6 +166,35 @@ describe("AssistantMessageComponent upstream surface (#339)", () => {
 		expect(text(component.render(60))).toContain("Weighing the options.");
 		component.setHideThinkingBlock(true);
 		expect(overrides.size).toBe(0);
+		// The message keeps the Map: compact() leaves it as it is (its copy would hold a copy of the Map).
+		const transcript = new Container();
+		transcript.addChild(component);
+		transcript.render(60);
+		expect(component.compact()).toBe(false);
+		expect(message.thinkingVisibilityOverrides).toBe(overrides);
+	});
+
+	// #339: an extension that changes the rows in a patched updateContent() (pi-tidy's error lines do) keeps its rows when
+	// a compacted message makes its components again.
+	test("a compacted message makes its rows again through updateContent()", () => {
+		const proto = AssistantMessageComponent.prototype as unknown as UpstreamAssistant;
+		const original = proto.updateContent;
+		proto.updateContent = function (this: UpstreamAssistant, message: AssistantMessage, isStreaming?: boolean) {
+			original.call(this, message, isStreaming);
+			this.contentContainer.addChild(new Text("row added by an extension", 0, 0));
+		};
+		try {
+			const component = new AssistantMessageComponent(assistantMessage("A settled reply."));
+			const transcript = new Container();
+			transcript.addChild(component);
+			expect(text(transcript.render(60))).toContain("row added by an extension");
+			expect(component.compact()).toBe(true);
+			// Another width makes the components again.
+			expect(text(transcript.render(50))).toContain("row added by an extension");
+			expect(component.isCompacted()).toBe(false);
+		} finally {
+			proto.updateContent = original;
+		}
 	});
 });
 
