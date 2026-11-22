@@ -345,7 +345,8 @@ These are the rules for any code bundled into a single executable. Most plugins 
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
 `node_modules`. A second copy would mean duplicate classes and registries. An extension loaded from its files gets Pi's own
-modules by these names in every module it loads, its JavaScript in `node_modules` included, not a copy installed beside it.
+packages (`@earendil-works/pi-*`) in every module it loads, its JavaScript in `node_modules` included, not a copy installed
+beside it. `typebox` is a package of its own: a library the extension uses that has its own copy keeps it.
 
 **Use static imports.** The bundler follows `import x from "./file.ts"` and `await import("./file.ts")` with a literal path. It
 cannot follow an import or `require()` of a path computed at run time. Replace
