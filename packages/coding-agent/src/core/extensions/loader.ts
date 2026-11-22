@@ -30,7 +30,7 @@ import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } fr
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import { compiledExtensionFor, firstLineOf } from "./compiled.ts";
-import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
+import { PI_MODULE_NAMES, PI_PACKAGE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
 import { loadJitiBunLoader } from "./jiti-bun-loader.lazy.ts";
 import type {
@@ -104,14 +104,6 @@ function withoutJitOnlyPackages(modules: Record<string, unknown>): Record<string
 		});
 	}
 	return result;
-}
-
-/**
- * The names the runtime is given Pi's modules by, for the modules an extension loads without jiti
- * (core/extensions/compiled-modules.ts): those jiti gives, and without the JIT, the packages it refuses (JIT_ONLY_PACKAGES).
- */
-function piModuleNamesForFiles(): readonly string[] {
-	return PIBOLT && !PIBOLT.jit ? [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES] : PI_MODULE_NAMES;
 }
 
 /**
@@ -678,8 +670,8 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 			: { alias: getAliases() };
 	if (isBunBinary) {
 		// Pi-Bolt (#331): what jiti hands to the runtime as it is (an ES module imported, a CommonJS module required), in
-		// node_modules or not, gets Pi's modules by those names too, not a copy of Pi's package installed beside the extension.
-		provideModulesToFiles(piModuleNamesForFiles(), getVirtualModules, await getVirtualModules());
+		// node_modules or not, gets Pi's own packages, not a copy installed beside the extension (compiled-modules.ts).
+		provideModulesToFiles(PI_PACKAGE_NAMES, getVirtualModules, await getVirtualModules());
 	}
 	const jiti = createJitiImpl(import.meta.url, {
 		moduleCache: false,
@@ -797,7 +789,10 @@ async function loadExtension(
 	if (compiled && "factory" in compiled) {
 		time(`${extensionPath} module import`, "extensions");
 		// (What it loads from disk as it runs gets Pi's modules, as from jiti: core/extensions/compiled-modules.ts.)
-		provideModulesToFiles(piModuleNamesForFiles(), getVirtualModules);
+		provideModulesToFiles(
+			PIBOLT?.jit ? PI_MODULE_NAMES : [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES],
+			getVirtualModules,
+		);
 		try {
 			const extension = await initializeExtension(
 				compiled.factory,

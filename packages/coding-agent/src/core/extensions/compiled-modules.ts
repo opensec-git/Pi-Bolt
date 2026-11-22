@@ -5,14 +5,19 @@
  * extension that imports `typebox` or `@earendil-works/pi-coding-agent` gets Pi's. Not every module goes through jiti:
  * - Compiled in, the extension's code is Pi-Bolt's own, and a module it loads with `await import(path)` is loaded by the
  *   runtime, which finds no package of that name beside it (#6 of the loader-parity review: "Cannot find package 'typebox'").
+ *   There, the runtime is given every one of those names (PI_MODULE_NAMES).
  * - Loaded from its files, jiti hands a module that is JavaScript as it is to the runtime: an ES module (`.mjs`, or `.js` in a
  *   package of `"type": "module"`) that is imported, and a `.cjs` (or CommonJS `.js`) that is required. The runtime resolves
  *   its imports as Node does, and finds the copy of Pi's package that npm or bun installed beside the extension, if there is
  *   one: a second Pi, of another version, for that module and everything it imports (#331: an extension's `dist/*.js`, in
- *   node_modules, got pi-coding-agent 1.4.0 from disk under Pi 1.5.2).
- * So, in the standalone executable, the runtime is given those names too, once an extension is loaded. Its resolution takes
- * a name registered this way before a package on disk, for import(), static imports and require() alike; nothing else about
- * how it loads a module changes (no module is transformed for this, and no callback runs for any other name).
+ *   node_modules, got pi-coding-agent 1.4.0 from disk under Pi 1.5.2). There, the runtime is given the names of Pi's own
+ *   packages only (PI_PACKAGE_NAMES), for every module. `typebox` and `@sinclair/typebox` are packages of their own, which a
+ *   library the extension uses may need in another version: such a module resolves them as on Pi on Node, from disk, and
+ *   when there is none there, jiti loads it transformed, with Pi's. (The runtime cannot give a name to some modules and not
+ *   others cheaply: its plugins' onResolve is not asked about package names, and onLoad would read every module.)
+ * The runtime takes a name registered this way before a package on disk, for import(), static imports and require() alike;
+ * nothing else about how it loads a module changes (no module is transformed for this, and no callback runs for any other
+ * name).
  *
  * Only the names are registered then: Pi's modules are loaded (`load`) when a module first imports one of them, so a start
  * costs nothing more. A require() of one, which cannot wait, gets them once they are loaded.
@@ -44,6 +49,9 @@ export const PI_MODULE_NAMES = [
 	"@mariozechner/pi-coding-agent",
 ];
 
+/** The names of Pi's own packages among them: @earendil-works/pi-*, and @mariozechner/pi-*, their names before. */
+export const PI_PACKAGE_NAMES = PI_MODULE_NAMES.filter((name) => /^@(?:earendil-works|mariozechner)\//.test(name));
+
 interface ModuleResult {
 	exports: Record<string, unknown>;
 	loader: "object";
@@ -57,12 +65,12 @@ interface BunPlugins {
 	}): void;
 }
 
-let provided = false;
+const provided = new Set<string>();
 let modules: Record<string, unknown> | undefined;
 
 /**
- * Gives the runtime Pi's modules (`load` loads them, with the names `names` among them) by those names, once. `names`
- * may include a name whose module throws when it is read (loader.ts, JIT_ONLY_PACKAGES): importing it then fails.
+ * Gives the runtime Pi's modules (`load` loads them, with the names `names` among them) by those names, each name once.
+ * `names` may include a name whose module throws when it is read (loader.ts, JIT_ONLY_PACKAGES): importing it then fails.
  * `loaded`, the modules when the caller has them already, lets a require() of one work before anything imported one.
  */
 export function provideModulesToFiles(
@@ -73,8 +81,9 @@ export function provideModulesToFiles(
 	const bun = (globalThis as { Bun?: BunPlugins }).Bun;
 	if (!bun) return;
 	modules ??= loaded;
-	if (provided) return;
-	provided = true;
+	const added = names.filter((name) => !provided.has(name));
+	if (added.length === 0) return;
+	for (const name of added) provided.add(name);
 	const result = (name: string): ModuleResult => ({
 		exports: modules![name] as Record<string, unknown>,
 		loader: "object",
@@ -82,7 +91,7 @@ export function provideModulesToFiles(
 	bun.plugin({
 		name: "pi-bolt: Pi's modules",
 		setup(build) {
-			for (const name of names) {
+			for (const name of added) {
 				build.module(name, () =>
 					modules
 						? result(name)
