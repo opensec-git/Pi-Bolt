@@ -290,8 +290,9 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
     <tr><td><code>PIBOLT_INSTALL</code></td><td>Where to install. Default: <code>~/.pi-bolt</code> (Windows: <code>%USERPROFILE%\.pi-bolt</code>).</td></tr>
     <tr><td><code>PIBOLT_BIN_DIR</code></td><td>macOS and Linux: where to link <code>pi-bolt</code>. Default: <code>~/.local/bin</code>.</td></tr>
     <tr><td><code>PIBOLT_NO_PATH=1</code></td><td>Windows: do not add Pi-Bolt to your PATH.</td></tr>
-    <tr><td><code>PIBOLT_YES=1</code></td><td>Do not ask: take the default action, install no extensions, and do not offer to start Pi-Bolt.</td></tr>
+    <tr><td><code>PIBOLT_YES=1</code></td><td>Do not ask: take the default action, install no extensions, add nothing to Paseo, and do not offer to start Pi-Bolt.</td></tr>
     <tr><td><code>PIBOLT_EXTENSIONS</code></td><td><code>yes</code> or <code>no</code>: whether to install OpenSec's optional extensions without asking.</td></tr>
+    <tr><td><code>PIBOLT_PASEO</code></td><td>macOS and Linux: <code>yes</code> or <code>no</code>: whether to add Pi-Bolt as a <a href="integrations.html#paseo">Paseo</a> provider without asking.</td></tr>
     <tr><td><code>PIBOLT_SOURCE</code></td><td>Where to download the executable from: <code>auto</code> (npm, then GitHub; the default), <code>npm</code> or <code>github</code>. Checksums and signatures always come from the GitHub release.</td></tr>
     <tr><td><code>PIBOLT_NPM_REGISTRY</code></td><td>An npm registry or mirror. Default: <code>https://registry.npmjs.org</code>.</td></tr>
     <tr><td><code>PIBOLT_CONNECTIONS</code></td><td>macOS and Linux: connections to download over at once. Default: 4.</td></tr>
