@@ -71,8 +71,8 @@ export class ToolExecutionComponent extends Container {
 	private selfRenderParts?: (readonly string[])[];
 	private selfRenderLines: string[] = [];
 	private readonly emptyLines: string[] = [];
-	private callRendererComponent?: Component;
-	private resultRendererComponent?: Component;
+	private callComponent?: Component;
+	private resultComponent?: Component;
 	private rendererState: any = {};
 	/** Only image-bearing rows retain image children and the inputs needed to reuse their converted PNG data. */
 	private images?: Array<{ component: Image; spacer: Spacer; data: string; mimeType: string; widthCells: number }>;
@@ -262,6 +262,7 @@ export class ToolExecutionComponent extends Container {
 	 * changed it (upstream draws that row from the fields), a default or fallback row its mounted children.
 	 */
 	get imageComponents(): Image[] {
+		this.applyPendingArgs();
 		return this.upstreamImageFields().components;
 	}
 
@@ -278,6 +279,7 @@ export class ToolExecutionComponent extends Container {
 
 	/** The spacer above each image (imageComponents), the same array until the next display update. */
 	get imageSpacers(): Spacer[] {
+		this.applyPendingArgs();
 		return this.upstreamImageFields().spacers;
 	}
 
@@ -286,6 +288,31 @@ export class ToolExecutionComponent extends Container {
 		this.assignShell();
 		this.upstreamImageFields().spacers = spacers;
 		reportRenderChange(this);
+	}
+
+	/**
+	 * The component the call renderer returned last, handed back to it as `lastComponent` (an extension reads it: the edit
+	 * renderer's `preview`). Made from the arguments updateArgs() deferred first, as the shell parts.
+	 */
+	get callRendererComponent(): Component | undefined {
+		this.applyDeferred();
+		return this.callComponent;
+	}
+
+	/** As upstream: what the next call render gets as `lastComponent`. */
+	set callRendererComponent(component: Component | undefined) {
+		this.callComponent = component;
+	}
+
+	/** The component the result renderer returned last, as callRendererComponent. */
+	get resultRendererComponent(): Component | undefined {
+		this.applyDeferred();
+		return this.resultComponent;
+	}
+
+	/** As upstream: what the next result render gets as `lastComponent`. */
+	set resultRendererComponent(component: Component | undefined) {
+		this.resultComponent = component;
 	}
 
 	private upstreamImageFields(): { components: Image[]; spacers: Spacer[] } {
@@ -301,16 +328,37 @@ export class ToolExecutionComponent extends Container {
 		return this.imageFields;
 	}
 
-	/** The shell mounted on this row, made again first if compact() let go of it. */
+	/**
+	 * The shell mounted on this row, made again first if compact() let go of it, holding the arguments updateArgs()
+	 * deferred (#339): an extension that replaces `render` never reaches renderShared(), which applies them.
+	 */
 	private mountedShell(): ToolShell {
-		this.thaw();
+		this.applyDeferred();
 		return this.shell ?? this.addShell();
 	}
 
-	/** mountedShell(), for a setter: the row keeps its shell from now on (compact() would make it again without the part). */
+	/**
+	 * What renderShared() does before it draws: makes again what compact() let go of and applies the arguments updateArgs()
+	 * deferred. For the members an extension reads; Pi-Bolt's own paths keep deferring to the next frame.
+	 */
+	private applyDeferred(): void {
+		this.thaw();
+		this.applyPendingArgs();
+	}
+
+	/** The display update renderShared() runs for arguments updateArgs() deferred (it also makes the image fields again). */
+	private applyPendingArgs(): void {
+		if (this.argsPending) this.updateDisplay();
+	}
+
+	/**
+	 * The mounted shell, for a setter: the row keeps its shell from now on (compact() would make it again without the part).
+	 * Arguments updateArgs() deferred stay deferred: as upstream, they are drawn into the assigned part.
+	 */
 	private assignShell(): ToolShell {
 		this.partsAssigned = true;
-		return this.mountedShell();
+		this.thaw();
+		return this.shell ?? this.addShell();
 	}
 
 	private unusedParts(): UnusedShellParts {
@@ -463,8 +511,8 @@ export class ToolExecutionComponent extends Container {
 		this.clear();
 		this.forgetRendered();
 		this.shell = undefined;
-		this.callRendererComponent = undefined;
-		this.resultRendererComponent = undefined;
+		this.callComponent = undefined;
+		this.resultComponent = undefined;
 		return true;
 	}
 
@@ -618,12 +666,12 @@ export class ToolExecutionComponent extends Container {
 			} else {
 				try {
 					// (liveTheme: a renderer may keep it in what it returns, which is handed back to it, and a theme may change.)
-					const component = callRenderer(this.args, liveTheme, this.getRenderContext(this.callRendererComponent));
-					this.callRendererComponent = component;
+					const component = callRenderer(this.args, liveTheme, this.getRenderContext(this.callComponent));
+					this.callComponent = component;
 					renderContainer.addChild(this.createResultRegion(component));
 					hasContent = true;
 				} catch {
-					this.callRendererComponent = undefined;
+					this.callComponent = undefined;
 					renderContainer.addChild(this.createResultRegion(this.createCallFallback()));
 					hasContent = true;
 				}
@@ -643,13 +691,13 @@ export class ToolExecutionComponent extends Container {
 							{ content: this.result.content as any, details: this.result.details },
 							{ expanded: this.expanded, isPartial: this.isPartial },
 							liveTheme,
-							this.getRenderContext(this.resultRendererComponent),
+							this.getRenderContext(this.resultComponent),
 						);
-						this.resultRendererComponent = component;
+						this.resultComponent = component;
 						renderContainer.addChild(this.createResultRegion(component));
 						hasContent = true;
 					} catch {
-						this.resultRendererComponent = undefined;
+						this.resultComponent = undefined;
 						const component = this.createResultFallback();
 						if (component) {
 							renderContainer.addChild(this.createResultRegion(component));

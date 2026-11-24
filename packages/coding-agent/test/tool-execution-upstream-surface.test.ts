@@ -507,3 +507,128 @@ describe("ToolExecutionComponent upstream fields assigned (#339)", () => {
 		expect(component.render(width)).toEqual(before);
 	});
 });
+
+describe("ToolExecutionComponent upstream parts while arguments stream (#339)", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	interface StreamedRow extends UpstreamToolRow {
+		callRendererComponent: Component | undefined;
+	}
+
+	/** A tool whose call row shows `args.path`, drawn in `renderShell`; counts the call renders. */
+	function streamingDefinition(renderShell: "default" | "self" | undefined, calls: { count: number }): ToolDefinition {
+		return {
+			...definition(renderShell),
+			renderCall: (args) => {
+				calls.count++;
+				return new Text(`probe ${(args as { path?: string }).path ?? ""}`, 0, 0);
+			},
+		};
+	}
+
+	function streamingRow(toolDefinition: ToolDefinition | undefined): ToolExecutionComponent {
+		return new ToolExecutionComponent("probe", "call-1", { path: "first.txt" }, {}, toolDefinition, ui, "/tmp");
+	}
+
+	// #339: updateArgs() defers the new arguments to renderShared(), which an extension that replaces `render` (pi-tidy)
+	// never reaches; the parts it reads hold the latest arguments.
+	test.each([
+		["default", "contentBox", undefined as "self" | undefined],
+		["self", "selfRenderContainer", "self" as const],
+	] as const)("a %s-shell row's %s holds the arguments streamed since the last frame", (_shell, part, shell) => {
+		const calls = { count: 0 };
+		const component = streamingRow(streamingDefinition(shell, calls));
+		const tool = upstream(component) as unknown as StreamedRow;
+		const width = 60;
+		expect(text(component.render(width))).toContain("probe first.txt");
+
+		expect(component.updateArgs({ path: "second.txt" })).toBe(true);
+		const source = tool[part];
+		expect(text(source.render(width))).toContain("probe second.txt");
+		expect(text((tool.callRendererComponent as Text).render(width))).toContain("probe second.txt");
+		// The render that follows does not draw the arguments again: one call render per change, as before.
+		const afterRead = calls.count;
+		expect(text(component.render(width))).toContain("probe second.txt");
+		expect(calls.count).toBe(afterRead);
+	});
+
+	// #339
+	test("a row without renderers' contentText and contentTextRegion hold the streamed arguments", () => {
+		const component = streamingRow(undefined);
+		const tool = upstream(component);
+		const width = 60;
+		component.render(width);
+		component.updateArgs({ path: "second.txt" });
+		expect(text(tool.contentText.render(width))).toContain("second.txt");
+		component.updateArgs({ path: "third.txt" });
+		expect(text(tool.contentTextRegion.render(width))).toContain("third.txt");
+	});
+
+	// #339
+	test("image fields read while arguments are pending keep their identity at the next frame", () => {
+		const component = streamingRow(definition());
+		const tool = upstream(component);
+		component.render(60);
+		component.updateArgs({ path: "second.txt" });
+		const components = tool.imageComponents;
+		component.render(60);
+		expect(tool.imageComponents).toBe(components);
+	});
+
+	// #339: pi-tidy's frame draws the part's rows from its own `render`.
+	test("a render patched to draw the part's rows shows each streamed argument", () => {
+		const calls = { count: 0 };
+		const proto = ToolExecutionComponent.prototype as unknown as { render(width: number): string[] };
+		const original = proto.render;
+		proto.render = function (this: ToolExecutionComponent, width: number) {
+			return ["╭", ...upstream(this).contentBox.render(width - 2), "╰"];
+		};
+		try {
+			const component = streamingRow(streamingDefinition(undefined, calls));
+			for (const path of ["a", "ab", "abc"]) {
+				component.updateArgs({ path });
+				expect(text(component.render(40))).toContain(`probe ${path}`);
+			}
+			expect(calls.count).toBe(4);
+		} finally {
+			proto.render = original;
+		}
+	});
+
+	// #339: Pi-Bolt's own path keeps one call render per frame, however many deltas arrive in between.
+	test("the row's own render still applies many argument updates once, and reading without updates renders nothing", () => {
+		const calls = { count: 0 };
+		const component = streamingRow(streamingDefinition(undefined, calls));
+		const tool = upstream(component) as unknown as StreamedRow;
+		component.render(60);
+		const start = calls.count;
+		for (const path of ["a", "ab", "abc", "abcd"]) component.updateArgs({ path });
+		expect(calls.count).toBe(start);
+		expect(text(component.render(60))).toContain("probe abcd");
+		expect(calls.count).toBe(start + 1);
+
+		void tool.contentBox;
+		void tool.contentText;
+		void tool.selfRenderContainer;
+		void tool.callRendererComponent;
+		void tool.imageComponents;
+		expect(calls.count).toBe(start + 1);
+	});
+
+	// #339: as upstream, where updateDisplay() fills whatever the field holds at the next render.
+	test("a part assigned while arguments are pending receives them; the mounted part keeps the earlier ones", () => {
+		const component = streamingRow(streamingDefinition(undefined, { count: 0 }));
+		const tool = upstream(component);
+		const width = 60;
+		component.render(width);
+		const mounted = tool.contentBox;
+		component.updateArgs({ path: "second.txt" });
+		const assigned = new Box(1, 1);
+		tool.contentBox = assigned;
+		component.render(width);
+		expect(text(assigned.render(width))).toContain("probe second.txt");
+		expect(text(mounted.render(width))).toContain("probe first.txt");
+	});
+});
