@@ -1,0 +1,8 @@
+date: 2026-11-24T22:25:35Z
+load: 2.75 2.62 2.64
+build 1.2.1: the same as in mac/builds.txt
+build 1.3.0: the same as in mac/builds.txt
+build 1.3.0-openai-7.19: 1.3.0's source (540fde13f) built the same way with node_modules/openai 7.19.0 in place of 7.59.0, an attribution build of the 1.3.1 performance work
+  sha256 pi-bin: 1bb3ce7c71ce62bd31747fe951cdfcd5f87a6e0ad395d13bea3dba398b9b6ea7
+  version: 1.6.0 (Pi-Bolt 1.3.0, darwin-arm64, JIT off)
+build 1.3.1: the same as in mac/builds.txt

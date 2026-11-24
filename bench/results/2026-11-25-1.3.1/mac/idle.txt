@@ -1,0 +1,102 @@
+{'build': '1.2.1', 'cpu_ms_per_s': 0.593, 'own_mb': [19.9, 19.0], 'threads': {}, 'instr_m_per_s': 1.086, 'wakeups_per_s': 1.2}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.743, 'own_mb': [21.2, 18.0], 'threads': {}, 'instr_m_per_s': 1.312, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.775, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.452, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.6, 'own_mb': [20.6, 17.9], 'threads': {}, 'instr_m_per_s': 1.284, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.649, 'own_mb': [21.1, 17.8], 'threads': {}, 'instr_m_per_s': 1.212, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.584, 'own_mb': [19.7, 18.8], 'threads': {}, 'instr_m_per_s': 1.185, 'wakeups_per_s': 1.1}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.611, 'own_mb': [19.7, 18.8], 'threads': {}, 'instr_m_per_s': 1.152, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.651, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.272, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.766, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.482, 'wakeups_per_s': 0.8}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.666, 'own_mb': [20.7, 18.0], 'threads': {}, 'instr_m_per_s': 1.229, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.773, 'own_mb': [21.2, 17.9], 'threads': {}, 'instr_m_per_s': 1.403, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.576, 'own_mb': [19.8, 19.0], 'threads': {}, 'instr_m_per_s': 1.16, 'wakeups_per_s': 1.2}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.2.1                      0.589         18.9
+1.3.0                      0.697         17.9
+1.3.1                      0.716         18.1
+{'build': '1.3.0', 'cpu_ms_per_s': 0.726, 'own_mb': [21.2, 17.9], 'threads': {}, 'instr_m_per_s': 1.386, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.67, 'own_mb': [21.0, 18.0], 'threads': {}, 'instr_m_per_s': 1.45, 'wakeups_per_s': 0.8}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.483, 'own_mb': [19.6, 18.7], 'threads': {}, 'instr_m_per_s': 1.169, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.528, 'own_mb': [19.8, 18.9], 'threads': {}, 'instr_m_per_s': 1.049, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.779, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.48, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.715, 'own_mb': [21.2, 17.9], 'threads': {}, 'instr_m_per_s': 1.379, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.735, 'own_mb': [21.2, 17.8], 'threads': {}, 'instr_m_per_s': 1.329, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.602, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.48, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.608, 'own_mb': [19.6, 18.6], 'threads': {}, 'instr_m_per_s': 1.195, 'wakeups_per_s': 1.1}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.604, 'own_mb': [19.6, 18.7], 'threads': {}, 'instr_m_per_s': 1.127, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.576, 'own_mb': [20.7, 18.0], 'threads': {}, 'instr_m_per_s': 1.142, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.743, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.376, 'wakeups_per_s': 0.9}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.0                      0.730         17.9
+1.3.1                      0.636         18.1
+1.2.1                      0.566         18.7
+{'build': '1.3.1', 'cpu_ms_per_s': 0.685, 'own_mb': [20.6, 18.1], 'threads': {}, 'instr_m_per_s': 1.273, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.638, 'own_mb': [19.7, 18.9], 'threads': {}, 'instr_m_per_s': 1.227, 'wakeups_per_s': 1.1}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.716, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.479, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.519, 'own_mb': [20.8, 17.8], 'threads': {}, 'instr_m_per_s': 1.309, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.829, 'own_mb': [19.7, 18.8], 'threads': {}, 'instr_m_per_s': 1.676, 'wakeups_per_s': 1.3}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.763, 'own_mb': [21.0, 18.0], 'threads': {}, 'instr_m_per_s': 1.469, 'wakeups_per_s': 0.8}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.583, 'own_mb': [20.7, 18.0], 'threads': {}, 'instr_m_per_s': 1.152, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.553, 'own_mb': [19.5, 18.5], 'threads': {}, 'instr_m_per_s': 1.072, 'wakeups_per_s': 1.1}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.613, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.453, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.74, 'own_mb': [21.2, 17.9], 'threads': {}, 'instr_m_per_s': 1.309, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.602, 'own_mb': [19.8, 19.1], 'threads': {}, 'instr_m_per_s': 1.107, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.533, 'own_mb': [21.0, 18.0], 'threads': {}, 'instr_m_per_s': 1.401, 'wakeups_per_s': 0.8}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.1                      0.634         18.0
+1.2.1                      0.620         18.9
+1.3.0                      0.664         17.9
+{'build': '1.2.1', 'cpu_ms_per_s': 0.221, 'own_mb': [19.5, 18.9], 'threads': {}, 'instr_m_per_s': 1.035, 'wakeups_per_s': 0.7}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.893, 'own_mb': [21.1, 18.0], 'threads': {}, 'instr_m_per_s': 1.394, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.736, 'own_mb': [20.7, 18.0], 'threads': {}, 'instr_m_per_s': 1.507, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.658, 'own_mb': [20.6, 17.9], 'threads': {}, 'instr_m_per_s': 1.277, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.707, 'own_mb': [20.8, 17.9], 'threads': {}, 'instr_m_per_s': 1.49, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.474, 'own_mb': [19.6, 18.8], 'threads': {}, 'instr_m_per_s': 1.167, 'wakeups_per_s': 1.1}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.545, 'own_mb': [19.5, 18.6], 'threads': {}, 'instr_m_per_s': 1.074, 'wakeups_per_s': 1.0}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.782, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.505, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.747, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.508, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.621, 'own_mb': [20.7, 18.0], 'threads': {}, 'instr_m_per_s': 1.328, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.701, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.322, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.594, 'own_mb': [19.6, 18.7], 'threads': {}, 'instr_m_per_s': 1.246, 'wakeups_per_s': 1.3}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.2.1                      0.510         18.8
+1.3.0                      0.744         17.9
+1.3.1                      0.697         18.0
+{'build': '1.3.0', 'cpu_ms_per_s': 0.768, 'own_mb': [21.1, 18.0], 'threads': {}, 'instr_m_per_s': 1.331, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.57, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.398, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.535, 'own_mb': [19.7, 18.9], 'threads': {}, 'instr_m_per_s': 1.171, 'wakeups_per_s': 1.1}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.654, 'own_mb': [19.6, 18.6], 'threads': {}, 'instr_m_per_s': 1.169, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.753, 'own_mb': [20.6, 18.0], 'threads': {}, 'instr_m_per_s': 1.49, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.772, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.323, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.617, 'own_mb': [21.2, 18.0], 'threads': {}, 'instr_m_per_s': 1.165, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.676, 'own_mb': [21.0, 18.1], 'threads': {}, 'instr_m_per_s': 1.242, 'wakeups_per_s': 0.8}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.437, 'own_mb': [19.6, 18.7], 'threads': {}, 'instr_m_per_s': 1.16, 'wakeups_per_s': 1.1}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.574, 'own_mb': [19.7, 18.6], 'threads': {}, 'instr_m_per_s': 1.062, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.735, 'own_mb': [20.6, 18.0], 'threads': {}, 'instr_m_per_s': 1.322, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.729, 'own_mb': [20.8, 17.9], 'threads': {}, 'instr_m_per_s': 1.542, 'wakeups_per_s': 0.9}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.0                      0.748         17.9
+1.3.1                      0.706         18.1
+1.2.1                      0.554         18.6
+{'build': '1.3.1', 'cpu_ms_per_s': 0.703, 'own_mb': [20.6, 18.0], 'threads': {}, 'instr_m_per_s': 1.226, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.584, 'own_mb': [19.6, 18.7], 'threads': {}, 'instr_m_per_s': 1.179, 'wakeups_per_s': 1.1}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.923, 'own_mb': [21.1, 18.0], 'threads': {}, 'instr_m_per_s': 1.88, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.637, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.124, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.503, 'own_mb': [19.7, 19.0], 'threads': {}, 'instr_m_per_s': 1.159, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.737, 'own_mb': [20.6, 18.0], 'threads': {}, 'instr_m_per_s': 1.375, 'wakeups_per_s': 0.9}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.678, 'own_mb': [20.6, 17.9], 'threads': {}, 'instr_m_per_s': 1.272, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.567, 'own_mb': [19.9, 18.8], 'threads': {}, 'instr_m_per_s': 1.048, 'wakeups_per_s': 1.1}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.665, 'own_mb': [21.1, 17.9], 'threads': {}, 'instr_m_per_s': 1.453, 'wakeups_per_s': 0.9}
+{'build': '1.3.0', 'cpu_ms_per_s': 0.639, 'own_mb': [21.1, 18.0], 'threads': {}, 'instr_m_per_s': 1.215, 'wakeups_per_s': 0.9}
+{'build': '1.2.1', 'cpu_ms_per_s': 0.594, 'own_mb': [19.8, 19.0], 'threads': {}, 'instr_m_per_s': 1.117, 'wakeups_per_s': 1.1}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.604, 'own_mb': [20.7, 17.9], 'threads': {}, 'instr_m_per_s': 1.161, 'wakeups_per_s': 0.9}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.1                      0.691         17.9
+1.2.1                      0.575         18.9
+1.3.0                      0.652         17.9

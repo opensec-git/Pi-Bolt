@@ -1,0 +1,6 @@
+date: 2026-11-24T22:22:45Z
+host: Darwin 27.2.0 arm64
+power: AC Power
+build 1.2.1: the same as in mac/builds.txt
+build 1.3.0: the same as in mac/builds.txt
+build 1.3.1: the same as in mac/builds.txt

@@ -1,0 +1,6 @@
+date: 2026-11-24T22:13:12Z
+load: 141.20 130.72 90.53
+build 1.3.0: the bolt-v1.3.0 release archive pi-bolt-linux-x64.tar.xz, pi-bolt-linux-x64/pi-start
+build 1.3.1: built from release/1.3.1 at fb75700f2 on the bolt-v1.3.0 runtime, pi-start
+step: tree_filter.py, 12 rounds, both orders
+load after: 140.40 132.30 93.18
