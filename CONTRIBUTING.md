@@ -44,6 +44,15 @@ Questions and ideas that aren't bugs go to [Discussions](https://github.com/open
 A maintainer reviews it. CI must pass and every review comment must be resolved before it can be merged. We merge; you don't
 need to rebase unless asked.
 
+## Maintainers
+
+- **Core maintainer:** [@opensec-intelligence](https://github.com/opensec-intelligence) (OpenSec). Has the final say on
+  direction, releases and merges.
+- **Primary maintainer:** [@Kushalkhemka](https://github.com/Kushalkhemka). Reviews and merges pull requests and triages
+  issues.
+
+Both are requested for review on every pull request (`.github/CODEOWNERS`).
+
 ## Where things live
 
 | Area | Where | Check with |
