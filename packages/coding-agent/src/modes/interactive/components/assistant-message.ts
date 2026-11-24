@@ -145,7 +145,8 @@ type ContentPart =
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
-	private contentContainer: Container;
+	/** The text, thinking and error rows (buildContent()); `contentContainer` for extensions. */
+	private content: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
 	private hiddenThinkingLabel: string;
@@ -157,7 +158,13 @@ export class AssistantMessageComponent extends Container {
 	private messageId?: string;
 	private timestamp?: string;
 	private contentIsStale = false;
-	private thinkingVisibilityOverrides?: Map<number, boolean>;
+	/** Thinking runs a click showed (false) or hid (true), by run index; made on first use (thinkingVisibilityOverrides). */
+	private visibilityOverrides?: Map<number, boolean>;
+	/**
+	 * An extension assigned `contentContainer` or `thinkingVisibilityOverrides` (#339): compact() would mount a container of
+	 * its own, and the copy that replaces a compacted message holds a copy of the Map.
+	 */
+	private fieldsAssigned = false;
 	/** The children's lines with the prompt markers added, and the lines they were added to. */
 	private markedShared?: { from: string[]; lines: string[] };
 	/** renderLive()'s lines: the children's live lines with the prompt markers added, and what they were made from. */
@@ -204,12 +211,55 @@ export class AssistantMessageComponent extends Container {
 		this.timestamp = timestamp;
 
 		// Container for text/thinking content
-		this.contentContainer = new Container();
-		this.addChild(this.contentContainer);
+		this.content = new Container();
+		this.addChild(this.content);
 
 		if (message) {
 			this.updateContent(message);
 		}
+	}
+
+	/**
+	 * The container of the text, thinking and error rows, as of the last updateContent(), as upstream Pi builds it there:
+	 * built now if a streamed update left it for the next render, and made again if compact() let go of it. For extensions
+	 * that read or restyle the rows (#339).
+	 */
+	get contentContainer(): Container {
+		this.thaw();
+		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
+		return this.content;
+	}
+
+	/**
+	 * As upstream, which mounts its container once and fills whatever the field holds: the next updates fill `container`,
+	 * and the message keeps drawing the container mounted at construction, with what it held last.
+	 */
+	set contentContainer(container: Container) {
+		// (Upstream filled the mounted container at the last update: so does this, first.)
+		this.thaw();
+		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
+		this.fieldsAssigned = true;
+		this.content = container;
+		// The next build makes its components into `container`, as upstream's updateContent() does: the streaming shortcut
+		// would only give new text to the components in the mounted container, and those stay there.
+		this.built = undefined;
+		this.markdownBlocks = [];
+	}
+
+	/**
+	 * Whether a thinking run is hidden (true) or shown (false), by run index, where a click (or an extension) overrode the
+	 * setting; updateContent() draws it. For extensions that open and close thinking runs (#339).
+	 */
+	get thinkingVisibilityOverrides(): Map<number, boolean> {
+		this.visibilityOverrides ??= new Map();
+		return this.visibilityOverrides;
+	}
+
+	/** As upstream: the next updates draw from `overrides`, and the setting clears it. */
+	set thinkingVisibilityOverrides(overrides: Map<number, boolean>) {
+		this.thaw();
+		this.fieldsAssigned = true;
+		this.visibilityOverrides = overrides;
 	}
 
 	override invalidate(): void {
@@ -237,7 +287,7 @@ export class AssistantMessageComponent extends Container {
 	setHideThinkingBlock(hide: boolean): void {
 		this.built = undefined;
 		this.hideThinkingBlock = hide;
-		this.thinkingVisibilityOverrides = undefined;
+		this.visibilityOverrides?.clear();
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -358,6 +408,7 @@ export class AssistantMessageComponent extends Container {
 			this.compacted !== undefined ||
 			this.isStreaming ||
 			this.contentIsStale ||
+			this.fieldsAssigned ||
 			this.lastMessage === undefined ||
 			last?.live === undefined ||
 			!last.current
@@ -366,9 +417,9 @@ export class AssistantMessageComponent extends Container {
 		}
 		this.compacted = { width: last.width, live: last.live, shared: last.shared };
 		this.lastRendered = undefined;
-		this.contentContainer = new Container();
+		this.content = new Container();
 		this.clear();
-		this.addChild(this.contentContainer);
+		this.addChild(this.content);
 		this.forgetRendered();
 		this.markdownBlocks = [];
 		this.blockTexts = [];
@@ -397,18 +448,21 @@ export class AssistantMessageComponent extends Container {
 			for (const line of compacted.live.lines) live.lines.push(line);
 			copy.compacted = { width: compacted.width, live };
 		}
-		copy.contentContainer = new Container();
+		copy.content = new Container();
 		copy.clear();
-		copy.addChild(copy.contentContainer);
+		copy.addChild(copy.content);
 		copy.forgetRendered();
 		return copy;
 	}
 
-	/** Makes again the components compact() let go of; the containers this is in render it again. */
+	/**
+	 * Makes again the components compact() let go of; the containers this is in render it again. Through updateContent(),
+	 * which extensions patch to change the rows (#339): the rows made again are what they made.
+	 */
 	private thaw(): void {
 		if (this.compacted === undefined) return;
 		this.compacted = undefined;
-		if (this.lastMessage) this.buildContent(this.lastMessage);
+		if (this.lastMessage) this.updateContent(this.lastMessage, this.isStreaming);
 		reportRenderChange(this);
 	}
 
@@ -531,7 +585,7 @@ export class AssistantMessageComponent extends Container {
 				}
 
 				const runIndex = thinkingRunIndex++;
-				const hidden = this.thinkingVisibilityOverrides?.get(runIndex) ?? this.hideThinkingBlock;
+				const hidden = this.visibilityOverrides?.get(runIndex) ?? this.hideThinkingBlock;
 				// A hidden run with an empty label renders nothing, including no spacing.
 				if (hidden && !this.hiddenThinkingLabel.trim()) {
 					continue;
@@ -612,14 +666,14 @@ export class AssistantMessageComponent extends Container {
 		const previousBlocks = this.markdownBlocks;
 		this.markdownBlocks = [];
 		// Clear content container
-		this.contentContainer.clear();
+		this.content.clear();
 
 		for (const part of parts) {
 			if (part.kind === "spacer") {
-				this.contentContainer.addChild(new Spacer(1));
+				this.content.addChild(new Spacer(1));
 			} else if (part.kind === "text") {
 				const text = part.text;
-				this.contentContainer.addChild(
+				this.content.addChild(
 					this.markdownFor(
 						"text",
 						text,
@@ -667,10 +721,9 @@ export class AssistantMessageComponent extends Container {
 									},
 								),
 						);
-				this.contentContainer.addChild(
+				this.content.addChild(
 					new MouseRegion(thinkingComponent, (event) => {
 						if (event.type !== "click" || event.button !== "left") return undefined;
-						this.thinkingVisibilityOverrides ??= new Map();
 						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
 						if (this.lastMessage) this.updateContent(this.lastMessage);
 						return { handled: true };
@@ -680,9 +733,7 @@ export class AssistantMessageComponent extends Container {
 				this.hasToolCalls = part.present;
 			} else {
 				// (An error's text can come from the provider's response: escape sequences in it would act on the terminal.)
-				this.contentContainer.addChild(
-					new Text(theme.fg("error", sanitizeTerminalText(part.text)), this.outputPad, 0),
-				);
+				this.content.addChild(new Text(theme.fg("error", sanitizeTerminalText(part.text)), this.outputPad, 0));
 			}
 		}
 	}

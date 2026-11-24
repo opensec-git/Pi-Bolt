@@ -18,7 +18,8 @@ MCowBQYDK2VwAyEAoLboJqtKaoISPqffk03vHZr+1sRBG3uIRIWeKOew+aY=
 <pre data-label="Terminal"><span class="p">$ </span>sha256sum -c --ignore-missing SHA256SUMS
 <span class="p">$ </span>openssl pkeyutl -verify -pubin -inkey release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig</pre>
 <p>The second command needs OpenSSL 3 or later; macOS's own <code>openssl</code> (LibreSSL) cannot check Ed25519, but
-  Homebrew's <code>openssl@3</code> can.</p>
+  Homebrew's <code>openssl@3</code> can. Where OpenSSL 3 is installed beside an older one as <code>openssl3</code> (AlmaLinux
+  and RHEL 8), run <code>openssl3</code> instead.</p>
 
 <h2>What the installer does</h2>
 <ul>

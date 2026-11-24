@@ -1,0 +1,5 @@
+=== 2026-11-25 03:52:45 load 2.68 2.79 2.72 answer.py, RPC and TUI single answer, 24 rounds
+=== 2026-11-25 03:53:00 load 2.53 2.75 2.71 answer_cores.py, TUI single answer by core and QoS, 24 rounds
+=== 2026-11-25 03:53:28 load 2.28 2.68 2.68 benchmark.py, interactive, 5 prompts, 8 runs per rotation
+=== 2026-11-25 03:54:08 load 2.00 2.57 2.64 tree_filter.py, linear and branched, 12 rounds
+=== 2026-11-25 03:54:51 load 2.00 2.50 2.61 done

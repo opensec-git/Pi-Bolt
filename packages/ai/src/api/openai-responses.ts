@@ -23,6 +23,7 @@ import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
+import { reusableClient } from "../utils/sdk-client.ts";
 import { getDeclaredTools, resolveTranscript } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
@@ -348,13 +349,17 @@ function createClient(
 		Object.assign(headers, optionsHeaders);
 	}
 
-	return new OpenAI({
-		apiKey,
-		baseURL: model.baseUrl,
-		dangerouslyAllowBrowser: true,
-		fetch,
-		defaultHeaders: headers,
-	});
+	return reusableClient(
+		{ apiKey, baseUrl: model.baseUrl, headers, fetch },
+		() =>
+			new OpenAI({
+				apiKey,
+				baseURL: model.baseUrl,
+				dangerouslyAllowBrowser: true,
+				fetch,
+				defaultHeaders: headers,
+			}),
+	);
 }
 
 function buildParams(

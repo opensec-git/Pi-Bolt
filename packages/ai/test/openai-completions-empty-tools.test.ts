@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
 import type { Context, Model } from "../src/types.ts";
+import { forgetReusableClients } from "../src/utils/sdk-client.ts";
 
 // Empty tools arrays must NOT be serialized as `tools: []` — some OpenAI-compatible
 // backends (e.g. DashScope / Aliyun Qwen via compatible-mode) reject the request with
@@ -56,6 +57,8 @@ vi.mock("openai", () => {
 
 describe("openai-completions empty tools handling", () => {
 	beforeEach(() => {
+		// Each test checks the options a new client is made with.
+		forgetReusableClients();
 		mockState.lastParams = undefined;
 		mockState.lastClientOptions = undefined;
 	});

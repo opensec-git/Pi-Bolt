@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { getModel, normalizeContext } from "../src/compat.ts";
 import type { Model } from "../src/types.ts";
+import { forgetReusableClients } from "../src/utils/sdk-client.ts";
 
 interface FakeOpenAIClientOptions {
 	apiKey: string;
@@ -67,6 +68,8 @@ describe("openai-completions prompt caching", () => {
 	const originalEnv = process.env.PI_CACHE_RETENTION;
 
 	beforeEach(() => {
+		// Each test checks the options a new client is made with.
+		forgetReusableClients();
 		mockState.lastParams = undefined;
 		mockState.lastClientOptions = undefined;
 		delete process.env.PI_CACHE_RETENTION;

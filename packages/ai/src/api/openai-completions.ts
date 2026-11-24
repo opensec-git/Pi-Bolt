@@ -51,6 +51,7 @@ import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-r
 import { cacheRequestBody } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { reusableClient } from "../utils/sdk-client.ts";
 import { ToolCallArgumentsStream } from "../utils/streaming-json.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import {
@@ -815,13 +816,17 @@ function createClient(
 		Object.assign(headers, optionsHeaders);
 	}
 
-	return new OpenAI({
-		apiKey,
-		baseURL: model.baseUrl,
-		dangerouslyAllowBrowser: true,
-		fetch,
-		defaultHeaders: headers,
-	});
+	return reusableClient(
+		{ apiKey, baseUrl: model.baseUrl, headers, fetch },
+		() =>
+			new OpenAI({
+				apiKey,
+				baseURL: model.baseUrl,
+				dangerouslyAllowBrowser: true,
+				fetch,
+				defaultHeaders: headers,
+			}),
+	);
 }
 
 /** The context has already been resolved for this model. A collapsed transcript stores all tools in its head. */

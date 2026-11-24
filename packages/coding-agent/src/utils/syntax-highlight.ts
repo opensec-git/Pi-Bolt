@@ -47,15 +47,74 @@ const eagerLanguages = {
 	lua,
 };
 
-let eagerLanguagesRegistered = false;
+/**
+ * Every name an eager grammar answers to (its own and its aliases, lowercase), so that a grammar can be registered when it
+ * is first asked for by any of them without running the others' definitions. Exported for its test, which checks it against
+ * the grammars.
+ */
+export const EAGER_LANGUAGE_ALIASES: Readonly<Record<keyof typeof eagerLanguages, readonly string[]>> = {
+	python: ["py", "gyp", "ipython"],
+	java: ["jsp"],
+	go: ["golang"],
+	javascript: ["js", "jsx", "mjs", "cjs"],
+	json: [],
+	cpp: ["cc", "c++", "h++", "hpp", "hh", "hxx", "cxx"],
+	typescript: ["ts", "tsx"],
+	php: ["php3", "php4", "php5", "php6", "php7", "php8"],
+	ruby: ["rb", "gemspec", "podspec", "thor", "irb"],
+	c: ["h"],
+	csharp: ["cs", "c#"],
+	nix: ["nixos"],
+	bash: ["sh", "zsh"],
+	rust: ["rs"],
+	scala: [],
+	kotlin: ["kt", "kts"],
+	swift: [],
+	dart: [],
+	groovy: [],
+	perl: ["pl", "pm"],
+	lua: [],
+};
 
-/** The eager set registers on first use, not at every start: running its grammar definitions costs about 1 ms. */
+/** The eager grammars not registered yet, by every name they answer to. */
+const pendingEagerLanguages = new Map<string, keyof typeof eagerLanguages>();
+for (const [name, aliases] of Object.entries(EAGER_LANGUAGE_ALIASES) as [keyof typeof eagerLanguages, string[]][]) {
+	pendingEagerLanguages.set(name, name);
+	for (const alias of aliases) pendingEagerLanguages.set(alias, name);
+}
+/** How many eager grammars are not registered yet. */
+let pendingEagerCount = Object.keys(eagerLanguages).length;
+
+/**
+ * Registers the eager grammar `name` names, if it is one that is not registered yet. Running all 21 definitions costs about
+ * 1 ms; a reply with a code block in one language needs one of them.
+ */
+function registerEagerLanguage(name: string): void {
+	const language = pendingEagerLanguages.get(name.toLowerCase());
+	if (language === undefined) return;
+	for (const [key, value] of pendingEagerLanguages) if (value === language) pendingEagerLanguages.delete(key);
+	pendingEagerCount--;
+	if (hljs.getLanguage(language) === undefined) hljs.registerLanguage(language, eagerLanguages[language]);
+}
+
+/** Whether every eager grammar is registered, in the order of eagerLanguages. */
+let eagerLanguagesInOrder = false;
+
+/**
+ * Every eager grammar, in the order of eagerLanguages, as automatic detection and loading all grammars need. Automatic
+ * detection tries the grammars in the order they were registered and keeps the first of two that score the same, so the
+ * grammars registered one at a time on first use are registered again in that order: detection then picks what it picked
+ * when all of them were registered at the first code block.
+ */
 function registerEagerLanguages(): void {
-	if (eagerLanguagesRegistered) return;
-	eagerLanguagesRegistered = true;
-	for (const [name, language] of Object.entries(eagerLanguages)) {
-		hljs.registerLanguage(name, language);
+	if (eagerLanguagesInOrder) return;
+	eagerLanguagesInOrder = true;
+	for (const name of Object.keys(eagerLanguages)) {
+		if (!pendingEagerLanguages.has(name)) hljs.unregisterLanguage(name);
 	}
+	pendingEagerLanguages.clear();
+	pendingEagerCount = 0;
+	for (const [name, language] of Object.entries(eagerLanguages)) hljs.registerLanguage(name, language);
 }
 
 let allLanguagesPromise: Promise<void> | undefined;
@@ -383,7 +442,8 @@ function renderHighlightedTree(root: TokenNode, classPrefix: string, theme: High
 }
 
 export function highlight(code: string, options: HighlightOptions = {}): string {
-	registerEagerLanguages();
+	if (options.language) registerEagerLanguage(options.language);
+	else registerEagerLanguages();
 	installFastHtmlEmitter();
 	const result = options.language
 		? hljs.highlight(code, {
@@ -893,7 +953,7 @@ export class GrowingHighlighter {
 
 	/** The lines of `code` highlighted. The array is the caller's; its lines before the checkpoint are shared. */
 	lines(code: string): string[] {
-		registerEagerLanguages();
+		registerEagerLanguage(this.language);
 		installFastHtmlEmitter();
 		const grammar = hljs.getLanguage(this.language);
 		if (grammar === undefined) throw new Error(`Unknown language: "${this.language}"`);
@@ -1151,7 +1211,7 @@ export function loadAllHighlightLanguagesOnDemand(onLoaded: (languages: Readonly
 }
 
 export function supportsLanguage(name: string): boolean {
-	registerEagerLanguages();
+	registerEagerLanguage(name);
 	if (hljs.getLanguage(name) !== undefined) {
 		return true;
 	}
@@ -1165,9 +1225,10 @@ export function supportsLanguage(name: string): boolean {
 }
 
 /**
- * Number of registered grammars. It grows when the deferred grammars load, which can change the highlighting of
- * code that embeds another language, such as HTML in a JavaScript template literal.
+ * Number of grammars there are: those registered and the eager ones that register when first asked for. It grows when the
+ * deferred grammars load, which can change the highlighting of code that embeds another language, such as HTML in a
+ * JavaScript template literal.
  */
 export function getHighlightLanguageCount(): number {
-	return hljs.listLanguages().length;
+	return hljs.listLanguages().length + pendingEagerCount;
 }

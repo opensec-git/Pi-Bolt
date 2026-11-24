@@ -25,6 +25,7 @@ interface HighlightJsApi {
 	getLanguage(name: string): HighlightJsLanguageDefinition | undefined;
 	listLanguages(): string[];
 	registerLanguage(name: string, language: HighlightJsLanguageFactory): void;
+	unregisterLanguage(name: string): void;
 	configure(options: { __emitter?: new (options: unknown) => unknown }): void;
 }
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getModel, normalizeContext } from "../src/compat.ts";
 import { azureProvider } from "../src/providers/azure.ts";
 import type { AssistantMessage, Context } from "../src/types.ts";
+import { forgetReusableClients } from "../src/utils/sdk-client.ts";
 
 interface FakeOpenAIClientOptions {
 	apiKey: string;
@@ -81,6 +82,8 @@ const originalCacheRetention = process.env.PI_CACHE_RETENTION;
 const originalDeploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
 
 beforeEach(() => {
+	// Each test checks the options a new client is made with.
+	forgetReusableClients();
 	mockState.lastParams = undefined;
 	mockState.lastClientOptions = undefined;
 	mockState.dispatchedTo = undefined;

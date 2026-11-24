@@ -1,0 +1,68 @@
+=== 2026-11-25 02:29:28 load 3.53 8.76 15.12
+=== 2026-11-25 02:29:28 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-25 02:29:30 load 3.53 8.76 15.12
+=== 2026-11-25 02:29:30 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-25 02:29:38 load 3.44 8.57 14.98
+=== 2026-11-25 02:29:38 session: 101 interactive tool prompts over HTTPS, 6 rounds, rotating order
+=== 2026-11-25 02:31:37 load 4.57 7.36 13.69
+=== 2026-11-25 02:31:37 restored: 6,000 restored messages in RPC, 2 rounds per rotation
+=== 2026-11-25 02:31:45 load 4.48 7.25 13.57
+=== 2026-11-25 02:31:45 idle: post-answer idle CPU and memory, 4 rounds of 15 s per rotation
+=== 2026-11-25 02:42:14 load 2.66 3.36 8.00
+=== 2026-11-25 02:42:14 special: get_entries / get_session_stats on 12,000 entries, 2 rounds per rotation
+=== 2026-11-25 02:42:16 special: tree search, linear and branched, 2 rounds per rotation
+=== 2026-11-25 02:42:52 special: 8 Mi and 32 Mi nested edit preview, 6 pairs per rotation
+=== 2026-11-25 02:47:05 load 3.08 3.17 6.56
+=== 2026-11-25 02:47:05 grep: 7 searches with the grep tool over packages/ of fb75700f2 (git archive), 12 rounds
+=== 2026-11-25 02:47:42 load 5.46 3.75 6.61
+=== 2026-11-25 02:47:42 standard: benchmark.py, blank home, 4 runs per rotation
+=== 2026-11-25 02:48:06 standard: benchmark.py, realistic home, 4 runs per rotation
+=== 2026-11-25 02:48:32 standard: benchmark.py, extensions home, 4 runs per rotation
+=== 2026-11-25 02:49:00 standard: 60,000-character answer, order 1 of 6
+=== 2026-11-25 02:52:25 standard: 60,000-character answer, order 2 of 6
+=== 2026-11-25 02:55:50 standard: 60,000-character answer, order 3 of 6
+=== 2026-11-25 02:59:15 standard: 60,000-character answer, order 4 of 6
+=== 2026-11-25 03:02:41 standard: 60,000-character answer, order 5 of 6
+=== 2026-11-25 03:06:06 standard: 60,000-character answer, order 6 of 6
+=== 2026-11-25 03:09:32 standard: resuming a 2,292-entry session in fullscreen, order 1 of 6
+=== 2026-11-25 03:09:44 standard: resuming a 2,292-entry session in fullscreen, order 2 of 6
+=== 2026-11-25 03:09:55 standard: resuming a 2,292-entry session in fullscreen, order 3 of 6
+=== 2026-11-25 03:10:07 standard: resuming a 2,292-entry session in fullscreen, order 4 of 6
+=== 2026-11-25 03:10:18 standard: resuming a 2,292-entry session in fullscreen, order 5 of 6
+=== 2026-11-25 03:10:30 standard: resuming a 2,292-entry session in fullscreen, order 6 of 6
+=== 2026-11-25 03:10:41 load 2.95 2.82 3.56
+=== 2026-11-25 03:10:41 done
+=== 2026-11-25 03:10:42 load 2.95 2.82 3.56
+=== 2026-11-25 03:10:42 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-25 03:10:44 load 2.95 2.82 3.56
+=== 2026-11-25 03:10:44 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-25 03:10:52 load 2.87 2.81 3.55
+=== 2026-11-25 03:10:52 session: 101 interactive tool prompts over HTTPS, 6 rounds, rotating order
+=== 2026-11-25 03:12:49 load 4.11 3.29 3.64
+=== 2026-11-25 03:12:49 restored: 6,000 restored messages in RPC, 2 rounds per rotation
+=== 2026-11-25 03:12:59 load 5.93 3.70 3.78
+=== 2026-11-25 03:12:59 idle: post-answer idle CPU and memory, 4 rounds of 15 s per rotation
+=== 2026-11-25 03:23:27 load 1.87 2.28 2.90
+=== 2026-11-25 03:23:27 special: get_entries / get_session_stats on 12,000 entries, 2 rounds per rotation
+=== 2026-11-25 03:23:29 special: tree search, linear and branched, 2 rounds per rotation
+=== 2026-11-25 03:24:05 special: 8 Mi and 32 Mi nested edit preview, 6 pairs per rotation
+=== 2026-11-25 03:28:17 load 2.51 2.66 2.94
+=== 2026-11-25 03:28:17 grep: 7 searches with the grep tool over packages/ of fb75700f2 (git archive), 12 rounds
+=== 2026-11-25 03:28:54 load 4.35 3.12 3.09
+=== 2026-11-25 03:28:54 standard: benchmark.py, blank home, 4 runs per rotation
+=== 2026-11-25 03:29:20 standard: benchmark.py, realistic home, 4 runs per rotation
+=== 2026-11-25 03:29:46 standard: benchmark.py, extensions home, 4 runs per rotation
+=== 2026-11-25 03:30:14 standard: 60,000-character answer, order 1 of 6
+=== 2026-11-25 03:33:40 standard: 60,000-character answer, order 2 of 6
+=== 2026-11-25 03:37:06 standard: 60,000-character answer, order 3 of 6
+=== 2026-11-25 03:40:33 standard: 60,000-character answer, order 4 of 6
+=== 2026-11-25 03:44:00 standard: 60,000-character answer, order 5 of 6
+=== 2026-11-25 03:47:26 standard: 60,000-character answer, order 6 of 6
+=== 2026-11-25 03:50:53 standard: resuming a 2,292-entry session in fullscreen, order 1 of 6
+=== 2026-11-25 03:51:04 standard: resuming a 2,292-entry session in fullscreen, order 2 of 6
+=== 2026-11-25 03:51:16 standard: resuming a 2,292-entry session in fullscreen, order 3 of 6
+=== 2026-11-25 03:51:27 standard: resuming a 2,292-entry session in fullscreen, order 4 of 6
+=== 2026-11-25 03:51:39 standard: resuming a 2,292-entry session in fullscreen, order 5 of 6
+=== 2026-11-25 03:51:50 standard: resuming a 2,292-entry session in fullscreen, order 6 of 6
+=== 2026-11-25 03:52:02 load 3.25 2.90 2.75
+=== 2026-11-25 03:52:02 done

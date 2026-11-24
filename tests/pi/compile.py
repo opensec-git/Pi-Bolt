@@ -134,6 +134,29 @@ export default async function () {
 }
 """
 
+# #331: an extension package with an older copy of Pi's SDK in its node_modules (as npm or bun installs a peer). Its JavaScript
+# modules get Pi's SDK, not that copy, loaded from its files (where jiti hands them to the runtime as they are: an ES module of a
+# "type": "module" package, imported statically, with import() or from a path made as it runs; a .cjs, required) and compiled
+# in (where the first two are bundled, and the others are loaded from disk as it runs). (Compiled in, a require() of Pi's SDK
+# before anything imported it fails, as Pi's modules are loaded only then: core/extensions/compiled-modules.ts. Such an
+# extension is left out of the build, and loads from its files.)
+SDK_EXT = """import { writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import * as host from "@earendil-works/pi-coding-agent";
+import * as staticJs from "./dist/lib.js";
+const name = (n) => n;
+export default async function () {
+	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
+	const dynamicJs = await import("./dist/lib.js");
+	const fromDisk = await import(new URL(name("./dist/disk.js"), import.meta.url).href);
+	const required = createRequire(import.meta.url)("./dist/lib.cjs");
+	const got = [staticJs, dynamicJs, fromDisk, required].map(({ VERSION }) => (VERSION === host.VERSION ? "pi" : VERSION));
+	writeFileSync(`${process.env.PIBOLT_PROBE}/sdk-ext`, `${how} ${got.join(",")}`);
+}
+"""
+OLD_SDK_PACKAGE = {"name": "@earendil-works/pi-coding-agent", "version": "0.0.1", "type": "module",
+                   "exports": {".": {"import": "./index.js", "require": "./index.cjs"}}}
+
 version = subprocess.run([pi, "--version"], capture_output=True, text=True, check=True).stdout
 platform, variant = re.search(r"Pi-Bolt [^,]+, (\w+)-(\S+), JIT", version).groups()
 with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
@@ -159,6 +182,18 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
     (parity / "dyn.cjs").write_text('module.exports = "dyn";\n')
     (parity / "disk.ts").write_text(DISK)
     (agent / "extensions" / "old-names-ext.ts").write_text(OLD_NAMES)
+    sdk_ext = agent / "extensions" / "sdk-ext"
+    old_sdk = sdk_ext / "node_modules" / "@earendil-works" / "pi-coding-agent"
+    old_sdk.mkdir(parents=True)
+    (old_sdk / "package.json").write_text(json.dumps(OLD_SDK_PACKAGE))
+    (old_sdk / "index.js").write_text('export const VERSION = "0.0.1";\n')
+    (old_sdk / "index.cjs").write_text('exports.VERSION = "0.0.1";\n')
+    (sdk_ext / "package.json").write_text('{"name": "sdk-ext", "type": "module"}\n')
+    (sdk_ext / "index.ts").write_text(SDK_EXT)
+    (sdk_ext / "dist").mkdir()
+    (sdk_ext / "dist" / "lib.js").write_text('export { VERSION } from "@earendil-works/pi-coding-agent";\n')
+    (sdk_ext / "dist" / "disk.js").write_text('export { VERSION } from "@earendil-works/pi-coding-agent";\n')
+    (sdk_ext / "dist" / "lib.cjs").write_text('exports.VERSION = require("@earendil-works/pi-coding-agent").VERSION;\n')
     (agent / "extensions" / "tsconfig.json").write_text("{}\n")
     (folder / "src").mkdir()
     (folder / "src" / "resources.ts").write_text(RESOURCES)
@@ -185,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             r = subprocess.run([str(build / "pi"), "-p", "--model", "fake/fake-model", "hello"], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=tmp)
             loaded = {name: tuple((probe / name).read_text().split(" ", 1)) if (probe / name).exists() else (None, None)
-                      for name in ("file-ext", "folder-ext", "optional-ext", "parity-ext", "old-names-ext")}
+                      for name in ("file-ext", "folder-ext", "optional-ext", "parity-ext", "old-names-ext", "sdk-ext")}
             loaded["tsc-cjs"] = ((probe / "tsc-cjs").read_text(), None) if (probe / "tsc-cjs").exists() else (None, None)
             return r, loaded
 
@@ -210,6 +245,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               loaded["optional-ext"] == ("files", "caught"), str(loaded))
         check("before: Pi's modules by their other names, loaded from its files (#174)",
               loaded["old-names-ext"] == ("files", "3,function,function,function,true"), str(loaded))
+        check("before: an extension's JavaScript modules get Pi's SDK, not the copy in its node_modules (#331)",
+              loaded["sdk-ext"] == ("files", "pi,pi,pi,pi"), str(loaded))
         from_files = {name: loaded[name][1] for name in ("file-ext", "folder-ext")}
         parity_from_files = loaded["parity-ext"]
         check("before: the loader-parity probes load from their files",
@@ -244,7 +281,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         record = json.loads((install / "compile.json").read_text()) if (install / "compile.json").exists() else {}
         check("compile.json keeps the extensions for the next compile",
               sorted(record.get("extensions", []))
-              == ["file-ext", "folder-ext", "old-names-ext", "optional-ext", "parity-ext", "tsc-cjs"], str(record))
+              == ["file-ext", "folder-ext", "old-names-ext", "optional-ext", "parity-ext", "sdk-ext", "tsc-cjs"], str(record))
         check("the build it replaced is kept as .previous", (install / f"{build.name}.previous" / "pi").exists())
         about = (build / "pi-bolt.txt").read_text()
         check("pi-bolt.txt says what is compiled in", "Extensions compiled in" in about and "file-ext" in about, about)
@@ -274,6 +311,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               loaded["parity-ext"] == ("compiled", parity_from_files[1]), f"{loaded['parity-ext']} vs {parity_from_files}")
         check("compiled in, Pi's modules by their other names are Pi's modules, as loaded from its files (#174)",
               loaded["old-names-ext"] == ("compiled", "3,function,function,function,true"), str(loaded))
+        check("compiled in, an extension's JavaScript modules get Pi's SDK, not the copy in its node_modules (#331)",
+              loaded["sdk-ext"] == ("compiled", "pi,pi,pi,pi"), str(loaded))
         resources = commands()
         check("compiled in, the skill and prompt beside the module are still loaded (#53)",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))

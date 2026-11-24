@@ -31,7 +31,7 @@
   <a href="#quick-start"><img alt="Scoop" src="https://img.shields.io/badge/Scoop-opensec--git-3d8fd1?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D" /></a>
   <a href="#quick-start"><img alt="npm" src="https://img.shields.io/badge/npm-pi--bolt-CB3837?style=flat-square&logo=npm&logoColor=white" /></a>
   <a href="#quick-start"><img alt="mise" src="https://img.shields.io/badge/mise-github%20backend-6c47ff?style=flat-square" /></a>
-  <a href="https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git"><img alt="AUR" src="https://img.shields.io/badge/AUR-pi--bolt-1793d1?style=flat-square&logo=archlinux&logoColor=white" /></a>
+  <a href="https://aur.archlinux.org/packages/pi-bolt-bin"><img alt="AUR" src="https://img.shields.io/badge/AUR-pi--bolt-1793d1?style=flat-square&logo=archlinux&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -94,9 +94,9 @@ Or:
   `mise upgrade --bump github:opensec-git/Pi-Bolt`
 - npm: `npm install -g --allow-scripts=pi-bolt pi-bolt`, updated with `npm install -g --allow-scripts=pi-bolt pi-bolt@latest`
 - Bun: `bun add -g --trust pi-bolt`
-- Arch Linux: the community AUR package
-  [`pi-bolt-avx2-bin-release-git`](https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git) (the x86-64 AVX2 build,
-  signature checked), `paru -S pi-bolt-avx2-bin-release-git`
+- Arch Linux: the community AUR package [`pi-bolt-bin`](https://aur.archlinux.org/packages/pi-bolt-bin) (the x86-64
+  baseline and ARM64 builds), `paru -S pi-bolt-bin`, or [`pi-bolt-avx2-bin`](https://aur.archlinux.org/packages/pi-bolt-avx2-bin)
+  for the x86-64 AVX2 build; both check the download against the release's checksum
 
 Then, in your project:
 
@@ -218,9 +218,11 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 - **Other agents:** `pi-bolt --mcp` is an [MCP](https://modelcontextprotocol.io) server; other agents give Pi-Bolt a task with
   its `prompt` tool and continue the session in later calls. [Setup](docs/MCP.md)
 - **Built-in search:** the `grep` and `find` tools are on by default and search in-process, following `.gitignore`, with
-  nothing to install. With [`opensec-pi-fff`](https://www.npmjs.com/package/opensec-pi-fff) or `@ff-labs/pi-fff` loaded,
-  FFF's search tools are used instead. To turn them off (for an extension with search tools of its own), set
-  `"defaultTools": ["-grep", "-find"]` in `~/.pi/agent/settings.json`.
+  nothing to install. A `grep` pattern that could backtrack for long on a line (several `.*` on a minified line, nested
+  repeats) is searched with ripgrep instead, as Pi searches, found or downloaded as Pi does; without it, the other lines are
+  searched and the result names the lines left out. With [`opensec-pi-fff`](https://www.npmjs.com/package/opensec-pi-fff)
+  or `@ff-labs/pi-fff` loaded, FFF's search tools are used instead. To turn them off (for an extension with search tools of
+  its own), set `"defaultTools": ["-grep", "-find"]` in `~/.pi/agent/settings.json`.
 - **Compiled plugins:** `pi-bolt compile` compiles the extensions installed on this machine into your Pi-Bolt (Linux and macOS)
   with the release's own compiler, where they run as machine code. `pi-bolt update` installs the release's build, where they
   load from their files until `pi-bolt compile` compiles them in again.
@@ -229,6 +231,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 - **Updates:** `pi-bolt update` installs the latest release, and `--rollback` puts back the build it replaced.
 - **Herdr:** Pi-Bolt shows its state in a [Herdr](https://herdr.dev) pane, and a Herdr restart reopens the conversation.
   [Details](#herdr)
+- **Paseo:** [Paseo](https://paseo.sh) runs Pi-Bolt as a provider of its own next to Pi, or in place of it.
+  [Details](#paseo)
 - **ARM64 and Android:** Linux ARM64 builds, and the same installer in Termux. [Android](#android-termux)
 
 Pi extensions work unchanged. The default build has no JIT, so an extension loaded at run time is interpreted; compile the ones
@@ -309,6 +313,40 @@ a display-only metadata report keeps the sidebar naming `Pi-Bolt`. Windows has n
 `pi.exe`, a hardlink or a copy, and pass `--herdr-pi`; a process named otherwise gets a startup warning and reports as
 `pi-bolt`. The resume command starts `pi-bolt` either way, so on Windows a restored pane reports as `pi-bolt` again and only
 the run started as `pi.exe` stores the session.
+
+</details>
+
+<details>
+<summary><a id="paseo"></a><b>Paseo</b></summary>
+
+[Paseo](https://paseo.sh) starts Pi with `pi --mode rpc`, and Pi-Bolt takes the same arguments and speaks the same protocol.
+The shell installer offers to add Pi-Bolt next to Pi when it detects Paseo. Set `PIBOLT_PASEO=yes` to add it without asking
+where Paseo is installed, or `PIBOLT_PASEO=no` to skip; unattended installs skip it by default. It uses the installed
+command's full path in `${PASEO_HOME:-$HOME/.paseo}/config.json`, leaves an existing `pi-bolt` provider unchanged, and does
+not reload or restart Paseo. Run `paseo reload` for that home afterward. Uninstalling Pi-Bolt leaves Paseo's configuration in
+place.
+
+To add it manually, merge this into `~/.paseo/config.json` (or `$PASEO_HOME/config.json`):
+
+```json
+{
+  "agents": {
+    "providers": {
+      "pi-bolt": { "extends": "pi", "label": "Pi-Bolt", "command": ["pi-bolt"] }
+    }
+  }
+}
+```
+
+`"extends": "pi"` tells Paseo to drive it the way it drives Pi; `command` only changes the executable. Use the full path that
+`command -v pi-bolt` prints if Paseo's daemon does not have `pi-bolt` on its `PATH`. Run `paseo reload` or restart Paseo, then
+pick Pi-Bolt in the app or run `paseo run --provider pi-bolt "your task"`. `paseo provider diagnostic pi-bolt` shows the
+executable and version Paseo found.
+
+To run every Pi agent on Pi-Bolt instead, change the command of the `pi` provider:
+`{ "agents": { "providers": { "pi": { "command": ["pi-bolt"] } } } }`.
+
+Pi-Bolt reads Pi's settings, sign-ins and sessions, so there is nothing else to configure.
 
 </details>
 

@@ -11,7 +11,14 @@
 #   - a PIBOLT_BIN_DIR with quotes, $(...) and backquotes stays a folder name in the line given for the shell's configuration;
 #   - an update keeps the build it replaces as <name>.previous (for pi-bolt update --rollback), and the same build installed
 #     again does not replace the one kept;
-#   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away.
+#   - PIBOLT_CHANNEL=beta is kept for the installation's updates (<install>/channel), and stable takes it away;
+#   - an xz that is not XZ Utils' (BusyBox's: no -T, no x86 filter) is not used: the .tar.gz is installed, or the .tar.xz
+#     through a tar that reads it itself; with PIBOLT_SOURCE=npm (whose package is a .tar.xz) the installer says why it cannot;
+#     an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead; where that cannot be
+#     downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks (a full disk) is said, and
+#     no .tar.gz is downloaded; stopped as it unpacks, it leaves neither xz nor tar running, nor any of the download;
+#   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature;
+#   - the Paseo step (tests/installer/paseo.py) with each of sh, dash and BusyBox's sh that is installed.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
 #
 # Usage: tests/installer/run.sh
@@ -106,6 +113,117 @@ if ! installed && grep -q "set PIBOLT_VERSION to the release it serves" <<<"$out
 	pass "a mirror, and the latest release not known: not installed"; else
 	fail "a mirror, and the latest release not known: not installed"; printf '%s\n' "$out"; fi
 
+# Programs that stand in for others, first on PATH: BusyBox's xz and tar (#328), an xz that fails after writing everything,
+# and OpenSSL 1.1 as openssl beside OpenSSL 3 as openssl3 (#323). Each notes how it was called in $WORK/calls.
+real_tar=$(command -v tar) real_xz=$(command -v xz || true)
+stub() { # stub DIR NAME BODY: DIR/NAME, a shell script running BODY
+	mkdir -p "$WORK/$1"
+	printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\n%s\n' "$2" "$WORK" "$3" >"$WORK/$1/$2"
+	chmod 755 "$WORK/$1/$2"
+}
+busybox_xz='for a; do case "$a" in -T*) echo "xz: unrecognized option: T" >&2; exit 1 ;; --version) echo "BusyBox v1.37.0 multi-call binary." >&2; exit 1 ;; esac; done
+echo "xz: corrupted data" >&2; exit 1'
+stub busybox xz "$busybox_xz"
+stub busybox-tar-too xz "$busybox_xz"
+stub busybox-tar-too tar "if [ \"\$1\" = --version ]; then echo 'tar (busybox) 1.37.0'; exit 0; fi
+exec '$real_tar' \"\$@\""
+dl() { grep -c "^downloading http://127.0.0.1:$port/good/$NAME\.$1 " <<<"$out" || true; }
+
+# (BusyBox's xz, and a tar that reads no .tar.xz itself: the .tar.gz.) #328
+rm -f "$WORK/calls"
+out=$(install good PATH="$WORK/busybox-tar-too:$PATH")
+if installed && [ "$(dl tar.gz)" = 1 ] && [ "$(dl tar.xz)" = 0 ] && ! grep -q '^xz .*-d' "$WORK/calls"; then
+	pass "BusyBox's xz and tar: the .tar.gz is installed"; else
+	fail "BusyBox's xz and tar: the .tar.gz is installed"; printf '%s\n' "$out"; cat "$WORK/calls" 2>/dev/null; fi
+# (The same, with PIBOLT_SOURCE=npm: npm's package is a .tar.xz, which nothing here unpacks, and that is what is said.)
+out=$(install good PATH="$WORK/busybox-tar-too:$PATH" PIBOLT_SOURCE=npm)
+if ! installed && grep -q "npm has Pi-Bolt as a .tar.xz, which nothing here can unpack" <<<"$out"; then
+	pass "PIBOLT_SOURCE=npm where nothing unpacks a .tar.xz: says so"; else
+	fail "PIBOLT_SOURCE=npm where nothing unpacks a .tar.xz: says so"; printf '%s\n' "$out"; fi
+# (BusyBox's xz, and a tar that reads a .tar.xz itself, as macOS's: the .tar.xz, through tar.) #328
+if tar --version 2>/dev/null | grep -q liblzma; then
+	rm -f "$WORK/calls"
+	out=$(install good PATH="$WORK/busybox:$PATH")
+	if installed && [ "$(dl tar.xz)" = 1 ] && ! grep -q '^xz .*-d' "$WORK/calls"; then
+		pass "BusyBox's xz and a tar with liblzma: the .tar.xz is installed, through tar"; else
+		fail "BusyBox's xz and a tar with liblzma: the .tar.xz is installed, through tar"; printf '%s\n' "$out"; fi
+fi
+
+if [ -n "$real_xz" ]; then
+	# (XZ Utils' xz, as far as the installer can tell, that writes the whole archive and then fails: tar ends well.) #328
+	# (What it says goes to a log, not into the progress bar.)
+	stub badxz xz "if [ \"\$1\" = --version ]; then exec '$real_xz' --version; fi
+'$real_xz' \"\$@\"; echo 'xz: corrupted data' >&2; exit 1"
+	out=$(install good PATH="$WORK/badxz:$PATH")
+	if installed && [ "$(dl tar.xz)" = 1 ] && [ "$(dl tar.gz)" = 1 ] && grep -q "could not unpack $NAME.tar.xz here" <<<"$out" &&
+		! grep -q "corrupted data" <<<"$out"; then
+		pass "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; else
+		fail "xz fails after tar ended well: a failed unpack, the .tar.gz is installed instead"; printf '%s\n' "$out"; fi
+	# (The same, and the .tar.gz cannot be downloaded: nothing installed, no half-unpacked build left.)
+	cp -R "$WORK/good" "$WORK/nogz" && rm "$WORK/nogz/$NAME.tar.gz"
+	out=$(install nogz PATH="$WORK/badxz:$PATH")
+	left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)
+	if ! installed && [ -z "$left" ] && grep -q "download failed: .*/$NAME.tar.gz" <<<"$out"; then
+		pass "xz fails and no .tar.gz: nothing installed, nothing left"; else
+		fail "xz fails and no .tar.gz: nothing installed, nothing left"; printf '%s\n%s\n' "$out" "$left"; fi
+	# (A disk that is full: a write that failed, not the archive. The .tar.gz would fail the same way: not downloaded, and the
+	# error is said.)
+	stub fulldisk tar "if [ \"\$1\" = --version ]; then echo 'tar (GNU tar) 1.35'; exit 0; fi
+echo 'tar: $NAME/pi: Cannot write: No space left on device' >&2; exit 2"
+	out=$(install good PATH="$WORK/fulldisk:$PATH")
+	if ! installed && [ "$(dl tar.gz)" = 0 ] && grep -q "could not extract $NAME.tar.xz: .*No space left on device" <<<"$out"; then
+		pass "a full disk as it unpacks: no .tar.gz downloaded, the error said"; else
+		fail "a full disk as it unpacks: no .tar.gz downloaded, the error said"; printf '%s\n' "$out"; fi
+fi
+
+# (Stopped with TERM while it unpacks, through an xz that decodes slowly: xz and tar are stopped too, and nothing of the
+# download is left in the installation's folder.)
+cat >"$WORK/slow-unxz.py" <<'PY'
+import lzma, sys, time
+decoder = lzma.LZMADecompressor()
+with open(sys.argv[1], "rb") as archive:
+    while chunk := archive.read(1 << 16):
+        sys.stdout.buffer.write(decoder.decompress(chunk))
+        time.sleep(0.02)
+PY
+stub slowxz xz "if [ \"\$1\" = --version ]; then echo 'xz (XZ Utils) 5.8.4'; exit 0; fi
+for file; do :; done
+exec python3 '$WORK/slow-unxz.py' \"\$file\""
+rm -rf "${WORK:?}/home" && mkdir -p "$WORK/home"
+env HOME="$WORK/home" SHELL=/bin/sh PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port/good" PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+	PIBOLT_YES=1 PIBOLT_INSTALL="$WORK/home/inst" PIBOLT_BIN_DIR="$WORK/home/bin" PATH="$WORK/slowxz:$PATH" \
+	sh "$ROOT/install.sh" </dev/null >"$WORK/stopped.log" 2>&1 &
+installer=$!
+for _ in $(seq 600); do grep -q '^extracting' "$WORK/stopped.log" && break; sleep 0.1; done
+sleep 1
+kill -TERM "$installer" 2>/dev/null || true
+wait "$installer" 2>/dev/null || true
+sleep 0.5
+left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 -name '.download.*' 2>/dev/null)
+still=$(pgrep -f "$WORK/home/inst" || true)
+if grep -q '^extracting' "$WORK/stopped.log" && ! installed && [ -z "$left" ] && [ -z "$still" ]; then
+	pass "stopped while it unpacks: xz and tar stopped, nothing of the download left"; else
+	fail "stopped while it unpacks: xz and tar stopped, nothing of the download left"
+	cat "$WORK/stopped.log"; printf 'left: %s\nrunning: %s\n' "$left" "$still"
+	# shellcheck disable=SC2086 # process IDs
+	[ -z "$still" ] || kill $still 2>/dev/null || true
+fi
+
+# (OpenSSL 1.1 as openssl, OpenSSL 3 as openssl3: openssl3 checks the signature.) #323
+real_ssl=""
+for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+	case "$("$candidate" version 2>/dev/null)" in "OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) real_ssl=$(command -v "$candidate"); break ;; esac
+done
+if [ -n "$real_ssl" ]; then
+	stub openssl3 openssl 'echo "OpenSSL 1.1.1k  FIPS 25 Mar 2021"; [ "$1" = version ] || exit 1'
+	stub openssl3 openssl3 "exec '$real_ssl' \"\$@\""
+	rm -f "$WORK/calls"
+	out=$(install good PATH="$WORK/openssl3:$PATH")
+	if installed && grep -q "signature verified" <<<"$out" && grep -q '^openssl3 pkeyutl -verify' "$WORK/calls"; then
+		pass "OpenSSL 3 as openssl3, beside OpenSSL 1.1: signature verified with it"; else
+		fail "OpenSSL 3 as openssl3, beside OpenSSL 1.1: signature verified with it"; printf '%s\n' "$out"; cat "$WORK/calls" 2>/dev/null; fi
+fi
+
 bin="$WORK/home/b\"\$(touch $WORK/pwned)\`touch $WORK/pwned\`"
 out=$(install good PIBOLT_BIN_DIR="$bin")
 line=$(sed -n 's/^  export PATH=/export PATH=/p' <<<"$out" | head -1)
@@ -139,4 +257,14 @@ if [ ! -e "$inst/channel" ]; then pass "PIBOLT_CHANNEL=stable takes it away"; el
 out=$(install_again good PIBOLT_CHANNEL=nightly)
 if grep -q "PIBOLT_CHANNEL must be stable or beta" <<<"$out"; then pass "another channel is refused"; else
 	fail "another channel is refused"; printf '%s\n' "$out"; fi
+# The Paseo step (tests/installer/paseo.py: no downloads, no Paseo), with each POSIX shell installed here, and the executable
+# installed above as its runtime (Node where there is none).
+runtime="$WORK/home/inst/$NAME/pi"
+[ -x "$runtime" ] || runtime=""
+for shell in sh dash "busybox sh"; do
+	command -v "${shell%% *}" >/dev/null 2>&1 || continue
+	if out=$(PIBOLT_TEST_SHELL="$shell" PIBOLT_TEST_BINARY="$runtime" python3 tests/installer/paseo.py 2>&1); then
+		pass "the Paseo step ($shell)"; else
+		fail "the Paseo step ($shell)"; printf '%s\n' "$out" | tail -n 40; fi
+done
 exit $status
