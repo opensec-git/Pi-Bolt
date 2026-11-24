@@ -218,9 +218,11 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 - **Other agents:** `pi-bolt --mcp` is an [MCP](https://modelcontextprotocol.io) server; other agents give Pi-Bolt a task with
   its `prompt` tool and continue the session in later calls. [Setup](docs/MCP.md)
 - **Built-in search:** the `grep` and `find` tools are on by default and search in-process, following `.gitignore`, with
-  nothing to install. With [`opensec-pi-fff`](https://www.npmjs.com/package/opensec-pi-fff) or `@ff-labs/pi-fff` loaded,
-  FFF's search tools are used instead. To turn them off (for an extension with search tools of its own), set
-  `"defaultTools": ["-grep", "-find"]` in `~/.pi/agent/settings.json`.
+  nothing to install. A `grep` pattern that could backtrack for long on a line (several `.*` on a minified line, nested
+  repeats) is searched with ripgrep instead, as Pi searches, found or downloaded as Pi does; without it, the other lines are
+  searched and the result names the lines left out. With [`opensec-pi-fff`](https://www.npmjs.com/package/opensec-pi-fff)
+  or `@ff-labs/pi-fff` loaded, FFF's search tools are used instead. To turn them off (for an extension with search tools of
+  its own), set `"defaultTools": ["-grep", "-find"]` in `~/.pi/agent/settings.json`.
 - **Compiled plugins:** `pi-bolt compile` compiles the extensions installed on this machine into your Pi-Bolt (Linux and macOS)
   with the release's own compiler, where they run as machine code. `pi-bolt update` installs the release's build, where they
   load from their files until `pi-bolt compile` compiles them in again.
