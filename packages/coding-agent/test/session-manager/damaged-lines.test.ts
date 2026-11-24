@@ -115,6 +115,36 @@ describe("SessionManager with damaged lines", () => {
 		expect(warn).not.toHaveBeenCalled();
 	});
 
+	it("leaves a file with a parent after its child as stock Pi reads it", () => {
+		// An imported file: C names B, which comes after it, and E names an entry that is not in the file.
+		const message = (id: string, parentId: string | null) => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: userMsg(id),
+		});
+		const file = join(dir, "imported.jsonl");
+		const header = { type: "session", version: 3, id: "imported", timestamp: "2026-01-01T00:00:00.000Z", cwd: dir };
+		const entries = [
+			message("A", null),
+			message("C", "B"),
+			message("B", "A"),
+			message("D", "C"),
+			message("E", "lost"),
+		];
+		writeFileSync(file, `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+		const warn = vi.spyOn(console, "warn");
+
+		const session = SessionManager.open(file, dir);
+
+		expect(session.getEntries()).toEqual(entries);
+		expect(session.getBranch("D").map((entry) => entry.id)).toEqual(["A", "B", "C", "D"]);
+		expect(session.getBranch().map((entry) => entry.id)).toEqual(["E"]);
+		expect(session.getTree().map((node) => node.entry.id)).toEqual(["A", "E"]);
+		expect(warn).not.toHaveBeenCalled();
+	});
+
 	it.skipIf(process.platform === "win32")("ends a partial line left by a failed write before the next append", () => {
 		const session = SessionManager.create(dir, dir);
 		const first = session.appendMessage(userMsg("first"));

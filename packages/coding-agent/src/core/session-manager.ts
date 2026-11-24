@@ -414,24 +414,31 @@ export function parseSessionEntries(content: string): FileEntry[] {
 }
 
 /**
- * Links each entry whose parent is missing to the entry before it in file order. Returns how many were linked.
+ * Links each entry whose parent is not in the file to the entry before it in file order. Returns how many were linked.
  *
  * A line damaged by a partial write (a full disk, a process killed mid-append) does not parse and its entry is skipped.
  * The next entry still names the lost one as its parent, so the branch would end there and drop everything before the
- * damage. Entries whose parent comes earlier in the file (forks included) and roots are left as they are. Only earlier
- * entries count as parents, so the result has no cycles.
+ * damage. Roots and entries whose parent is in the file (forks included) are left as they are.
+ *
+ * Only for files whose every parent comes before its child, as appending writes them: a file with a parent after its
+ * child (an imported one) is left as it is, as stock Pi reads it. There, every parent is earlier, so the links make no
+ * cycle.
  */
-function relinkOrphanedEntries(entries: FileEntry[]): number {
-	const ids = new Set<string>();
+function relinkOrphanedEntries(entries: FileEntry[], byId: ReadonlyMap<string, SessionEntry>): number {
+	const earlier = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		if (entry.parentId && byId.has(entry.parentId) && !earlier.has(entry.parentId)) return 0;
+		earlier.add(entry.id);
+	}
 	let previousId: string | undefined;
 	let relinked = 0;
 	for (const entry of entries) {
 		if (entry.type === "session") continue;
-		if (entry.parentId && previousId !== undefined && !ids.has(entry.parentId)) {
+		if (entry.parentId && previousId !== undefined && !byId.has(entry.parentId)) {
 			entry.parentId = previousId;
 			relinked++;
 		}
-		ids.add(entry.id);
 		previousId = entry.id;
 	}
 	return relinked;
@@ -1632,10 +1639,10 @@ export class SessionManager {
 				return;
 			}
 
-			this._loadEntries(entries);
-			const relinked = relinkOrphanedEntries(this.fileEntries);
+			// (Only a file with a parent missing, or after its child, is walked again: a healthy file is not.)
+			const relinked = this._loadEntries(entries) ? relinkOrphanedEntries(this.fileEntries, this.byId) : 0;
 			if (relinked > 0) {
-				this._buildIndex();
+				// (Changed in place: the index holds the same entries, and nothing was derived from the links yet.)
 				console.warn(
 					`Warning: session file ${this.sessionFile} has damaged lines; relinked ${relinked} ${relinked === 1 ? "entry" : "entries"} whose parent was lost.`,
 				);
@@ -1682,7 +1689,8 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	private _loadEntries(entries: FileEntry[], options?: NewSessionOptions): void {
+	/** Returns whether an entry names a parent that is not before it in the file (_buildIndex()). */
+	private _loadEntries(entries: FileEntry[], options?: NewSessionOptions): boolean {
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
 
 		if (header) {
@@ -1697,10 +1705,11 @@ export class SessionManager {
 			this.fileEntries = this.fileEntries.concat(entries);
 		}
 
-		this._buildIndex();
+		return this._buildIndex();
 	}
 
-	private _buildIndex(): void {
+	/** Returns whether an entry names a parent that is not before it in the file (lost, or later). */
+	private _buildIndex(): boolean {
 		this.leafPath = undefined;
 		this.projection = undefined;
 		this.latestSessionInfo = undefined;
@@ -1710,8 +1719,12 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		let unlinked = false;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
+			// (Appended entries name the entry before them: one comparison, no lookup.)
+			const parentId = entry.parentId;
+			if (parentId && parentId !== this.leafId && !this.byId.has(parentId)) unlinked = true;
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;
 			if (entry.type === "session_info") this.latestSessionInfo = entry;
@@ -1725,6 +1738,7 @@ export class SessionManager {
 				}
 			}
 		}
+		return unlinked;
 	}
 
 	private _rewriteFile(): void {
