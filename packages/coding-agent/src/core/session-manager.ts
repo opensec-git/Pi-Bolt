@@ -413,6 +413,30 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	return entries;
 }
 
+/**
+ * Links each entry whose parent is missing to the entry before it in file order. Returns how many were linked.
+ *
+ * A line damaged by a partial write (a full disk, a process killed mid-append) does not parse and its entry is skipped.
+ * The next entry still names the lost one as its parent, so the branch would end there and drop everything before the
+ * damage. Entries whose parent comes earlier in the file (forks included) and roots are left as they are. Only earlier
+ * entries count as parents, so the result has no cycles.
+ */
+function relinkOrphanedEntries(entries: FileEntry[]): number {
+	const ids = new Set<string>();
+	let previousId: string | undefined;
+	let relinked = 0;
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		if (entry.parentId && previousId !== undefined && !ids.has(entry.parentId)) {
+			entry.parentId = previousId;
+			relinked++;
+		}
+		ids.add(entry.id);
+		previousId = entry.id;
+	}
+	return relinked;
+}
+
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		if (entries[i].type === "compaction") {
@@ -1430,13 +1454,24 @@ async function listSessionsFromDir(
 const APPEND_FILE_IDLE_MS = 1000;
 
 /**
+ * Ends a line that an earlier write left unfinished (a full disk, a process killed mid-append), so the next entry
+ * starts on its own line instead of fusing with the fragment and being lost with it. Reads only the last byte.
+ */
+function endPartialLine(fd: number, size: number): void {
+	if (size === 0) return;
+	const last = Buffer.alloc(1);
+	if (readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a) writeSync(fd, "\n");
+}
+
+/**
  * A session file kept open for appends while they come in quick succession: opening and closing the file for every
  * entry cost 50-65 µs on macOS (APFS), a write on an open file 6 µs, and a turn appends an entry per message and tool
  * result. Each append still writes its whole line with write() before it returns, as before, so a crash loses no more.
  *
  * The file is checked by path before each append (a stat, 3-4 µs): when the path no longer names the open file (deleted,
  * renamed, replaced), the open file is closed and the path is opened again, so the line goes where appending by path
- * puts it. The file is closed after APPEND_FILE_IDLE_MS without appends, and when the session changes.
+ * puts it. The file is closed after APPEND_FILE_IDLE_MS without appends, and when the session changes. Each time it is
+ * opened (also after a failed append), a line left unfinished at its end is ended first, so entries never fuse.
  */
 class SessionAppendFile {
 	private readonly path: string;
@@ -1449,10 +1484,11 @@ class SessionAppendFile {
 
 	constructor(path: string) {
 		this.path = path;
-		this.fd = openSync(path, "a", SESSION_FILE_MODE);
+		this.fd = openSync(path, "a+", SESSION_FILE_MODE);
 		try {
 			const stats = fstatSync(this.fd);
 			restrictSessionFile(this.fd, stats.mode);
+			endPartialLine(this.fd, stats.size);
 			this.dev = stats.dev;
 			this.ino = stats.ino;
 		} catch (error) {
@@ -1597,6 +1633,13 @@ export class SessionManager {
 			}
 
 			this._loadEntries(entries);
+			const relinked = relinkOrphanedEntries(this.fileEntries);
+			if (relinked > 0) {
+				this._buildIndex();
+				console.warn(
+					`Warning: session file ${this.sessionFile} has damaged lines; relinked ${relinked} ${relinked === 1 ? "entry" : "entries"} whose parent was lost.`,
+				);
+			}
 			this.flushed = true;
 		} else {
 			const explicitPath = this.sessionFile;
@@ -1750,7 +1793,13 @@ export class SessionManager {
 	private _appendLine(path: string, line: string): void {
 		// An open file can keep others from deleting or renaming it on Windows.
 		if (process.platform === "win32") {
-			appendFileSync(path, line, { mode: SESSION_FILE_MODE });
+			const fd = openSync(path, "a+", SESSION_FILE_MODE);
+			try {
+				endPartialLine(fd, fstatSync(fd).size);
+				writeFileSync(fd, line);
+			} finally {
+				closeSync(fd);
+			}
 			return;
 		}
 		if (!this.appendFile?.isFor(path)) {
