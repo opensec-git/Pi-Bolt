@@ -8,7 +8,8 @@
  * folders' up to the repository's root, a nested repository starting afresh; hidden files searched; symbolic links not
  * followed; binary files (with a NUL byte) skipped. Unlike them it never looks inside .git, and it returns results in path
  * order. Regular expressions are JavaScript's, with ripgrep's (?i) and (?P<name>...) understood; like ripgrep, a match is
- * within one line.
+ * within one line. An expression is run only where it cannot take long (regex-work.ts); the lines it could take long on are
+ * reported instead (`slowLines`), for the grep tool to search with ripgrep.
  */
 import {
 	closeSync,
@@ -24,6 +25,7 @@ import {
 import { type FileHandle, open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { type RegexWork, regexWork } from "./regex-work.ts";
 
 // --- globs --------------------------------------------------------------------------------------------------------------
 
@@ -664,10 +666,37 @@ export interface NativeGrepOptions {
 	/** Characters of a long line kept (the tool cuts them shorter still). */
 	keepChars: number;
 	signal?: AbortSignal;
+	/**
+	 * A line the expression could take too long on (regex-work.ts) ends the search ("stop", the default: the caller searches
+	 * with ripgrep instead), or is passed over and reported ("skip").
+	 */
+	slowLines?: "stop" | "skip";
 	/** Files larger than this are read a piece at a time, of `pieceBytes` (defaults: WHOLE_FILE_BYTES, PIECE_BYTES). */
 	wholeFileBytes?: number;
 	pieceBytes?: number;
 }
+
+/** A line of a file. */
+export interface NativeGrepLine {
+	filePath: string;
+	lineNumber: number;
+}
+
+export interface NativeGrepResult {
+	matches: NativeGrepMatch[];
+	/** Whether the limit stopped the search. */
+	limitReached: boolean;
+	/**
+	 * The lines the expression was not run on, as it could take too long on them: the first SLOW_LINES_KEPT of them (with
+	 * `slowLines: "stop"`, the one the search stopped at).
+	 */
+	slowLines: NativeGrepLine[];
+	/** How many lines were passed over in all. */
+	slowLineCount: number;
+}
+
+/** How many of the lines passed over are named. */
+const SLOW_LINES_KEPT = 20;
 
 /**
  * A ripgrep (Rust) regular expression as JavaScript's: (?i), (?P<name>...) and \x{...}/\u{...} code points, the forms that
@@ -786,13 +815,17 @@ function stripCr(line: string): string {
  */
 type SearchRest = (deadline: number) => SearchRest | undefined;
 
+/** What a search does with a line its expression could take too long on (regex-work.ts): throws, or notes it. */
+type SlowLine = (filePath: string, lineNumber: number) => void;
+
 interface Matcher {
 	/** Bytes every matching file has (a fast check before anything else). */
 	prefilter?: Buffer;
 	/**
 	 * Searches whole lines: a file, or a part of one that ends with a line break; `firstLine` is the number of its first. A
 	 * regular expression can take long on a line (the engine backtracks), so a search that has to run one checks the time
-	 * after each line it tries and stops after `deadline`, returning what is left of it.
+	 * after each line it tries and stops after `deadline`, returning what is left of it; and does not run it where its work
+	 * could pass REGEX_WORK_BUDGET, calling `slow` for that line.
 	 */
 	search(
 		buffer: Buffer,
@@ -802,6 +835,7 @@ interface Matcher {
 		out: NativeGrepMatch[],
 		firstLine: number,
 		deadline: number,
+		slow: SlowLine,
 	): SearchRest | undefined;
 }
 
@@ -829,14 +863,64 @@ function indexOfIgnoringCase(buffer: Buffer, needle: Buffer, from: number): numb
 	return -1;
 }
 
+/** A regular expression's test of one line, and its bound (regex-work.ts). */
+interface LineTest {
+	test: (line: string) => boolean;
+	work: RegexWork;
+	slow: SlowLine;
+}
+
+/** How many pieces of a line too long for its expression are tried for a match (`matchInPieces`). */
+const PIECES_TRIED = 4;
+/** The largest piece tried. */
+const PIECE_CHARS = 64 * 1024;
+
+/**
+ * Whether `line` has a match of `test`, or is too long for it (regex-work.ts). The first parts of a long line are tried
+ * before the line's own bound is found (`work.fits`), which takes about as long as a run of the expression over it.
+ */
+function lineVerdict(line: string, test: (line: string) => boolean, work: RegexWork): "match" | "none" | "slow" {
+	if (work.fitsByCounts(line)) return test(line) ? "match" : "none";
+	if (matchInPieces(line, test, work)) return "match";
+	if (!work.fits(line)) return "slow";
+	return test(line) ? "match" : "none";
+}
+
+/**
+ * Whether `line`, which `work` does not fit from its counts alone, has a match of `test` within one of its first pieces: as large as the expression
+ * fits (halved until it does), each overlapping the one before by half. Only for an expression a match of which within a part
+ * of the line is one in the line (`work.local`); false when none of the pieces has one, which does not tell whether the line
+ * has. A match usually comes early: in a minified file, `import .* from` has a match within the first "import"s of a line
+ * that is too long for it as a whole.
+ */
+function matchInPieces(line: string, test: (line: string) => boolean, work: RegexWork): boolean {
+	if (!work.local) return false;
+	let size = PIECE_CHARS;
+	let at = 0;
+	for (let tried = 0; tried < PIECES_TRIED && at < line.length; ) {
+		const piece = line.slice(at, at + size);
+		if (!work.fits(piece)) {
+			if (size === 1) return false;
+			size >>= 1;
+			continue;
+		}
+		tried++;
+		if (test(piece)) return true;
+		if (at + size >= line.length) return false;
+		at += Math.max(1, size >> 1);
+	}
+	return false;
+}
+
 /**
  * The lines that `next` finds a candidate in (the start of an occurrence of what every match contains), and that `test`, when
- * given, takes. Only those lines are decoded and run through a regular expression.
+ * given, takes. Only those lines are decoded and run through a regular expression; a line it could take too long on is passed
+ * to `test.slow` instead.
  */
 function searchLines(
 	buffer: Buffer,
 	next: (from: number) => number,
-	test: ((line: string) => boolean) | undefined,
+	test: LineTest | undefined,
 	match: { filePath: string; budget: number; keepChars: number; out: NativeGrepMatch[]; firstLine: number },
 	deadline: number,
 ): SearchRest | undefined {
@@ -851,15 +935,20 @@ function searchLines(
 			if (end === -1) end = buffer.length;
 			// (A long line is decoded whole only when an expression has to see all of it.)
 			const text = buffer.toString("utf8", start, test ? end : Math.min(end, start + match.keepChars * 4));
-			if (!test || test(text)) {
+			const verdict = !test ? "match" : lineVerdict(text, test.test, test.work);
+			if (verdict !== "none") {
 				line += countLines(buffer, counted, start);
 				counted = start;
-				match.out.push({
-					filePath: match.filePath,
-					lineNumber: line,
-					lineText: stripCr(text.slice(0, match.keepChars)),
-				});
-				found++;
+				if (verdict === "slow") {
+					test?.slow(match.filePath, line);
+				} else {
+					match.out.push({
+						filePath: match.filePath,
+						lineNumber: line,
+						lineText: stripCr(text.slice(0, match.keepChars)),
+					});
+					found++;
+				}
 			}
 			if (end >= buffer.length) break;
 			at = next(end + 1);
@@ -908,17 +997,18 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 		throw new Error(`regex parse error: ${error instanceof Error ? error.message : String(error)}`);
 	}
 	const test = (line: string) => one.test(line);
+	const work = regexWork(source, ignoreCase);
 	// What every match contains: only the lines that have it are run through the expression.
 	const literal = requiredLiteral(source);
 	if (literal && !ignoreCase) {
 		const needle = Buffer.from(literal, "utf8");
 		return {
 			prefilter: needle,
-			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
+			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline, slow) =>
 				searchLines(
 					buffer,
 					(from) => buffer.indexOf(needle, from),
-					test,
+					{ test, work, slow },
 					{ filePath, budget, keepChars, out, firstLine },
 					deadline,
 				),
@@ -927,11 +1017,11 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 	if (literal && isAscii(literal)) {
 		const needle = Buffer.from(literal.toLowerCase(), "utf8");
 		return {
-			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline) =>
+			search: (buffer, filePath, budget, keepChars, out, firstLine, deadline, slow) =>
 				searchLines(
 					buffer,
 					(from) => indexOfIgnoringCase(buffer, needle, from),
-					test,
+					{ test, work, slow },
 					{ filePath, budget, keepChars, out, firstLine },
 					deadline,
 				),
@@ -939,15 +1029,18 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 	}
 	// A window of lines at a time: an expression run over the whole text tries every place in it within one call, which a
 	// backtracking expression can make take minutes with no chance to stop it. A match is within one line as before
-	// (ripgrep's rule); only lookbehind and lookahead do not see past a window's first and last lines.
+	// (ripgrep's rule); only lookbehind and lookahead do not see past a window's first and last lines. A window the
+	// expression could take too long on is halved, down to a line, and a line it could take too long on is passed to `slow`.
 	const all = new RegExp(source, `${flags}gm`);
 	return {
-		search(buffer, filePath, budget, keepChars, out, firstLine, deadline) {
+		search(buffer, filePath, budget, keepChars, out, firstLine, deadline, slow) {
 			let found = 0;
-			// The window: its bytes `from` up to `to` (just past a line break, or the end), as text.
+			// The window: its bytes `from` up to `to` (just past a line break, or the end), as text; at least `windowBytes`
+			// of them, unless the end comes first.
 			let from = 0;
 			let to = 0;
 			let text = "";
+			let windowBytes = WINDOW_BYTES;
 			// Where the search of the window goes on (-1: the next window).
 			let lastIndex = -1;
 			// Line numbers, counted only up to the matches: `line` is that of `counted` in the window (-1: not counted yet),
@@ -956,17 +1049,51 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 			let counted = 0;
 			let knownLine = firstLine;
 			let knownAt = 0;
+			// The number of the line at `from`.
+			const lineAtFrom = () => {
+				knownLine += countLines(buffer, knownAt, from);
+				knownAt = from;
+				return knownLine;
+			};
 			const run = (deadline: number): SearchRest | undefined => {
 				while (found < budget) {
 					if (lastIndex === -1) {
 						if (to >= buffer.length) return undefined;
 						from = to;
 						const lastBreak =
-							from + WINDOW_BYTES < buffer.length ? buffer.indexOf(NEWLINE, from + WINDOW_BYTES - 1) : -1;
+							from + windowBytes < buffer.length ? buffer.indexOf(NEWLINE, from + windowBytes - 1) : -1;
 						to = lastBreak === -1 ? buffer.length : lastBreak + 1;
 						text = buffer.toString("utf8", from, to);
-						lastIndex = 0;
 						line = -1;
+						if (!work.fitsByCounts(text)) {
+							const firstBreak = text.indexOf("\n");
+							if (firstBreak !== -1 && firstBreak < text.length - 1) {
+								// (More than a line: again, with half of it.)
+								windowBytes = Math.max(1, Math.floor(Math.min(windowBytes, to - from) / 2));
+								to = from;
+								if (performance.now() > deadline) return run;
+								continue;
+							}
+							// (The line alone: `text` up to its line break, if it has one.)
+							const lineEnd = text.endsWith("\n") ? text.length - 1 : text.length;
+							const verdict = lineVerdict(text.slice(0, lineEnd), test, work);
+							if (verdict !== "none") {
+								if (verdict === "match") {
+									out.push({
+										filePath,
+										lineNumber: lineAtFrom(),
+										lineText: stripCr(text.slice(0, Math.min(lineEnd, keepChars))),
+									});
+									found++;
+								} else {
+									slow(filePath, lineAtFrom());
+								}
+							}
+							if (performance.now() > deadline) return run;
+							continue;
+						}
+						windowBytes = Math.min(WINDOW_BYTES, windowBytes * 2);
+						lastIndex = 0;
 					}
 					all.lastIndex = lastIndex;
 					const match = all.lastIndex <= text.length ? all.exec(text) : null;
@@ -984,9 +1111,7 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 							lastIndex = at + 1;
 						} else {
 							if (line === -1) {
-								knownLine += countLines(buffer, knownAt, from);
-								knownAt = from;
-								line = knownLine;
+								line = lineAtFrom();
 								counted = 0;
 							}
 							line += countLinesIn(text, counted, start);
@@ -1098,6 +1223,7 @@ async function searchInPieces(
 	keepChars: number,
 	pieceBytes: number,
 	turns: Turns,
+	slow: SlowLine,
 ): Promise<NativeGrepMatch[] | undefined> {
 	let handle: FileHandle;
 	try {
@@ -1189,7 +1315,16 @@ async function searchInPieces(
 					line += countLines(again, 0, count);
 					countedAt += count;
 				}
-				const rest = matcher.search(lines, file, budget - found.length, keepChars, found, line, turns.deadline);
+				const rest = matcher.search(
+					lines,
+					file,
+					budget - found.length,
+					keepChars,
+					found,
+					line,
+					turns.deadline,
+					slow,
+				);
 				if (rest) await turns.finish(rest);
 				if (!end && found.length < budget) {
 					line += countLines(lines, 0, upTo);
@@ -1209,10 +1344,14 @@ async function searchInPieces(
 /** A file's contents; for a file too large to read whole, its size; undefined for one that is not searched. */
 type Contents = Buffer | number | undefined;
 
-/** The lines that match, file by file in path order, at most `limit`; and whether the limit stopped the search. */
-export async function nativeGrep(
-	options: NativeGrepOptions,
-): Promise<{ matches: NativeGrepMatch[]; limitReached: boolean }> {
+/** Thrown to end a search at its first slow line (`slowLines: "stop"`). */
+class StopAtSlowLine {}
+
+/**
+ * The lines that match, file by file in path order, at most `limit`; whether the limit stopped the search; and the lines the
+ * expression was not run on.
+ */
+export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrepResult> {
 	let matcher: Matcher;
 	if (options.literal) {
 		matcher =
@@ -1236,6 +1375,30 @@ export async function nativeGrep(
 	}
 
 	const matches: NativeGrepMatch[] = [];
+	const slowLines: NativeGrepLine[] = [];
+	let slowLineCount = 0;
+	const slow: SlowLine = (filePath, lineNumber) => {
+		slowLineCount++;
+		if (slowLines.length < SLOW_LINES_KEPT) slowLines.push({ filePath, lineNumber });
+		if (options.slowLines !== "skip") throw new StopAtSlowLine();
+	};
+	try {
+		const limitReached = await searchFiles(files, matcher, matches, slow, options);
+		return { matches, limitReached, slowLines, slowLineCount };
+	} catch (error) {
+		if (error instanceof StopAtSlowLine) return { matches, limitReached: false, slowLines, slowLineCount };
+		throw error;
+	}
+}
+
+/** Searches `files` in order into `matches`; whether the limit stopped the search. */
+async function searchFiles(
+	files: string[],
+	matcher: Matcher,
+	matches: NativeGrepMatch[],
+	slow: SlowLine,
+	options: NativeGrepOptions,
+): Promise<boolean> {
 	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
 	const skip = () => undefined;
 	// The files' sizes, then their contents: `sizes[i]` and `reads[i]` for the files from `index` on, as far as they have been
@@ -1268,17 +1431,26 @@ export async function nativeGrep(
 		if (typeof contents === "number") {
 			const budget = options.limit - matches.length;
 			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
-			const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns);
+			const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns, slow);
 			if (found) matches.push(...found);
 		} else {
 			if (!contents || contents.length === 0) continue;
 			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
 			if (contents.indexOf(0) !== -1) continue; // (Binary.)
 			const budget = options.limit - matches.length;
-			const rest = matcher.search(contents, files[index], budget, options.keepChars, matches, 1, turns.deadline);
+			const rest = matcher.search(
+				contents,
+				files[index],
+				budget,
+				options.keepChars,
+				matches,
+				1,
+				turns.deadline,
+				slow,
+			);
 			if (rest) await turns.finish(rest);
 		}
-		if (matches.length >= options.limit) return { matches, limitReached: true };
+		if (matches.length >= options.limit) return true;
 	}
-	return { matches, limitReached: false };
+	return false;
 }

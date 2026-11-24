@@ -7,7 +7,7 @@ import { createInterface } from "../../utils/readline.ts";
 import { detachString } from "../../utils/text.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { type NativeGrepMatch, nativeGrep } from "./native-search.ts";
+import { type NativeGrepMatch, type NativeGrepResult, nativeGrep } from "./native-search.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { grepRenderers } from "./renderers/grep.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -95,9 +95,11 @@ function grepResult(
 		effectiveLimit: number;
 		matchLimitReached: boolean;
 		linesTruncated: boolean;
+		/** A notice of lines the in-process search passed over (`notSearchedNotice`). */
+		notSearched?: string;
 	},
 ): { content: Array<{ type: "text"; text: string }>; details: GrepToolDetails | undefined } {
-	const { effectiveLimit, matchLimitReached, linesTruncated } = options;
+	const { effectiveLimit, matchLimitReached, linesTruncated, notSearched } = options;
 	// Apply byte truncation. There is no line limit here because the match limit already capped rows.
 	const truncation = truncateHead(outputLines.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
 	truncation.totalLines = options.outputLineCount;
@@ -120,11 +122,42 @@ function grepResult(
 		notices.push(`Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`);
 		details.linesTruncated = true;
 	}
+	if (notSearched) notices.push(notSearched);
 	if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 	return {
 		content: [{ type: "text", text: output }],
 		details: Object.keys(details).length > 0 ? details : undefined,
 	};
+}
+
+/**
+ * What the model is told of the lines the in-process search passed over: the pattern could backtrack too long on them, and
+ * ripgrep, which would search them in linear time, is not available.
+ */
+function notSearchedNotice(found: NativeGrepResult, formatPath: (filePath: string) => string): string | undefined {
+	if (found.slowLineCount === 0) return undefined;
+	const named = found.slowLines.map((line) => `${formatPath(line.filePath)}:${line.lineNumber}`);
+	const more = found.slowLineCount - named.length;
+	return (
+		`${found.slowLineCount} ${found.slowLineCount === 1 ? "line was" : "lines were"} not searched, as this pattern could ` +
+		`take too long on ${found.slowLineCount === 1 ? "it" : "them"} without ripgrep (rg), which is not available: ` +
+		`${named.join(", ")}${more > 0 ? ` and ${more} more` : ""}. To search ${found.slowLineCount === 1 ? "it" : "them"}, ` +
+		"use a pattern with fewer .* or nested repeats, or literal=true, or install ripgrep"
+	);
+}
+
+/** `promise`, or a rejection as soon as `signal` aborts (`promise` itself goes on). */
+function unlessAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (!signal) return promise;
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(new Error("Operation aborted"));
+		if (signal.aborted) {
+			onAbort();
+			return;
+		}
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+	});
 }
 
 /** Bytes read at a time for context lines. */
@@ -226,9 +259,10 @@ async function formatNativeMatches(
 		contextValue: number;
 		formatPath: (filePath: string) => string;
 		signal: AbortSignal | undefined;
+		notSearched?: string;
 	},
 ): Promise<{ content: Array<{ type: "text"; text: string }>; details: GrepToolDetails | undefined }> {
-	const { effectiveLimit, contextValue, formatPath, signal } = options;
+	const { effectiveLimit, contextValue, formatPath, signal, notSearched } = options;
 	const matchLimitReached = matches.length > effectiveLimit;
 	const shown = matchLimitReached ? matches.slice(0, effectiveLimit) : matches;
 	const outputLines: string[] = [];
@@ -284,6 +318,7 @@ async function formatNativeMatches(
 		effectiveLimit,
 		matchLimitReached,
 		linesTruncated,
+		notSearched,
 	});
 }
 
@@ -337,7 +372,7 @@ export function createGrepToolDefinition(
 
 				(async () => {
 					try {
-						const rgPath = native ? "" : ((await ensureTool("rg")) ?? "");
+						let rgPath = native ? "" : ((await ensureTool("rg")) ?? "");
 						if (!native && !rgPath) {
 							settle(() => reject(new Error("ripgrep (rg) is not available and could not be downloaded")));
 							return;
@@ -371,31 +406,43 @@ export function createGrepToolDefinition(
 
 						if (native) {
 							// One match past the limit tells "exactly N matches" apart from "more than N".
-							const found = await nativeGrep({
-								root: searchPath,
-								isDirectory,
-								pattern,
-								ignoreCase,
-								literal,
-								glob: effectiveGlob,
-								limit: effectiveLimit + 1,
-								keepChars: MATCH_TEXT_KEEP_CHARS,
-								signal,
-							});
-							if (found.matches.length === 0) {
-								settle(() =>
-									resolve({ content: [{ type: "text", text: "No matches found" }], details: undefined }),
-								);
+							const search = (slowLines: "stop" | "skip") =>
+								nativeGrep({
+									root: searchPath,
+									isDirectory,
+									pattern,
+									ignoreCase,
+									literal,
+									glob: effectiveGlob,
+									limit: effectiveLimit + 1,
+									keepChars: MATCH_TEXT_KEEP_CHARS,
+									signal,
+									slowLines,
+								});
+							let found = await search("stop");
+							if (found.slowLineCount > 0) {
+								// The pattern could backtrack too long on a line in-process (#342): ripgrep, which Pi runs, searches
+								// in linear time. It is found or downloaded as Pi does; without it, the other lines are searched.
+								rgPath = (await unlessAborted(ensureTool("rg"), signal)) ?? "";
+								if (!rgPath) found = await search("skip");
+							}
+							if (!rgPath) {
+								const notSearched = notSearchedNotice(found, formatPath);
+								if (found.matches.length === 0) {
+									const text = notSearched ? `No matches found\n\n[${notSearched}]` : "No matches found";
+									settle(() => resolve({ content: [{ type: "text", text }], details: undefined }));
+									return;
+								}
+								const result = await formatNativeMatches(found.matches, {
+									effectiveLimit,
+									contextValue,
+									formatPath,
+									signal,
+									notSearched,
+								});
+								settle(() => resolve(result));
 								return;
 							}
-							const result = await formatNativeMatches(found.matches, {
-								effectiveLimit,
-								contextValue,
-								formatPath,
-								signal,
-							});
-							settle(() => resolve(result));
-							return;
 						}
 
 						// --no-config: the tool contract (literal, glob, limit, ...) must not depend on

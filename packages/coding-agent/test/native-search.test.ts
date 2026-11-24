@@ -266,13 +266,27 @@ describe("grep", () => {
 				{ pattern: "^\\s*$" },
 				{ pattern: "^" },
 				{ pattern: "e$" },
-				{ pattern: "x+ needle" },
+				{ pattern: "x{2,3} needle" },
 				{ pattern: "needle", limit: 3 },
 			]) {
 				const whole = await search(query.pattern, query);
 				expect(whole.matches.length).toBeGreaterThan(0);
 				for (const pieceBytes of [1, 7, 64, 4096]) {
 					expect(await search(query.pattern, { ...query, wholeFileBytes: 0, pieceBytes })).toEqual(whole);
+				}
+			}
+			// #342: `x+` tried from each of 5000 x's, each to the end of the run, could take too long on the long line. With a
+			// match in one of its first parts, the line matches; without one, it is passed over. The same either way when the
+			// file is read a piece at a time.
+			for (const [pattern, matches, slowLines] of [
+				["x+ needle", [6], []],
+				["x+ needlf|zzz", [], [6]],
+			] as const) {
+				const result = await search(pattern, { slowLines: "skip" });
+				expect(result.matches.map((m) => m.lineNumber)).toEqual(matches);
+				expect(result.slowLines.map((m) => m.lineNumber)).toEqual(slowLines);
+				for (const pieceBytes of [1, 7, 64, 4096]) {
+					expect(await search(pattern, { slowLines: "skip", wholeFileBytes: 0, pieceBytes })).toEqual(result);
 				}
 			}
 		} finally {
@@ -452,12 +466,12 @@ describe("limits", () => {
 		10_000,
 	);
 
-	// An expression that backtracks a long time on each line (about 40 ms here): the search lets the event loop run between
-	// lines, so the abort comes through at once instead of after every line was tried.
+	// An expression that takes a while on each line, but never long on one: the search lets the event loop run between lines,
+	// so the abort comes through at once instead of after every line was tried.
 	test("a slow expression can be aborted", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "pibolt-slow-"));
 		try {
-			writeFileSync(join(dir, "slow.txt"), `${"xyz".padEnd(25, "a")}\n`.repeat(60));
+			writeFileSync(join(dir, "slow.txt"), `${"a".repeat(40)}\n`.repeat(200_000));
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), 100);
 			const start = performance.now();
@@ -465,7 +479,7 @@ describe("limits", () => {
 				nativeGrep({
 					root: dir,
 					isDirectory: true,
-					pattern: "xyz(a+)+c",
+					pattern: "a.*a.*a.*b",
 					limit: 10,
 					keepChars: 100,
 					signal: controller.signal,
@@ -475,5 +489,90 @@ describe("limits", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+// #342: a line the expression could backtrack on for minutes is not run through it.
+describe("lines an expression could take too long on", () => {
+	const issueLine = `get ${"x".repeat(200)} key ${"y".repeat(200)}`.repeat(800);
+	const issuePattern = "Retrieve.*key.*operation|Get.*Key.*Operation|only key operation";
+	let dir: string;
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pibolt-backtrack-"));
+		writeFileSync(join(dir, "a.txt"), "get the key operation\n");
+		writeFileSync(join(dir, "test.map"), issueLine);
+		writeFileSync(join(dir, "z.txt"), "only key operation here\nnothing\nGET A KEY OPERATION\n");
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+	const grep = (pattern: string, extra: Partial<Parameters<typeof nativeGrep>[0]> = {}) =>
+		nativeGrep({ root: dir, isDirectory: true, pattern, ignoreCase: true, limit: 100, keepChars: 100, ...extra });
+	const where = (result: Awaited<ReturnType<typeof nativeGrep>>) =>
+		result.matches.map((m) => `${m.filePath.slice(dir.length + 1)}:${m.lineNumber}`);
+
+	// #342
+	test("the issue's search ends at the line, at once", async () => {
+		const start = performance.now();
+		const result = await grep(issuePattern);
+		expect(performance.now() - start).toBeLessThan(2000);
+		expect(result.slowLines).toEqual([{ filePath: join(dir, "test.map"), lineNumber: 1 }]);
+		expect(result.slowLineCount).toBe(1);
+	});
+
+	// #342
+	test("or passes over it, and searches the other lines", async () => {
+		const start = performance.now();
+		const result = await grep(issuePattern, { slowLines: "skip" });
+		expect(performance.now() - start).toBeLessThan(2000);
+		expect(where(result)).toEqual(["a.txt:1", "z.txt:1", "z.txt:3"]);
+		expect(result.slowLines).toEqual([{ filePath: join(dir, "test.map"), lineNumber: 1 }]);
+		// With a required literal, the line is tried only where the literal is, and passed over all the same.
+		const literal = await grep("get.*key.*operation", { slowLines: "skip" });
+		expect(where(literal)).toEqual(["a.txt:1", "z.txt:3"]);
+		expect(literal.slowLineCount).toBe(0); // (No "operation" in test.map: the literal leaves it out.)
+		const withLiteral = await grep("get.*key.*[q]", { slowLines: "skip", ignoreCase: false });
+		expect(where(withLiteral)).toEqual([]);
+		expect(withLiteral.slowLines).toEqual([{ filePath: join(dir, "test.map"), lineNumber: 1 }]);
+		// A match within the line's first part: the line matches, without running the expression over all of it.
+		const early = await grep("get.*key.*e", { slowLines: "skip", ignoreCase: false });
+		expect(where(early)).toEqual(["a.txt:1", "test.map:1"]);
+		expect(early.slowLineCount).toBe(0);
+	});
+
+	// #342
+	test("in a window of lines, only the line itself is passed over, with its number", async () => {
+		const lines = Array.from({ length: 3000 }, (_, i) =>
+			i === 1700 ? issueLine.slice(0, 60_000) : i % 3 === 0 ? `get ${i} key operation` : `line ${i}`,
+		);
+		const file = join(dir, "many", "lines.txt");
+		mkdirSync(dirname(file), { recursive: true });
+		writeFileSync(file, `${lines.join("\n")}\n`);
+		const regex = new RegExp(issuePattern, "i");
+		const expected = lines.flatMap((text, i) => (i !== 1700 && regex.test(text) ? [i + 1] : []));
+		for (const extra of [{}, { wholeFileBytes: 0, pieceBytes: 4096 }]) {
+			const result = await nativeGrep({
+				root: file,
+				isDirectory: false,
+				pattern: issuePattern,
+				ignoreCase: true,
+				limit: 5000,
+				keepChars: 100,
+				slowLines: "skip",
+				...extra,
+			});
+			expect(result.matches.map((m) => m.lineNumber)).toEqual(expected);
+			expect(result.slowLines).toEqual([{ filePath: file, lineNumber: 1701 }]);
+		}
+		rmSync(dirname(file), { recursive: true, force: true });
+	});
+
+	// #342
+	test("nested repeats are passed over beyond short lines; their results elsewhere are kept", async () => {
+		writeFileSync(join(dir, "nested.txt"), `xyz${"a".repeat(30)}\nxyzaac\n`);
+		const result = await grep("xyz(a+)+c", { slowLines: "skip" });
+		expect(where(result)).toEqual(["nested.txt:2"]);
+		expect(result.slowLines).toEqual([{ filePath: join(dir, "nested.txt"), lineNumber: 1 }]);
+		rmSync(join(dir, "nested.txt"));
+		const short = await grep("(o|n)+ly", { slowLines: "skip" });
+		expect(where(short)).toEqual(["z.txt:1"]);
 	});
 });
