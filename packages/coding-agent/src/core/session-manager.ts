@@ -413,6 +413,37 @@ export function parseSessionEntries(content: string): FileEntry[] {
 	return entries;
 }
 
+/**
+ * Links each entry whose parent is not in the file to the entry before it in file order. Returns how many were linked.
+ *
+ * A line damaged by a partial write (a full disk, a process killed mid-append) does not parse and its entry is skipped.
+ * The next entry still names the lost one as its parent, so the branch would end there and drop everything before the
+ * damage. Roots and entries whose parent is in the file (forks included) are left as they are.
+ *
+ * Only for files whose every parent comes before its child, as appending writes them: a file with a parent after its
+ * child (an imported one) is left as it is, as stock Pi reads it. There, every parent is earlier, so the links make no
+ * cycle.
+ */
+function relinkOrphanedEntries(entries: FileEntry[], byId: ReadonlyMap<string, SessionEntry>): number {
+	const earlier = new Set<string>();
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		if (entry.parentId && byId.has(entry.parentId) && !earlier.has(entry.parentId)) return 0;
+		earlier.add(entry.id);
+	}
+	let previousId: string | undefined;
+	let relinked = 0;
+	for (const entry of entries) {
+		if (entry.type === "session") continue;
+		if (entry.parentId && previousId !== undefined && !byId.has(entry.parentId)) {
+			entry.parentId = previousId;
+			relinked++;
+		}
+		previousId = entry.id;
+	}
+	return relinked;
+}
+
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
 	for (let i = entries.length - 1; i >= 0; i--) {
 		if (entries[i].type === "compaction") {
@@ -1430,13 +1461,24 @@ async function listSessionsFromDir(
 const APPEND_FILE_IDLE_MS = 1000;
 
 /**
+ * Ends a line that an earlier write left unfinished (a full disk, a process killed mid-append), so the next entry
+ * starts on its own line instead of fusing with the fragment and being lost with it. Reads only the last byte.
+ */
+function endPartialLine(fd: number, size: number): void {
+	if (size === 0) return;
+	const last = Buffer.alloc(1);
+	if (readSync(fd, last, 0, 1, size - 1) === 1 && last[0] !== 0x0a) writeSync(fd, "\n");
+}
+
+/**
  * A session file kept open for appends while they come in quick succession: opening and closing the file for every
  * entry cost 50-65 µs on macOS (APFS), a write on an open file 6 µs, and a turn appends an entry per message and tool
  * result. Each append still writes its whole line with write() before it returns, as before, so a crash loses no more.
  *
  * The file is checked by path before each append (a stat, 3-4 µs): when the path no longer names the open file (deleted,
  * renamed, replaced), the open file is closed and the path is opened again, so the line goes where appending by path
- * puts it. The file is closed after APPEND_FILE_IDLE_MS without appends, and when the session changes.
+ * puts it. The file is closed after APPEND_FILE_IDLE_MS without appends, and when the session changes. Each time it is
+ * opened (also after a failed append), a line left unfinished at its end is ended first, so entries never fuse.
  */
 class SessionAppendFile {
 	private readonly path: string;
@@ -1449,10 +1491,11 @@ class SessionAppendFile {
 
 	constructor(path: string) {
 		this.path = path;
-		this.fd = openSync(path, "a", SESSION_FILE_MODE);
+		this.fd = openSync(path, "a+", SESSION_FILE_MODE);
 		try {
 			const stats = fstatSync(this.fd);
 			restrictSessionFile(this.fd, stats.mode);
+			endPartialLine(this.fd, stats.size);
 			this.dev = stats.dev;
 			this.ino = stats.ino;
 		} catch (error) {
@@ -1596,7 +1639,14 @@ export class SessionManager {
 				return;
 			}
 
-			this._loadEntries(entries);
+			// (Only a file with a parent missing, or after its child, is walked again: a healthy file is not.)
+			const relinked = this._loadEntries(entries) ? relinkOrphanedEntries(this.fileEntries, this.byId) : 0;
+			if (relinked > 0) {
+				// (Changed in place: the index holds the same entries, and nothing was derived from the links yet.)
+				console.warn(
+					`Warning: session file ${this.sessionFile} has damaged lines; relinked ${relinked} ${relinked === 1 ? "entry" : "entries"} whose parent was lost.`,
+				);
+			}
 			this.flushed = true;
 		} else {
 			const explicitPath = this.sessionFile;
@@ -1639,7 +1689,8 @@ export class SessionManager {
 		return this.sessionFile;
 	}
 
-	private _loadEntries(entries: FileEntry[], options?: NewSessionOptions): void {
+	/** Returns whether an entry names a parent that is not before it in the file (_buildIndex()). */
+	private _loadEntries(entries: FileEntry[], options?: NewSessionOptions): boolean {
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
 
 		if (header) {
@@ -1654,10 +1705,11 @@ export class SessionManager {
 			this.fileEntries = this.fileEntries.concat(entries);
 		}
 
-		this._buildIndex();
+		return this._buildIndex();
 	}
 
-	private _buildIndex(): void {
+	/** Returns whether an entry names a parent that is not before it in the file (lost, or later). */
+	private _buildIndex(): boolean {
 		this.leafPath = undefined;
 		this.projection = undefined;
 		this.latestSessionInfo = undefined;
@@ -1667,8 +1719,12 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		let unlinked = false;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
+			// (Appended entries name the entry before them: one comparison, no lookup.)
+			const parentId = entry.parentId;
+			if (parentId && parentId !== this.leafId && !this.byId.has(parentId)) unlinked = true;
 			this.byId.set(entry.id, entry);
 			this.leafId = entry.id;
 			if (entry.type === "session_info") this.latestSessionInfo = entry;
@@ -1682,6 +1738,7 @@ export class SessionManager {
 				}
 			}
 		}
+		return unlinked;
 	}
 
 	private _rewriteFile(): void {
@@ -1750,7 +1807,13 @@ export class SessionManager {
 	private _appendLine(path: string, line: string): void {
 		// An open file can keep others from deleting or renaming it on Windows.
 		if (process.platform === "win32") {
-			appendFileSync(path, line, { mode: SESSION_FILE_MODE });
+			const fd = openSync(path, "a+", SESSION_FILE_MODE);
+			try {
+				endPartialLine(fd, fstatSync(fd).size);
+				writeFileSync(fd, line);
+			} finally {
+				closeSync(fd);
+			}
 			return;
 		}
 		if (!this.appendFile?.isFor(path)) {
