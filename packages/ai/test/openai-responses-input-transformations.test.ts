@@ -1,9 +1,14 @@
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamSimple as streamOpenAICodexResponses } from "../src/api/openai-codex-responses.ts";
-import { processResponsesStream } from "../src/api/openai-responses-shared.ts";
-import type { AssistantMessage, Model } from "../src/types.ts";
+import {
+	convertResolvedResponsesInput,
+	convertResponsesMessages,
+	processResponsesStream,
+} from "../src/api/openai-responses-shared.ts";
+import type { AssistantMessage, Message, Model, Usage } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
+import { beginRequestCache } from "../src/utils/request-cache.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 afterEach(() => {
@@ -168,5 +173,132 @@ describe("OpenAI Responses reasoning removals", () => {
 				details: { transformations: [prefixMismatch] },
 			},
 		]);
+	});
+});
+
+const usage: Usage = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+const reasoningSignature = (id: string): string =>
+	JSON.stringify({ type: "reasoning", id, encrypted_content: `enc-${id}`, summary: [] });
+
+function assistantTurn(id: string, removedIds?: string[], reason = "prefix_mismatch"): AssistantMessage {
+	const message: AssistantMessage = {
+		role: "assistant",
+		content: [
+			{ type: "thinking", thinking: `thought ${id}`, thinkingSignature: reasoningSignature(`rs_${id}`) },
+			{ type: "text", text: `reply ${id}` },
+		],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage,
+		stopReason: "stop",
+		timestamp: 1,
+	};
+	if (removedIds) {
+		message.diagnostics = [
+			{
+				type: "openai_input_transformations",
+				timestamp: 2,
+				details: {
+					transformations: removedIds.map((rid) => ({
+						type: "reasoning",
+						id: rid,
+						action: "removed",
+						reason,
+					})),
+				},
+			},
+		];
+	}
+	return message;
+}
+
+const userTurn = (text: string): Message => ({ role: "user", content: text, timestamp: 1 });
+
+const reasoningIdsIn = (input: unknown[]): string[] =>
+	input
+		.filter((item) => (item as { type?: string }).type === "reasoning")
+		.map((item) => (item as { id?: string }).id ?? "");
+
+describe("OpenAI Responses replay of reasoning reported as dropped", () => {
+	it("stops replaying a reasoning item the API removed for prefix_mismatch", () => {
+		const input = convertResponsesMessages(
+			model,
+			normalizeContext({
+				systemPrompt: "s",
+				messages: [
+					userTurn("a"),
+					assistantTurn("older"),
+					userTurn("b"),
+					assistantTurn("reporter", ["rs_older"]),
+					userTurn("c"),
+				],
+			}),
+			new Set(["openai"]),
+		);
+		const ids = reasoningIdsIn(input);
+		expect(ids).toContain("rs_reporter");
+		expect(ids).not.toContain("rs_older");
+	});
+
+	it("keeps replaying reasoning when the recorded reason is a turn boundary", () => {
+		const input = convertResponsesMessages(
+			model,
+			normalizeContext({
+				systemPrompt: "s",
+				messages: [
+					userTurn("a"),
+					assistantTurn("older"),
+					userTurn("b"),
+					assistantTurn("reporter", ["rs_older"], "turn_boundary"),
+					userTurn("c"),
+				],
+			}),
+			new Set(["openai"]),
+		);
+		const ids = reasoningIdsIn(input);
+		expect(ids).toContain("rs_older");
+		expect(ids).toContain("rs_reporter");
+	});
+
+	it("drops a cached serialization when a removal is first reported, without losing untouched items", () => {
+		const older = assistantTurn("older");
+		const later = assistantTurn("later");
+		const messages: Message[] = [userTurn("a"), older, userTurn("b"), later];
+		const cacheOptions = { sessionId: "prefix-mismatch-prune", immutableMessages: true };
+		const cacheContext = [model.id, model.provider, model.api];
+
+		const firstRun = beginRequestCache("openai-responses", cacheOptions, cacheContext);
+		if (!firstRun) throw new Error("expected an active request cache");
+		const first = convertResolvedResponsesInput(
+			model,
+			normalizeContext({ systemPrompt: "s", messages }),
+			new Set(["openai"]),
+			{ cache: firstRun },
+		).input;
+
+		// The removal is reported by the reply to the last request, after its units were cached.
+		const reporter = assistantTurn("reporter", ["rs_older"]);
+		const secondRun = beginRequestCache("openai-responses", cacheOptions, cacheContext);
+		if (!secondRun) throw new Error("expected an active request cache");
+		const second = convertResolvedResponsesInput(
+			model,
+			normalizeContext({ systemPrompt: "s", messages: [...messages, userTurn("c"), reporter] }),
+			new Set(["openai"]),
+			{ cache: secondRun },
+		).input;
+
+		expect(reasoningIdsIn(first)).toContain("rs_older");
+		expect(reasoningIdsIn(second)).not.toContain("rs_older");
+		expect(reasoningIdsIn(second)).toContain("rs_later");
+		expect(reasoningIdsIn(second)).toContain("rs_reporter");
 	});
 });

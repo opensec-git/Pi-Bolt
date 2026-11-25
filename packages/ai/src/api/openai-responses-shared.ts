@@ -212,6 +212,45 @@ export function convertResponsesMessages<TApi extends Api>(
 	).input;
 }
 
+/** One reasoning removal as recorded in an `openai_input_transformations` diagnostic. */
+interface RecordedReasoningRemoval {
+	type?: unknown;
+	id?: unknown;
+	action?: unknown;
+	reason?: unknown;
+}
+
+/**
+ * Reasoning item ids the API withheld from the model on an earlier request. A removal is reported
+ * again on every later request that replays the item, and replaying a mismatched item also keeps
+ * the reasoning items minted after it from re-anchoring to the current prefix. Once the API has
+ * dropped an item for anything but a turn boundary, stop replaying it so the prefix can settle.
+ */
+function collectDroppedReasoningIds(messages: readonly Message[]): Set<string> {
+	const dropped = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		for (const diagnostic of (msg as AssistantMessage).diagnostics ?? []) {
+			if (diagnostic.type !== "openai_input_transformations") continue;
+			const transformations = (
+				diagnostic.details as { transformations?: readonly RecordedReasoningRemoval[] } | undefined
+			)?.transformations;
+			if (!Array.isArray(transformations)) continue;
+			for (const transformation of transformations) {
+				if (
+					transformation?.type === "reasoning" &&
+					transformation.action === "removed" &&
+					transformation.reason !== "turn_boundary" &&
+					typeof transformation.id === "string"
+				) {
+					dropped.add(transformation.id);
+				}
+			}
+		}
+	}
+	return dropped;
+}
+
 /** Convert the provider's already resolved transcript and derive the top-level tools from that same history. */
 export function convertResolvedResponsesInput<TApi extends Api>(
 	model: Model<TApi>,
@@ -256,6 +295,10 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 		cache ? sources : undefined,
 		{ preserveTextOnlyReplies: true },
 	);
+	// Reasoning the API already reports as dropped re-reports on every replay and keeps later items
+	// from re-anchoring; stop replaying it so the request prefix can settle.
+	const droppedReasoningIds = collectDroppedReasoningIds(normalizedContext.messages);
+	const droppedReasoningKey = droppedReasoningIds.size > 0 ? [...droppedReasoningIds].sort().join(",") : undefined;
 	/**
 	 * Converts one message with `convert`, which pushes what it converts to and returns what the loop needs besides;
 	 * with the cache, the values of an unchanged message are reused. `extra` is what the conversion reads besides the
@@ -368,7 +411,9 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 			if (!converted) continue;
 		} else if (msg.role === "assistant") {
 			// Text items without an id of their own are named after the message's index.
-			const converted = unit(sources[index], msgIndex, (out) => {
+			// The dropped-reasoning set changes what this message's conversion emits, so it belongs in its cache key.
+			const unitKey = droppedReasoningKey === undefined ? msgIndex : [msgIndex, droppedReasoningKey];
+			const converted = unit(sources[index], unitKey, (out) => {
 				const firstItem = out.length;
 				const assistantMsg = msg as AssistantMessage;
 				const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
@@ -380,7 +425,17 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 					if (block.type === "thinking") {
 						if (block.thinkingSignature) {
 							const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-							out.push(reasoningItem);
+							// A reasoning item the API withheld is reported again on every replay, and its
+							// mismatch keeps the items minted after it unbound: stop sending it.
+							if (
+								!(
+									reasoningItem.type === "reasoning" &&
+									typeof reasoningItem.id === "string" &&
+									droppedReasoningIds.has(reasoningItem.id)
+								)
+							) {
+								out.push(reasoningItem);
+							}
 						}
 					} else if (block.type === "text") {
 						const textBlock = block as TextContent;
