@@ -40,7 +40,7 @@ import type {
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { ShortHash } from "../utils/hash.ts";
+import { ShortHash, shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -919,6 +919,11 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			// SDK serializes itself; a full request (with or without `thread: create`) is sent as bytes.
 			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId, cache);
 			const reuseThreadContent = cache !== undefined && options?.client === undefined;
+			/**
+			 * The messages this attempt actually put on the wire. A thread `continue` sends a suffix slice, so a
+			 * reported transformation path indexes into this array rather than into the full built params.
+			 */
+			let sentMessages: MessageParam[] | undefined;
 			const send = (body: ThreadedParams, prepared?: PreparedThreadRequest): Promise<ThreadResponse> =>
 				retryProviderRequest(
 					async () => {
@@ -927,6 +932,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						const fingerprint =
 							prepared && (prepared.prefix?.copy() ?? threadFingerprint(model, body, reuseThreadContent));
 						fingerprint?.append(body.messages.slice());
+						sentMessages = body.messages;
 						const response = await client.beta.messages.create(body, requestOptions).asResponse();
 						return {
 							response,
@@ -1165,11 +1171,20 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					type: "anthropic_input_transformations",
 					timestamp: Date.now(),
 					details: {
-						transformations: inputTransformations.map((transformation) => ({
-							type: transformation.type ?? undefined,
-							path: transformation.path ?? undefined,
-							reason: transformation.reason ?? undefined,
-						})),
+						transformations: inputTransformations.map((transformation) => {
+							// A dropped thinking block has no id, so name it by the signature the server bound:
+							// the reported path alone goes stale as soon as the request prefix changes.
+							const signatureHash = droppedThinkingSignatureHash(
+								sentMessages ?? params.messages,
+								transformation,
+							);
+							return {
+								type: transformation.type ?? undefined,
+								path: transformation.path ?? undefined,
+								reason: transformation.reason ?? undefined,
+								...(signatureHash === undefined ? {} : { signatureHash }),
+							};
+						}),
 					},
 				});
 			}
@@ -1427,6 +1442,71 @@ interface BuildParamsFlags {
 	messageThreads: boolean;
 }
 
+/** The signed payload a replayed thinking block is recognized by: its signature, or its opaque redacted data. */
+function signedThinkingPayload(block: unknown): string | undefined {
+	if (!block || typeof block !== "object") return undefined;
+	const candidate = block as { type?: unknown; signature?: unknown; data?: unknown };
+	if (candidate.type === "thinking" && typeof candidate.signature === "string" && candidate.signature.length > 0) {
+		return candidate.signature;
+	}
+	if (candidate.type === "redacted_thinking" && typeof candidate.data === "string" && candidate.data.length > 0) {
+		return candidate.data;
+	}
+	return undefined;
+}
+
+/**
+ * Resolve an Anthropic `messages.<i>.content.<j>` transformation path against the messages that were
+ * sent, and hash the signed payload of the thinking block it names. Undefined when the path is absent,
+ * points outside the request, or lands on something that is not a signed thinking block - the safe
+ * answer, since pruning a block we cannot name exactly would discard reasoning that still binds.
+ */
+function droppedThinkingSignatureHash(
+	sentMessages: readonly unknown[] | undefined,
+	transformation: { type?: string; path?: string },
+): string | undefined {
+	if (transformation.type !== "thinking_dropped" || typeof transformation.path !== "string") return undefined;
+	const match = /^messages\.(\d+)\.content\.(\d+)$/.exec(transformation.path);
+	if (!match || !sentMessages) return undefined;
+	const message = sentMessages[Number(match[1])] as { content?: unknown } | undefined;
+	const block = Array.isArray(message?.content) ? message.content[Number(match[2])] : undefined;
+	const payload = signedThinkingPayload(block);
+	return payload === undefined ? undefined : shortHash(payload);
+}
+
+/** Reasons that mean the block can never bind again on this transcript. */
+const PERMANENT_THINKING_DROP_REASONS = new Set(["prefix_binding_mismatch", "model_binding_mismatch"]);
+
+/**
+ * Hashes of thinking blocks the API already refused to bind. Anthropic reports a drop by its position
+ * in the request, and replays the block on every later request, so the same block is reported again on
+ * every turn for the rest of the session. Only blocks named by a recorded signature hash are dropped.
+ */
+function collectDroppedThinkingHashes(messages: readonly Message[]): Set<string> {
+	const dropped = new Set<string>();
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		for (const diagnostic of (msg as AssistantMessage).diagnostics ?? []) {
+			if (diagnostic.type !== "anthropic_input_transformations") continue;
+			const transformations = (
+				diagnostic.details as { transformations?: readonly Record<string, unknown>[] } | undefined
+			)?.transformations;
+			if (!Array.isArray(transformations)) continue;
+			for (const transformation of transformations) {
+				if (transformation?.type !== "thinking_dropped") continue;
+				if (
+					typeof transformation.reason !== "string" ||
+					!PERMANENT_THINKING_DROP_REASONS.has(transformation.reason)
+				) {
+					continue;
+				}
+				if (typeof transformation.signatureHash === "string") dropped.add(transformation.signatureHash);
+			}
+		}
+	}
+	return dropped;
+}
+
 function buildParams(
 	model: Model<"anthropic-messages">,
 	context: TranscriptContext,
@@ -1475,6 +1555,7 @@ function buildParams(
 		nativeToolChanges ? convertToolDefinitions : undefined,
 		cache,
 		conversationSources,
+		collectDroppedThinkingHashes(context.messages),
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, options, {
@@ -1630,8 +1711,13 @@ function convertMessages(
 	/** Reuse what unchanged messages converted to before (request-cache.ts); `sources` as transformMessages fills it. */
 	cache?: RequestCacheRun,
 	sources?: (Message | undefined)[],
+	/** Thinking blocks the API already refused to bind, by `shortHash` of their signed payload. */
+	droppedThinkingHashes?: ReadonlySet<string>,
 ): ConvertedAnthropicMessages {
 	const params: MessageParam[] = [];
+	// The set changes what an assistant message converts to, so it belongs in that unit's cache key.
+	const droppedThinkingKey =
+		droppedThinkingHashes && droppedThinkingHashes.size > 0 ? [...droppedThinkingHashes].sort().join(",") : undefined;
 	/**
 	 * Converts one unit (a message, or a run of tool results) with `convert`, which pushes what it converts to and
 	 * returns what the loop needs besides; with the cache, the values of an unchanged unit are reused.
@@ -1725,7 +1811,7 @@ function convertMessages(
 			const held = pendingSystemMessages.length > 0;
 			const assistantParams: MessageParam[] = held ? [] : params;
 			const before = assistantParams.length;
-			unit(i, i + 1, undefined, assistantParams, (out) => {
+			unit(i, i + 1, droppedThinkingKey, assistantParams, (out) => {
 				const blocks: ContentBlockParam[] = [];
 
 				for (const block of msg.content) {
@@ -1736,6 +1822,16 @@ function convertMessages(
 							text: sanitizeSurrogates(block.text),
 						});
 					} else if (block.type === "thinking") {
+						// A block the API already dropped for a permanent binding reason is reported again on every
+						// request that replays it, and the model never saw it anyway: stop sending it.
+						if (
+							droppedThinkingHashes !== undefined &&
+							droppedThinkingHashes.size > 0 &&
+							block.thinkingSignature &&
+							droppedThinkingHashes.has(shortHash(block.thinkingSignature))
+						) {
+							continue;
+						}
 						// Redacted thinking: pass the opaque payload back as redacted_thinking
 						if (block.redacted) {
 							blocks.push({
