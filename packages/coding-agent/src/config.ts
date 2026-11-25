@@ -432,6 +432,26 @@ export function getPackageDir(): string {
 }
 
 /**
+ * The package directory with its version segment replaced by the install tree's `latest` link when
+ * the running install is that link's target. Install layouts that version their directories
+ * (mise: `.../github-opensec-git-pi-bolt/1.3.0/`) otherwise leak the version into paths quoted in
+ * the system prompt, so a resumed session after an upgrade gets a new leading prompt. OpenAI
+ * reasoning replay binds stored reasoning to the request prefix, and a changed head orphans every
+ * item: a version bump would silently drop all reasoning continuity for the rest of the session.
+ */
+export function getStablePackageDir(): string {
+	const dir = getPackageDir();
+	if (basename(dir) === "latest") return dir;
+	const candidate = join(dirname(dir), "latest");
+	try {
+		if (realpathSync(candidate) === realpathSync(dir)) return candidate;
+	} catch {
+		return dir;
+	}
+	return dir;
+}
+
+/**
  * Get path to built-in themes directory (shipped with package)
  * - For Bun binary: theme/ next to executable
  * - For Node.js (dist/): dist/modes/interactive/theme/
@@ -469,22 +489,22 @@ export function getPackageJsonPath(): string {
 
 /** Get path to README.md */
 export function getReadmePath(): string {
-	return resolve(join(getPackageDir(), "README.md"));
+	return resolve(join(getStablePackageDir(), "README.md"));
 }
 
 /** Get path to docs directory */
 export function getDocsPath(): string {
-	return resolve(join(getPackageDir(), "docs"));
+	return resolve(join(getStablePackageDir(), "docs"));
 }
 
 /** Get path to examples directory */
 export function getExamplesPath(): string {
-	return resolve(join(getPackageDir(), "examples"));
+	return resolve(join(getStablePackageDir(), "examples"));
 }
 
 /** Get path to CHANGELOG.md */
 export function getChangelogPath(): string {
-	return resolve(join(getPackageDir(), "CHANGELOG.md"));
+	return resolve(join(getStablePackageDir(), "CHANGELOG.md"));
 }
 
 /**
