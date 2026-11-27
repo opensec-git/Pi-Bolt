@@ -22,6 +22,47 @@
 - Remote control spends a pairing secret only when the phone completes the handshake (`remote_ready`), not when its first handshake message arrives. A phone whose connection timed out mid-handshake (the apps give each address 3 seconds; iOS's first connect can wait on the Local Network prompt) had used up its QR code, so its retry was refused and pairing needed a new code. The secret still pairs one phone: of two phones racing with it, the first to finish pairs and the other is refused
 - On the Bun runtime (Pi-Bolt), a `console.log` from an extension or a dependency in RPC, JSON, ACP or MCP mode (and `pi-bolt service`) no longer goes into the JSON stream on stdout, and in print mode (`-p`) no longer mixes with the answer. Bun's console methods (`log`, `info`, `debug`, `dir`, `dirxml`, `table`, `trace`, `count`, `group`, `write`) print to fd 1 without calling the replaced `process.stdout.write` ([oven-sh/bun#47982](https://github.com/oven-sh/bun/issues/47982)); while stdout is taken over they now print to stderr, formatted as on Node
 
+## [1.7.0] - 2026-11-27
+
+### New Features
+
+- **[Terminal session resume](docs/terminal-setup.md#program-resume):** Compatible terminals can reopen the current pi session after a restart with its original profile, tool restrictions, and instructions.
+- **[Image generation in codemode](docs/codemode.md#generate-images):** Generate images with Radius, or set the aspect ratio and size when using OpenRouter image models.
+- **GitHub Copilot prompt caching:** Changing the thinking level preserves the prompt cache on supported Claude 5.x and GPT-6 models. Supported Claude 5.x models also keep the cache when tools change, and Copilot Claude models support [cache warming](docs/settings.md#model-and-thinking).
+
+### Breaking Changes
+
+- Removed telemetry reporting from pi for new installs and updates (`/api/report-install`), the `enableInstallTelemetry` setting (`SettingsManager.getEnableInstallTelemetry()` / `setEnableInstallTelemetry()`), and `PI_TELEMETRY`
+
+### Added
+
+- Added program resume through the [Program Resume Protocol (OSC 7577)](https://www.superlogical.com/rex/docs/build/program-resume): in terminals that set `OSC7577_TOKEN`, interactive mode reports `pi --session <id>` for the current session, so the terminal can bring it back after it restarts. Pi removes the token from the environment of every process it starts. See [Terminal setup](docs/terminal-setup.md#program-resume)
+- Added optional `{ aspectRatio, size }` as the third argument to codemode `models.generateImages()`
+- Added `--agent-dir <dir>`, the command-line form of `PI_CODING_AGENT_DIR`. The resume command pi prints on exit and reports through OSC 7577 now includes it when the config directory is not `~/.pi/agent`. Without it, a session started with `PI_CODING_AGENT_DIR` came back with the default directory's settings and auth: a terminal resumes the command without the environment pi was started in. This is for setups that keep a separate pi profile per project, for example a shell function that sets `PI_CODING_AGENT_DIR` for one directory tree. Terminals that resume programs, such as Rex, need a rule that trusts the longer command; see [Terminal setup](docs/terminal-setup.md#program-resume)
+- The OSC 7577 resume command now repeats the restriction and resource flags pi was started with (`--tools`, `--no-extensions`, `-e`, `--skill`, `--system-prompt`, and similar), as typed, so a terminal cannot resume a session with other tools or instructions, possibly more access, than it had. The command printed on exit is unchanged. A terminal rule must trust each flag combination; see [Terminal setup](docs/terminal-setup.md#program-resume)
+- Added Radius image generation to [codemode](docs/codemode.md#generate-images). Radius image and classifier models are now listed in the built-in catalog as well as through provider discovery
+
+### Changed
+
+- The default model for `cloudflare-workers-ai` and `cloudflare-ai-gateway` is now `@cf/zai-org/glm-5.3`, because Cloudflare deprecated Workers AI Kimi K2.6 and K2.7 Code
+- Changed the `ant-ling` default model from the retired `Ring-2.6-1T` to `Ling-3.1-flash`. Existing `models.json` files can keep `thinkingFormat: "ant-ling"` as a deprecated alias for `"deepseek"` ([#11800](https://github.com/earendil-works/pi/pull/11800) by [@lvisei](https://github.com/lvisei))
+- Replaced the retired `qwen4-max-preview` with `qwen4-max` on Qwen Token Plan Individual
+- Preserved the GitHub Copilot prompt cache when changing thinking levels on supported Claude 5.x and GPT-6 models or changing tools on supported Claude 5.x models. Copilot Claude models now support cache warming, and GPT-5.3 Codex and MAI-Code receive mid-conversation system messages where they take effect ([#12316](https://github.com/earendil-works/pi/issues/12316))
+
+### Fixed
+
+- Fixed `/llama` "Download model" downloading the typed text instead of the highlighted result when the query looked like `owner/repository` and the user had moved the selection with the arrow keys ([#12465](https://github.com/earendil-works/pi/issues/12465))
+- Fixed key hints that named the wrong keybinding or a hardcoded key: the extension editor and session rename now name `tui.input.submit`, `/hotkeys` names `tui.select.cancel` for cancelling autocomplete, and the settings submenu, `/config` selector, session selector and fullscreen copy setting follow remapped keys
+- Fixed a console Ctrl+Break on Windows ending pi without restoring the terminal, which left the shell in the alternate screen with mouse reports typed into the prompt. A child process in the same console can send Ctrl+Break too. pi now shuts down normally on it ([#12133](https://github.com/earendil-works/pi/issues/12133))
+- Fixed print, JSON, and RPC modes not reporting an invalid `models.json`, so a typo such as `"contextWindow": "32000"` showed up only as `Model "..." not found` or `No API key found`. `createAgentSessionServices()` now returns the error as a warning in `diagnostics`, so every mode and SDK runtimes report it; interactive mode shows it as a warning instead of an error, as reported in [#12522](https://github.com/earendil-works/pi/issues/12522) ([#12523](https://github.com/earendil-works/pi/pull/12523) by [@acmerfight](https://github.com/acmerfight))
+- Fixed `app.message.followUp` (Alt+Enter) ignoring an open autocomplete menu and queuing the half-typed text. It now applies the selected suggestion like Enter: a completed command name is queued, and other completions are inserted without queuing
+- Fixed running `!` commands showing the wrong cancel shortcut. The hint now names the configured `app.interrupt` key ([#12518](https://github.com/earendil-works/pi/pull/12518) by [@acmerfight](https://github.com/acmerfight))
+- Fixed `!!` commands counting toward the context estimate even though the model never sees them. Large outputs no longer trigger early compaction or crowd out recent history ([#12513](https://github.com/earendil-works/pi/issues/12513))
+- Fixed Kitty images disappearing in Konsole and regular mode clearing the screen and scrollback when an appended image extended past the bottom of the screen ([#12548](https://github.com/earendil-works/pi/issues/12548))
+- Fixed Amazon Bedrock Kimi K3.1 and GLM 5.3 ignoring the selected thinking level ([#12462](https://github.com/earendil-works/pi/issues/12462)). Kimi K3 and K3.1 also no longer send earlier reasoning back to Bedrock, which could make later turns fail
+- Fixed GitHub Copilot models using `openai-completions` losing their reasoning state between turns ([#12418](https://github.com/earendil-works/pi/issues/12418))
+- Fixed codemode image generation reporting success for failed OpenRouter responses. Image and classifier usage now includes reasoning tokens when reported; image usage distinguishes image output tokens, and OpenRouter costs use the reported total or the model's image output rate when estimating
+
 ## [1.6.1] - 2026-11-25
 
 ### New Features

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { arr, bool, bytes, hostKind, int, num, obj, oneOf, opt, remote, str } from "../../src/contracts/index.ts";
+import { joinKey } from "../../src/contracts/params.ts";
 
 const Server = hostKind("server");
 
-const variants = { a: { state: { s: str() } } };
+const members = { state: { s: str() } };
 
 describe("params policy", () => {
 	it("accepts required str, int, bool and oneOf of strings, with constraints", () => {
@@ -17,7 +18,7 @@ describe("params policy", () => {
 					d: oneOf("chat", "agent"),
 				},
 				hostAddress: () => Server(),
-				variants,
+				...members,
 			}),
 		).not.toThrow();
 	});
@@ -25,7 +26,7 @@ describe("params policy", () => {
 	it("refuses optional fields, in the types and at declaration", () => {
 		expect(() =>
 			// @ts-expect-error: params fields are required
-			remote("n", { version: 1, params: { a: opt(str()) }, hostAddress: () => Server(), variants }),
+			remote("n", { version: 1, params: { a: opt(str()) }, hostAddress: () => Server(), ...members }),
 		).toThrow("n.params.a: a param is a required str(), int(), bool() or oneOf(...) of strings");
 	});
 
@@ -38,8 +39,18 @@ describe("params policy", () => {
 		["defaults", str({ default: "x" })],
 	])("refuses %s, in the types and at declaration", (_case, schema) => {
 		// @ts-expect-error: not a params field schema
-		expect(() => remote("n", { version: 1, params: { p: schema }, hostAddress: () => Server(), variants })).toThrow(
+		expect(() => remote("n", { version: 1, params: { p: schema }, hostAddress: () => Server(), ...members })).toThrow(
 			"n.params.p: a param is",
 		);
+	});
+});
+
+describe("joinKey", () => {
+	it("joins parts with |, escaping \\ and | in a part: two part lists never join to one key", () => {
+		expect([joinKey([]), joinKey(["a"]), joinKey(["a", "b", ""])]).toEqual(["", "a", "a|b|"]);
+		expect(joinKey(["a|b", "c"])).toBe("a\\|b|c");
+		expect(joinKey(["a\\", "|b"])).toBe("a\\\\|\\|b");
+		expect(joinKey(["a|", "b"])).not.toBe(joinKey(["a", "|b"]));
+		expect(joinKey(["x", "a\\|b"])).toBe("x|a\\\\\\|b");
 	});
 });

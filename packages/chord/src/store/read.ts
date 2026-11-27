@@ -14,6 +14,22 @@ import type { Position, Range, ReadPlan, StoredRead, Use } from "./read-plan.ts"
 export type ReadResult = {
 	readonly rows: readonly StoredRead[];
 	readonly more: boolean;
+	/** What a read keeps of the run once adopted. */
+	readonly kept: KeptRows;
+	/**
+	 * The identity (`identity`) of each fetched row's key, in order, for a key of several columns: its JSON, made once
+	 * per row for the read and for whoever decodes the rows (`DecodedRows`). `undefined` for a key of one column (the
+	 * value itself: nothing to make).
+	 */
+	readonly ids: readonly unknown[] | undefined;
+};
+
+/**
+ * What a read keeps of a run of rows for the skip test: not the rows (node:sqlite returns each as a dictionary-mode
+ * object, 256 B for two columns; the read's owner keeps what it shows), only the keys, pairs and bound.
+ */
+export type KeptRows = {
+	readonly kind: "rows";
 	/** The own keys of the fetched rows, each as `identityOf` its key values. */
 	readonly keys: ReadonlySet<unknown>;
 	/** Per use of another table, the fetched rows' values of the own columns it pairs by, each as `identityOf` them. */
@@ -21,6 +37,12 @@ export type ReadResult = {
 	/** The position of the row past `limit`, when there is one: the read's range ends there. */
 	readonly past: Position | undefined;
 };
+
+/** What a read keeps of an adopted run: its rows' keys, or that it counted. */
+export type Kept = KeptRows | { readonly kind: "count" };
+
+/** What a count keeps: nothing but that it has a result. */
+const COUNTED: Kept = { kind: "count" };
 
 /** One run of a read: its result, the number of a count, or why it could not run. */
 export type ReadRun =
@@ -34,6 +56,15 @@ export type ReadExecutor = Pick<SqliteExecutor, "all" | "get">;
 /** Who takes a read's runs: called inside the batch of the commit that ran it. */
 export type ReadSink = { adopt(run: ReadRun): void };
 
+/**
+ * Who takes a registered read's runs: its open read, told which read ran (a run of an earlier registration is
+ * dropped by it). One object for all its registrations, not a closure per registration (136 B).
+ */
+export type RunSink = { adopt(run: ReadRun, read: Read): void };
+
+/** Who is told when the keys a read keeps change: the commit index it is filed in (slice 15 §3). */
+export type KeptKeysWatcher = { kept(read: Read): void };
+
 /** What a read is: the rows of a range, or the number of rows of its condition. */
 export type ReadKind = { readonly kind: "rows"; readonly range: Range } | { readonly kind: "count" };
 
@@ -44,16 +75,21 @@ export type ReadKind = { readonly kind: "rows"; readonly range: Range } | { read
 export class Read {
 	readonly plan: ReadPlan;
 	readonly what: ReadKind;
-	readonly sink: ReadSink;
-	/** The last adopted run; `undefined` while loading or failed: such a read is never skipped. */
-	#adopted: ReadRun | undefined;
+	readonly sink: RunSink;
+	/** Which registration of its open read it is. */
+	readonly registration: number;
+	/** What it keeps of its last adopted run; `undefined` while loading or failed: such a read is never skipped. */
+	#adopted: Kept | undefined;
 	/** A step's run not adopted yet, with the backend transaction it ran in (a rolled-back group's is stale). */
 	#tentative: { readonly transaction: SqliteExecutor; readonly run: ReadRun } | undefined;
+	/** The commit index that files it by its kept keys, if one does. */
+	#watcher: KeptKeysWatcher | undefined;
 
-	constructor(plan: ReadPlan, what: ReadKind, sink: ReadSink) {
+	constructor(plan: ReadPlan, what: ReadKind, sink: RunSink, registration: number) {
 		this.plan = plan;
 		this.what = what;
 		this.sink = sink;
+		this.registration = registration;
 	}
 
 	/**
@@ -63,20 +99,40 @@ export class Read {
 	know(rows: readonly StoredRead[]): void {
 		// A count has no rows to know.
 		const range = (this.what as Extract<ReadKind, { readonly kind: "rows" }>).range;
-		this.#adopted = {
-			kind: "rows",
-			result: this.#result(rows, { ...range, limit: Math.max(range.limit, rows.length) }),
-		};
+		this.#adopted = this.#result(rows, { ...range, limit: Math.max(range.limit, rows.length) }).kept;
+		this.#watcher?.kept(this);
 	}
 
 	/** Drops its adopted result: without one it is never skipped, so the next commit over its tables runs it. */
 	forget(): void {
 		this.#adopted = undefined;
+		this.#watcher?.kept(this);
 	}
 
-	/** The run the skip test of a step in `transaction` compares against: the group's latest, else the adopted one. */
-	latest(transaction: SqliteExecutor): ReadRun | undefined {
-		return this.#tentative?.transaction === transaction ? this.#tentative.run : this.#adopted;
+	/** Tells `watcher` from now on whenever `kept` changes. */
+	watchKept(watcher: KeptKeysWatcher | undefined): void {
+		this.#watcher = watcher;
+	}
+
+	/**
+	 * The keys of the rows a skip test of this read may compare against: its adopted run's, and a group's run not
+	 * adopted yet; `undefined` while some such run is no rows (loading, failed, a count): then no write can be ruled out.
+	 */
+	kept(): readonly ReadonlySet<unknown>[] | undefined {
+		const adopted = this.#adopted;
+		const tentative = this.#tentative?.run;
+		if (adopted?.kind !== "rows" || (tentative !== undefined && tentative.kind !== "rows")) return undefined;
+		return tentative === undefined ? [adopted.keys] : [adopted.keys, tentative.result.kept.keys];
+	}
+
+	/**
+	 * What the skip test of a step in `transaction` compares against: the group's latest run, else the adopted one;
+	 * `undefined` while loading or failed.
+	 */
+	latest(transaction: SqliteExecutor): Kept | undefined {
+		const tentative = this.#tentative;
+		if (tentative?.transaction !== transaction) return this.#adopted;
+		return keptOf(tentative.run);
 	}
 
 	/** Runs the read inside a commit step, after its writes: the run, or the failure; it never throws. */
@@ -108,37 +164,57 @@ export class Read {
 	/** A step's run, kept for the later steps of its group until it is adopted. */
 	ran(transaction: SqliteExecutor, run: ReadRun): void {
 		this.#tentative = { transaction, run };
+		this.#watcher?.kept(this);
 	}
 
 	/** Takes `run` as its state and hands it to the sink. */
 	adopt(run: ReadRun): void {
 		if (this.#tentative?.run === run) this.#tentative = undefined;
-		this.#adopted = run.kind === "failed" ? undefined : run;
-		this.sink.adopt(run);
+		this.#adopted = keptOf(run);
+		this.#watcher?.kept(this);
+		this.sink.adopt(run, this);
 	}
 
 	/** The range its probe asks about: the read's own, ending at the row past its limit when there is one. */
-	probed(result: ReadResult): Range {
+	probed(kept: KeptRows): Range {
 		// A count is never probed (slice 14 §3.3).
 		const range = (this.what as Extract<ReadKind, { readonly kind: "rows" }>).range;
-		return result.past === undefined ? { ...range, limit: 1 } : { ...range, through: result.past, limit: 1 };
+		return kept.past === undefined ? { ...range, limit: 1 } : { ...range, through: kept.past, limit: 1 };
 	}
 
 	#result(stored: readonly StoredRead[], range: Range): ReadResult {
 		const { plan } = this;
 		const keyColumns = plan.query.table.key;
 		const keys = new Set<unknown>();
-		const paired = new Map<Use, Set<unknown>>();
-		for (const use of plan.uses) if (use.role !== "own" && use.pairs !== undefined) paired.set(use, new Set());
-		for (const row of stored) {
-			keys.add(identity(keyColumns, row));
-			for (const [use, values] of paired) values.add(identity(use.pairs!, row));
+		const ids = keyColumns.length === 1 ? undefined : new Array<unknown>(stored.length);
+		// Made by the first use that pairs: a read of its own table alone (most reads) shares the empty map.
+		let paired: Map<Use, Set<unknown>> | undefined;
+		for (const use of plan.uses) {
+			if (use.role === "own" || use.pairs === undefined) continue;
+			paired ??= new Map();
+			paired.set(use, new Set());
+		}
+		for (let at = 0; at < stored.length; at++) {
+			const row = stored[at]!;
+			const id = identity(keyColumns, row);
+			keys.add(id);
+			if (ids !== undefined) ids[at] = id;
+			if (paired !== undefined) for (const [use, values] of paired) values.add(identity(use.pairs!, row));
 		}
 		const more = stored.length > range.limit;
 		const past = more ? plan.order.columns.map((name) => stored[range.limit]![name]!) : undefined;
-		return { rows: more ? stored.slice(0, range.limit) : stored, more, keys, paired, past };
+		const kept: KeptRows = { kind: "rows", keys, paired: paired ?? NOTHING_PAIRED, past };
+		return { rows: more ? stored.slice(0, range.limit) : stored, more, kept, ids };
 	}
 }
+
+/** What a read keeps of `run`: `undefined` for a failed one. */
+function keptOf(run: ReadRun): Kept | undefined {
+	return run.kind === "rows" ? run.result.kept : run.kind === "count" ? COUNTED : undefined;
+}
+
+/** No use pairs with another table: the shared empty map. */
+const NOTHING_PAIRED: ReadonlyMap<Use, ReadonlySet<unknown>> = new Map();
 
 /**
  * The identity of `row` in `columns`, for a set or a map of rows of one read: the value itself for one column (most

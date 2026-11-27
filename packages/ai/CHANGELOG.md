@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.7.0] - 2026-11-27
+
+### Added
+
+- Added `compat.supportsReasoningReplay` to the `bedrock-converse-stream` API. When `false`, reasoning from earlier assistant messages is not sent back
+- Added `aspectRatio` and `size` to `ImagesOptions`, forwarded by `openrouter-images` to OpenRouter's `image_config`
+- Added the `pi-image` API (`POST <baseUrl>/image`), a common protocol for image models analogous to `pi-messages` and `pi-decision`
+- Added image model support to the `radius` provider: parses `images[]` from `/v1/config` into `ImageModel<"pi-image">`, persists/restores them offline, and wires `generateImages()`
+- Added Radius classifier and image models from the public `/v1/config` to the generated static catalog
+- Added `Usage.imageOutput`, the image output tokens as a subset of `output`. `openrouter-images` sets it from `completion_tokens_details.image_tokens`, and `pi-image` and `pi-decision` pass it through. It stays undefined when the provider does not report the split
+- Added `cost.imageOutput`, the image output rate of models that generate images. `calculateCost()` prices `usage.imageOutput` tokens at it and the rest of output at `cost.output`; without the provider's split, all output uses the image rate. Unset keeps pricing all output at `cost.output`
+
+### Changed
+
+- Changed Ant Ling to send `thinking.type` so thinking can be turned off. The old `thinkingFormat: "ant-ling"` setting remains accepted as a deprecated alias for `"deepseek"`
+- Qwen Token Plan Individual now lists `qwen4-max` instead of the retired `qwen4-max-preview`
+- Together drops its reasoning-effort overrides for `openai/gpt-oss-20b`, `openai/gpt-oss-120b` and `deepseek-ai/DeepSeek-V4-Pro-0813`, which the upstream catalog deprecated (they were skipped already); every listed Together reasoning model takes the Together thinking toggle
+- Changed the `ant-ling` provider to load its models from models.dev (`bailing`), replacing the retired Ling 2.6 and Ring 2.6 models with Ling 3.0 Tiny, Ling 3.0 Flash, Ling 3.0 Flash VL, Ling 3.1 Flash, and Ling 3.2 Flash. Thinking is either off or high ([#11800](https://github.com/earendil-works/pi/pull/11800) by [@lvisei](https://github.com/lvisei))
+- Changed GitHub Copilot Claude and GPT-6 models to keep the prompt cache across thinking level and tool changes: Claude 5.x models that support it send effort changes and tool changes as messages in the conversation (`supportsMidConvoEffort`, `supportsMidConvoToolChanges`), GPT-6 models send effort changes as `configuration_update` items, and Claude models declare Anthropic's 5-minute and 1-hour cache lifetimes (`promptCache`), which enables cache warming for them. GPT-5.3 Codex and the MAI-Code models now receive system messages in place mid-conversation instead of folded into the system prompt, which they ignored there ([#12316](https://github.com/earendil-works/pi/issues/12316))
+
+### Fixed
+
+- Fixed Amazon Bedrock Kimi K3.1 and GLM 5.3 ignoring the selected thinking level: they always reasoned at `max`, offered `minimal`, and hid `xhigh` and `max`. Pi now offers the effort levels models.dev lists and sends them as `reasoning_effort`, with `none` for `off` on Kimi K3.1 (GLM 5.3 cannot turn thinking off). Bedrock models outside the Claude and GPT families now send `reasoning_effort` whenever their `thinkingLevelMap` maps the selected level ([#12462](https://github.com/earendil-works/pi/issues/12462))
+- Fixed Amazon Bedrock Kimi K3 and K3.1 multi-turn requests sending earlier reasoning back, which AWS documents as failing on Converse with `InternalServerException`. Earlier reasoning is no longer sent for these models
+- Fixed GitHub Copilot models on the `openai-completions` API losing their reasoning state between turns: Copilot's `reasoning_opaque` is now stored on the thinking block and sent back with `reasoning_text`, including when it arrives without reasoning text ([#12418](https://github.com/earendil-works/pi/issues/12418))
+- Fixed `openrouter-images`, `pi-image` and `pi-decision` usage dropping reasoning tokens: `usage.reasoning` is now set from OpenRouter's `completion_tokens_details.reasoning_tokens` and from the `pi-image` and `pi-decision` backends' `usage.reasoning`, as a subset of `output`
+- Fixed OpenRouter image models pricing image tokens at the text rate: the catalog took `cost.output` from OpenRouter's `completion` price and ignored `image_output`. The catalog now sets `cost.imageOutput` from `image_output`, and `openrouter-images` prices usage with `calculateCost()`, which also applies context tiers
+- Fixed `openrouter-images` reporting success when OpenRouter returned no choices, a provider error, or an unsuccessful finish reason. Image generation now also uses OpenRouter's reported cost when available
+
 ## [1.6.1] - 2026-11-25
 
 ### Added

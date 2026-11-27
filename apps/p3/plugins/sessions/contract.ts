@@ -1,17 +1,19 @@
-// The sessions plugin's contracts, one per audience: what the owner does with sessions (`Sessions`), one screen's list
-// of them (`SessionsList`), a session's row for its own worker (`SessionFacts`), and the session's worker as the owner
-// sees it (`SessionWorker`). Every facet of the plugin imports this file.
+// The sessions plugin's contracts every facet imports: what a session is as data (its state, where it works and where
+// each conversation moved to, its model, its row), what a new session starts with (`SessionDefaults`), the session
+// kind's ticks by name, and the objects of the plugin's own audiences: a worker's facts and what its agent is given
+// (`SessionFacts`, `AgentThings`), the waker's `SessionStart`, and `SessionWorker`. The kinds are in `kind.ts`, the
+// admission of a session's objects on its worker in `follow.ts`; `/v1` re-exports what plugin authors need of the
+// three.
 
 import {
 	arr,
 	bool,
-	lit,
+	map,
 	method,
 	nul,
 	num,
 	obj,
 	oneOf,
-	opt,
 	remote,
 	Server,
 	Session,
@@ -19,12 +21,6 @@ import {
 	str,
 	union,
 } from "@earendil-works/p3/v1";
-
-/** Who made a session: the owner, or a person (by id). */
-export const Creator = union([obj({ kind: lit("owner") }), obj({ kind: lit("person"), id: str() })]);
-
-/** Who made a session (see `Creator`). */
-export type Creator = Static<typeof Creator>;
 
 /**
  * What a session's agent is doing:
@@ -39,80 +35,126 @@ export const SessionState = oneOf("working", "waiting", "settled", "failed");
 /** What a session's agent is doing (see `SessionState`). */
 export type SessionState = Static<typeof SessionState>;
 
-/** A session's title: at most 200 characters. */
-export const Title = str({ max: 200 });
+/** Where a conversation works (decision 24): a machine (its thing's id) and a folder on it. */
+export const Location = obj({ machine: str({ max: 200 }), folder: str({ max: 4096 }) });
 
-/** The app every session belongs to until apps exist (slice 5): then `create` takes it. */
-export const CODING = "coding";
+/** Where a conversation works (see `Location`). */
+export type Location = Static<typeof Location>;
+
+/** The session kind's name (`kind.ts`): a session is a workspace of this kind, its answer the one on itself. */
+export const SESSION_KIND = "sessions.session";
+
+/** Durable's conversation id as text (as `SessionHarness.submit` takes it): its one spelling, so a move is found by it. */
+export const ConversationKey = str({ max: 20, pattern: "^[1-9][0-9]*$" });
 
 /**
- * A session as lists and its worker see it: its id, title (empty until named: each view shows its own "New session" in
- * the viewer's language), app, creator, when it was made, its state, when it was last touched, and when it was
- * archived (`null`: it is not).
+ * A conversation's move (what `moveLocation` takes): its id and where it works from now on; `null` undoes its move, so
+ * it works where its owner conversation works again (a subagent's: its caller's; a top-level one: the session's).
+ */
+export const ConversationLocation = obj({ conversation: ConversationKey, location: union([Location, nul()]) });
+
+/** A conversation's move (see `ConversationLocation`). */
+export type ConversationLocation = Static<typeof ConversationLocation>;
+
+/**
+ * What a session's Manage shows besides its row, and its worker reads (decision 24): where each moved conversation
+ * works, by conversation id. A conversation not moved works where its owner conversation works (a subagent's: its
+ * caller's), and a top-level one at the session's `location`.
+ */
+export const SessionDetail = obj({ locations: map(Location) });
+
+/** What a session's Manage shows (see `SessionDetail`). */
+export type SessionDetail = Static<typeof SessionDetail>;
+
+/** How hard the model thinks (Durable's levels). */
+export const ThinkingLevel = oneOf("off", "minimal", "low", "medium", "high", "xhigh", "max");
+
+/**
+ * A model choice: the login (its thing's id) and the model's id in its account, as `SessionModels` lists them, and
+ * the thinking level (decision 118; version 2 of the columns that store it).
+ */
+export const ModelChoice = obj({ login: str({ max: 200 }), model: str({ max: 200 }), thinking: ThinkingLevel });
+
+/** A model choice (see `ModelChoice`). */
+export type ModelChoice = Static<typeof ModelChoice>;
+
+/**
+ * A session as its holders and its worker see it besides its thing (its name is the thing's, its parent the thing's
+ * place): its id (its workspace's), where it works (its conversations unless moved, `SessionDetail`; `null`: nowhere,
+ * its maker was let in on no machine where it was made, R41, until a conversation is moved), when it was made, its
+ * state, when it was last touched, when it was archived (`null`: it is not) and its model (`null`: the agent's
+ * default; else the model its agent is asked while a login it may Use gives it, decision 118).
  */
 export const SessionRow = obj({
 	id: str(),
-	title: Title,
-	app: str(),
-	creator: Creator,
+	location: union([Location, nul()]),
 	createdAt: num(),
 	state: SessionState,
 	lastTouch: num(),
 	archivedAt: union([num(), nul()]),
+	model: union([ModelChoice, nul()]),
 });
 
 /** A session as lists and its worker see it (see `SessionRow`). */
 export type SessionRow = Static<typeof SessionRow>;
 
-/** What the owner does with sessions. */
-export const Sessions = remote("sessions.sessions", {
-	version: 1,
-	params: {},
-	hostAddress: () => Server(),
-	variants: {
-		owner: {
-			methods: {
-				/** Makes a session; answers its id. */
-				create: method(obj({ title: opt(Title) }), str()),
-				rename: method(obj({ id: str(), title: Title })),
-				archive: method(obj({ id: str() })),
-				restore: method(obj({ id: str() })),
-			},
-		},
-	},
-});
-
 /**
- * One screen's list of an app's sessions, active (the last touched first) or archived (the last archived first):
- * `view` is the screen's own id, so a fresh id is a fresh list. `list` holds the rows loaded so far and whether rows
- * may follow; `more` loads the next page.
+ * What a new session starts with where this thing applies (the nearest one reaching its parent, decision 75): its
+ * model, whether it is shared (everyone here Read and Send) or private (no grant for everyone, people from above
+ * hidden; decision 93), the view it opens with (item 74; `null`: the kind's) and where it works (`null`: this device
+ * in a folder of its own; a folder `""`: that folder, the machine only what the new-session step offers first). A make
+ * without a location starts there when its maker may use the machine (R41), else as with none.
  */
-export const SessionsList = remote("sessions.list", {
+export const SessionDefaults = obj({
+	model: union([ModelChoice, nul()]),
+	shared: bool(),
+	opensWith: union([str({ max: 200 }), nul()]),
+	location: union([Location, nul()]),
+});
+
+/** What a new session starts with (see `SessionDefaults`). */
+export type SessionDefaults = Static<typeof SessionDefaults>;
+
+/**
+ * What a new session made in `workspace` starts with now (the nearest defaults there, as a make reads them), live, for
+ * a caller present there: what the new-session step pre-fills.
+ */
+export const SessionDefaultsHere = remote("sessions.defaults-here", {
 	version: 1,
-	params: { app: str(), set: oneOf("active", "archived"), view: str() },
+	params: { workspace: str() },
 	hostAddress: () => Server(),
-	variants: {
-		owner: {
-			state: { list: obj({ rows: arr(SessionRow), moreAfter: bool() }) },
-			methods: { more: method() },
-		},
-	},
+	admission: obj({}),
+	state: { defaults: SessionDefaults },
 });
 
 /**
- * A session's row for its own worker, which holds it as itself: its principal names the session (design §4). `null`
- * for a session the server does not know. `report` says what its agent is doing now (`SessionState`).
+ * A session's own facts for its worker, which holds it as itself: its row (`null` for a session the server does not
+ * know), its moved conversations (`detail`), `report`, which says what its agent is doing now, and `moveLocation`,
+ * its agent's move of one conversation (refused unless the agents have Work there on that machine). Whether the
+ * conversation exists is not checked here, the server cannot see it: the harness checks it for its agent's tool, and
+ * the worker is trusted plugin code (decision 111).
  */
 export const SessionFacts = remote("sessions.facts", {
+	// Version 2: the row's model choice names a login (decision 118). Version 3: its moved conversations (`detail`,
+	// `moveLocation`) and a location that may be none (decision 24, R41).
+	version: 3,
+	params: {},
+	hostAddress: () => Server(),
+	state: { session: union([SessionRow, nul()]), detail: SessionDetail },
+	methods: { report: method(obj({ state: SessionState })), moveLocation: method(ConversationLocation) },
+});
+
+/**
+ * What a session's workspace gives its agent, for its worker, which holds it as itself: each thing the agent gets
+ * anything for there, its kind and how far above the session it is linked (`depth`: 0 in the session, 1 its parent),
+ * nearest last (the farthest first, then by thing id), live (the session's workspace is the session's id). The worker
+ * holds a reference to each one whose kind has a harness part there (`HeldThings`), in this order.
+ */
+export const AgentThings = remote("sessions.agent-things", {
 	version: 1,
 	params: {},
 	hostAddress: () => Server(),
-	variants: {
-		worker: {
-			state: { session: union([SessionRow, nul()]) },
-			methods: { report: method(obj({ state: SessionState })) },
-		},
-	},
+	state: { things: arr(obj({ thing: str(), kind: str(), depth: num() })) },
 });
 
 /**
@@ -123,13 +165,18 @@ export const SessionStart = remote("sessions.start", {
 	version: 1,
 	params: { session: str() },
 	hostAddress: ({ session }) => Session({ id: session }),
-	variants: { server: { state: { session: str() } } },
+	state: { session: str() },
 });
 
-/** A session's worker as the owner sees it: the row it follows from the server. */
+/** A session's worker as anyone let into the session sees it: the row it follows from the server (`null` before). */
 export const SessionWorker = remote("sessions.worker", {
-	version: 1,
+	// Version 2: the row's model choice names a login (decision 118). Version 3: a location that may be none (R41).
+	version: 3,
 	params: { session: str() },
 	hostAddress: ({ session }) => Session({ id: session }),
-	variants: { owner: { state: { session: union([SessionRow, nul()]) } } },
+	admission: obj({}),
+	state: { session: union([SessionRow, nul()]) },
 });
+
+/** The session kind's own ticks, by name. */
+export type SessionTick = "read" | "send" | "stop" | "manage";

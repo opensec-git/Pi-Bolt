@@ -320,8 +320,9 @@ Node 26 (`~/.local/bin/node26`).
 
 - **Unit:** `testHost` in `test/p2/helpers.ts` loads facets into a bare host: the server by default, or
   `{ address: Session({ id }), kind: "worker" }`. It serves the base registries of its kind (and, for a server, the
-  `ServerNatives`, with no workers unless `server` gives some). Stubs are `[Contract, membersOrFactory]`; a factory
-  returns a flat shape (`{ variant, ...members }`), gets `self.state(initial)` for an in-memory state member (a
+  `ServerNatives`, with no workers unless `server` gives some). Stubs are `[Contract, membersOrFactory, grants?]`
+  (`grants`: what a contract with grantable members grants, a list or a function of the principal); a factory
+  returns the members, flat, gets `self.state(initial)` for an in-memory state member (a
   `Cell` with `replace`/`change` the test drives) and may return nothing from a method (`null` is sent). Natives a
   facet reads (`harnessOf`, `workerOf`, a plugin's single-native registry) come from `workerFacet({ harness, worker,
   host })` and `nativeFacet(R, value)`. `root(fn)` runs as `principal`; `client(principal)` is a memory-linked client
@@ -341,7 +342,7 @@ Node 26 (`~/.local/bin/node26`).
   Generated test plugins need a `package.json` and may not use top-level await (a facet declares synchronously).
 - **Chord in tests:** tests import Chord only through `test/p2/helpers.ts` and the plugin API (`@p2/app/v1`).
   References are held (`host.hold(T, params, TEST)`; `TEST` is the background context) and awaited with
-  `whenLive(ref)`; `holdIn(host, T, params, variant)` returns one live in `variant`; `failureOf(ref)` waits for a
+  `whenLive(ref)`; `holdWith(host, T, params, ...members)` returns one live with those grantable members; `failureOf(ref)` waits for a
   failure or end (a type nobody serves leaves a hold waiting). Every method call takes a context.
 - **Live state:** `until(watchable, predicate)` follows a state member, derive or registry value until the predicate
   holds; `settled(watchable)` returns a defined value after 25 ms without changes. `expectChord(promise, code)`
@@ -438,8 +439,13 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   of what it indexed, not session data).
 - **References:** `host.hold(T, params, ctx)` gives a reference at once (loading, live, failed, ended);
   `ctx.get`/`host.get` one once live. UIs use `src/runtime/refs.ts`: `follow` (a value with its current one first),
-  `followRegistry`, `whenLive`, `statusOf`, `liveIn(ref, ...variants)` (`HeldIn`), `UI_LINGER`. A held reference's
-  variant may be `undefined` until it binds, so `inVariant`/`expectVariant` do not narrow it: use `liveIn`.
+  `followRegistry`, `whenLive`, `statusOf`, `live(ref)`, `liveWith(ref, ...members)` and `kept`/`keptWith` (types
+  `RefWith`, `With`), `withHeld`/`withGranted`, `UI_LINGER`. A reference's grantable members have two states:
+  until the reference was first live, every grantable member's handle is there (so a factory can wire a dependency's
+  members before it binds), though nothing is granted yet (`granted` is empty); once it was live, a grantable member
+  is there only while its binding granted it, else `undefined` (also while it loads again or failed: the last
+  binding's grant holds). So test `granted`, never the member's presence: `liveWith`/`keptWith` do (they return
+  `undefined` before the first binding); a worker that knows its grant uses `expectGranted`.
 - **Objects and state:** factories declare state with `defineState` (`defineTypedState` where pi-schema's optional
   fields are not JSON to TypeScript) and change it with `change(fn, ctx)`; derived members are `self.derive`; a
   `self.writable` is exposed through a derive. Natives (a Durable Harness, a database, a socket) are `self.open`
@@ -466,7 +472,41 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   version as the base, verbatim, so old bundles' fingerprints match) and give the provider an `accepts` table mapping
   current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1/v2, `Envs` v1/v2;
   `test/p2/contract-versions.test.ts` binds the released declarations). Without it, old clients wait unbound
-  (`contract_mismatch`) until they reload.
+  (`contract_mismatch`) until they reload. Exception: grantable members replaced variants (Chord slice 15, commit
+  `43bb1900c`), and versions declared with variants cannot be declared any more, so every remote contract restarted
+  as a new base then (version bumped, no `accepts`); clients from before reload once. `Catalog` (local) kept its
+  history.
+
+### Plugins written before grantable members (migration)
+
+Plugins outside `apps/p2/plugins` (a user plugin root, `<P2_DATA_DIR>/plugins`) built against the variant API no
+longer load: `remote(...)` refuses a `variants` key, so the plugin is not served while the rest of p2 starts and runs
+(tried 2026-11-25: the server logged nothing about it at startup; its objects just wait, "is not served here"). No
+compatibility shim (e.g. `withHeld(ref, "owner", action)` taking the old string): the contract itself must change,
+so every such plugin is edited anyway, and a shim would only keep half-ported code alive. Replacements:
+
+| Before | After |
+| --- | --- |
+| `variants: { owner: { state, methods, events } }` (one variant) | `state`, `methods`, `events` at the top of `remote(...)`; bump `version` |
+| several variants (`owner`/`guest`, `reader`/`editor`) | one shape; the members only some callers get are `grantable(schema)` / `grantable(method(...))` |
+| factory returning `{ variant: "x", members: M }` | return `M` |
+| (several variants) factory branches per principal | serve with `{ admit: grantBy((principal, params) => [names]) }`; the factory is `(params, principal, admitted, self)`; a grantable state or event member is returned as a builder `() => watchable`; a branch returns `notGranted` (or `...ungranted([names])`) for the grantable members its principal never gets |
+| `evolve(C, (e) => e.addMethod("owner", "m", A, R))` | `evolve(C, (e) => e.addMethod("m", A, R))` (no variant argument); an `accepts` table is flat: `state: { member: map }` |
+| `liveIn(ref, "owner")` for a one-variant contract | `live(ref)` |
+| `liveIn(ref, "editor")` (a variant with more members) | `liveWith(ref, "member", ...)` (narrows to those members) |
+| `keptIn(ref, ...)` | `kept(ref)` / `keptWith(ref, "member", ...)` |
+| `withHeld(ref, "owner", action)` | `withHeld(ref, action)`; with a variant's members: `withGranted(ref, ["member"], action)` |
+| `expectVariant(ref, "worker")` | `ref` for a one-variant contract; else `expectGranted(ref, "member", ...)` |
+| `ref.variant === "owner"` | `ref.granted.has("member")` (or `liveWith`) |
+| `HeldIn<C, "v">`, `RefIn<C, "v">`, `Held<C>` | `RefWith<C, "member" \| ...>`, `Ref<C>` |
+| `useObject(T, params, { variant: "owner" })` | `liveWith(useObject(T, params), "member")` (or `live(...)`) |
+| `useVariant(ref, v)` (Chord React), `scope.variant(ref)` (Chord TUI) | `useLive(ref)`, `scope.live(ref)` with `granted` |
+| stub `[C, () => ({ variant: "x", ...members })]` (tests) | `[C, () => members, grants?]` (`grants` for a contract with grantable members) |
+
+Find the sites with `grep -rnE "variants:|variant:|liveIn|keptIn|expectVariant|inVariant|useVariant|HeldIn|RefIn|withHeld\([^,]+, \"" <root>`.
+The owner's device root (`/data/data/com.termux/files/home/.pi/p2/plugins`) has `calendar`, `context-reminder` and
+`mail` (2026-11-25); slayer has no user plugins. Migrate them after this merge reaches the device's p2, then
+`reload_plugins`.
 
 ## Radius and port forwards
 
@@ -500,6 +540,16 @@ npm start
   from the relayed requests' shell origin (`radius.json` `shellPage`; one saved in the older `/pi/brains/…` form is
   read in the current one). People a session is shared with by email get `<shell page>/s/<session>`. The shell names
   the organization by its slug once it opens; a kept link names it by ID, which a slug change leaves valid.
+- **Invites** (share links through Radius): without a tunnel host a link's own URL reaches nobody, so copying it
+  (`ShareInvite`, `Shares.invite`) asks Radius for an invite to it (`ShareInviters`, `RadiusBrain.invite`):
+  `<brain origin>/__join#<token>`, which anyone may open for as long as the owner picked when copying (15 minutes, 1
+  hour, 1 day or 7 days; `INVITE_DURATIONS`). Resetting the link withdraws its invites at Radius too
+  (`ShareInviter.withdraw`). Radius keeps only the token's hash (gateway `servers/guests.ts`). Redeeming it gives the
+  browser a guest cookie of Radius naming an admission with a 10-minute lease; the brain gets it as the guest header
+  (`RequestOrigin.relayGuest`), the join page (`/join/radius`) makes the admission ID the guest's ID (no p2 cookie),
+  and the brain renews the leases of guests whose page is open (`Shares.admissions`, every 3 minutes and on change). A
+  guest who left lapses within a lease and needs a new invite; resetting the link or removing the guest ends their
+  access at once as before. Test: `radius.test.ts` ("invites").
 - The worker's root-only `ports` tool has `list/open/close`, fixes owner/peer attribution at its calling assistant
   entry, and denies guest/unattributed turns. It lists every forward and explicitly names all public endpoints,
   asks the model to obtain confirmation before publishing. As in Pi Mobile (67cdb4ca4) it may change or close any
@@ -933,8 +983,33 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   - **Methods:** `create` (one place), `rename`, `locate` (a place becomes the first, replacing that machine's),
     `move` (before another project; null: the end), `archive` (archives every live session of it through
     `SessionOperations.archive`, then marks it with those sessions), `restore` (restores those still archived, then
-    puts the project after the live ones), `remove` (the project and its memberships; no session goes), `assign`
-    (`null` leaves the project; refused for one not live).
+    puts the project after the live ones), `remove` (the project and its memberships; no session goes, its
+    coordinator is archived), `assign` (`null` leaves the project; refused for one not live and for a coordinator
+    leaving its project).
+  - **Coordinators** (owner, 2026-12: a project is a session too, not only a folder): each project may have one
+    coordinator session that starts, steers, stops and archives the project's sessions (sessions, never subagents) and
+    does no work itself. A third table, `project_coordinators` (project → session, index by session; a rename moves the
+    row). `ProjectService` 3 (`evolve` of the released 2, which is still served: `accepts` without mappings, as its
+    members did not change) adds `coordinators` and `open`: the first open of a live project chooses the session ID and
+    joins it to the project in one transaction, then makes its row at the project's default place with the default
+    model, titled "Project coordinator" (no project name: a rename would leave it behind); a failed make (a crash, a
+    missing folder) makes the same session on the next open; later opens restore it when archived. `open`, `archive`,
+    `restore` and `remove` run one at a time (each reads the catalog, waits for session operations, then writes; an
+    open's session made in between would otherwise stay live in an archived or deleted project). It is a member like any
+    other, so archiving and restoring the project archive and restore it. `ProjectCoordinators` (owner) serves the map
+    and `open`; `CoordinatedProject` gives a worker the project its session coordinates as state (null for none or a
+    stale generation). Workers learn whether they are one from their start data (`WorkerInitValues` key
+    `projectCoordinator`); then `worker.ts` sets the main conversation's `tools` and `modelTools` to conversations,
+    codemode and the history tools at each start, holds `CoordinatedProject` and adds the `project-coordinator` prompt
+    section, which names the project as that state says (a rename shows at the next request, no call per request). Any
+    other session clears exactly that tool list at its start: a former coordinator (its project deleted, then the
+    session restored) and a copy of one (`/clone`, `/fork`) get the defaults back. The conversations tool: a
+    coordinator's `create` without a project or cwd starts at its project's default place (its machine, or `env`'s
+    place); with a cwd it starts there; either way the session joins the coordinator's project as it is once the
+    session exists (renamed meanwhile: the new name; deleted: none). Others get "create needs either a project or a
+    cwd". `list` puts a coordinator's own project's sessions first (only 200 are listed). Rollup scripts never see
+    coordinators (as the Familiar). Not the Familiar: that stays separate. The TUI lists coordinators as ordinary
+    sessions. Tests: `project-coordinators.test.ts`, the coordinator case in `ui-sidebar.test.ts`.
   - **Membership** is explicit, never derived from a path (after the import): written by `Projects.assign` (the
     new-session screen's project and a project's "+", once the session exists; the TUI's project rows, before
     `Sessions.create`; the web sidebar's Move to project… and drag and drop) and by copies: the sessions plugin's
@@ -1067,6 +1142,16 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
     after. Tests: `sidebar-model.test.ts`,
     `run-state.test.ts`, `sidebar-settings.test.ts`, `ui-sidebar.test.ts`, the scoped search in `search.test.ts`,
     list links in `foreign-requests.test.ts`.
+  - **A project's row is its coordinator** (`Sidebar.tsx` `GroupItem`, `web.tsx`): the owner's sidebar holds
+    `ProjectCoordinators`; in the built-in Projects rollup only (a rollup made from code may target a project with a
+    group's "+" without the group being it), a project's name opens its coordinator (a link to it while it is live;
+    otherwise `open`, which makes or restores it: the row says "Opening…" meanwhile, one open per project, and the page
+    goes there only if the reader has not navigated since), the chevron after the name (`Toggle`, `.group-toggle`)
+    shows or hides the sessions. The row is selected while the coordinator shows, its folder framed while it works
+    (`IconMarker`), bold with a dot for its unread answer. Live projects' coordinators are left out of every rollup and
+    list page (one restored on its own while its project is archived shows in no project, as any member does then; its
+    `create` without a cwd is refused), and the sections and every owner's list page wait for the map. Delete project… counts the project's sessions without
+    its coordinator and says the coordinator is archived; an open coordinator gives way to the new-session screen first.
   - **Project commands and drag and drop** (`project-commands.tsx`, `sidebar/drag.ts`, owner): a project's group row
     is the command menu's target `project` (hovered or focused; a long press; its ⋯, shown on hover with a fine
     pointer, hidden on touch screens, opens the menu on it, `openCommandMenu`): Rename project… (the query is the new
@@ -1323,9 +1408,10 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
 - **References**: an awaited `ctx.get`/`host.get` is live with its state; UI runtimes hold synchronously
   (`host.hold` in `useObject` and `TuiScope.watch`) and read state through `useReadable` (undefined until hydrated).
   Chord rebinds a held reference by itself (a dropped link, a restarted worker, a reload); the UI never holds one
-  again. Multi-variant references narrow with `liveIn(ref, ...variants)` or `useObject(type, params, { variant })`;
-  a TUI `watch` binds once the reference is live, so its callback narrows on `ref.variant`. Tests use
-  `holdIn(host, type, params, variant)`.
+  again. Grantable members are narrowed with `liveWith(ref, ...members)`; a TUI `watch` binds once the reference is
+  live, so its callback narrows with `liveWith(ref, ...)`. A contract with grantable members is served with
+  `admit: grantBy(principal => [...])`; a factory branch returns `notGranted` (or `...ungranted(names)`) for the
+  grantable members its principal never gets. Tests use `holdWith(host, type, params, ...members)`.
 - **Optimistic UI** (`docs/optimistic-ui.md`): actions show their effect at once (`useOptimisticCall` on the web,
   `scope.optimistic(read, reduce?)` in the terminal, Chord's `TuiScope.optimistic`), long work shows a pending state,
   refusals roll back with the error.

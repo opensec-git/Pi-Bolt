@@ -33,7 +33,8 @@ from `@earendil-works/chord`.
   object in the background (it starts, a page renders, offline too) and applies the set it shows when following
   begins as well as later ones, and a reconnect re-applies the newest
   set when a plugin kept its old code (the scripts object shows an unchanged set no second time); a set with another
-  `base` calls `outdated`. At each reconnect, beside the next attempt, it asks the server's base (`serverBase`): another
+  `base` calls `outdated`, except the server's set with no base (`""`) before its surface built, which a client
+  reconnecting to a restarted server may hold first: it is skipped, and the first set follows as a frame. At each reconnect, beside the next attempt, it asks the server's base (`serverBase`): another
   one stops the loop (ending an attempt made meanwhile), then calls `outdated` (a new link protocol comes with a new base
   bundle, Chord being in it). A static client
   (`follow: false`) neither follows the scripts object nor asks the server's base. `limits` sets the limits per part of
@@ -48,15 +49,15 @@ from `@earendil-works/chord`.
   `followActiveTheme(host, mode, changed, ctx)`.
 - **Messages and languages** (`messages.ts`, `language.ts`, `format.ts`, `translations.ts`, `locale-choice.ts`,
   `active-language.ts`; design §23): `defineMessages(namespace, catalogs)` (a typed `t`; `t.message`, `t.render`,
-  `t.in(language)`, `t.translations`), `MessagesOf`, `MessageData`, `MessageSchema`; `Language`
+  `t.in(language)`, `t.translations`), `MessagesOf`, `MessageData` and `MessageSchema` (defined in `data`, re-exported); `Language`
   (`createLanguage(locale, translations, report)`; internally the render scope `inLanguage`, `matchLocale`,
   `resolveLocale`); `formatTime`, `formatNumber`; the `Translations` registry (a list of `{ namespace, locale, messages, override? }` per
   contributor; one catalog per namespace and locale) with `translationsFacet`; `LocaleChoice` with
   `localeChoiceFacet`; `followActiveLanguage(host, preferred, changed, report, ctx)`, keeping the host's language as
   its page state (`hostLanguage`).
-- **A reference in one variant** (`variant.ts`; decision "C15 stands; the UI bindings follow the variant"): `liveIn(ref,
-  variant)`, the reference narrowed to `variant` while it is live in it, `undefined` otherwise; internal, what
-  React's `useVariant` and `TuiScope.variant` return, each with its own subscription to the reference's state. The
-  types `InVariant`, `VariantOf` and `VariantRef` are exported with those bindings.
+- **A reference read while live** (`live.ts`; slice 15 §1.5): `liveGrant(ref)`, the reference's `granted` while it is
+  live or loads again after it last settled live (the reference's own history, `WAS_LIVE`), `undefined` otherwise;
+  internal, what React's `useLive` and `TuiScope.live` compare, each with its own subscription to the reference's
+  state. The type `LiveRef` is exported with those bindings.
 
 Tests: `test/surfaces/`.

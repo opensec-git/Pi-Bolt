@@ -816,6 +816,16 @@ for (const block of result.output) {
 }
 ```
 
+The third argument takes the usual request options plus `aspectRatio` (e.g. `'16:9'`) and `size` (e.g. `'1K'`, `'2K'`, `'4K'`). `openrouter-images` sends them to OpenRouter's `image_config` unchanged. Which values work depends on the model, and OpenRouter may reject the ones a model does not support:
+
+```typescript
+const wide = await models.generateImages(
+  model,
+  { input: [{ type: 'text', text: 'A mountain lake at dawn.' }] },
+  { aspectRatio: '16:9', size: '2K' }
+);
+```
+
 `generateImages()` accepts only `ImageModel` values. If an upstream model supports both chat and image generation, the catalog contains separate entries with the same provider and ID: `getModel()` returns its chat operation and `getModelOfType('image', ...)` returns its image operation. Failures never reject; they return an `AssistantImages` with `stopReason: "error"`, including unknown providers, unconfigured auth, and providers without an image implementation.
 
 A provider declares image support with the `images` option of [`createProvider()`](#createprovider): a map from `model.api` to an implementation with `generateImages()`. Image models go into the same `models` list as chat models. `api` becomes optional when `images` is present, so an image-only provider is just a provider without chat models:
@@ -878,6 +888,37 @@ console.log(model.input);  // ['text'] or ['text', 'image']
 console.log(model.output); // ['image'] or ['image', 'text']
 ```
 
+### Pi Image
+
+The `pi-image` API sends pi's image-generation types directly to a backend without provider translation, analogous to `pi-messages` and `pi-decision`. Each call sends a single `POST` to `<baseUrl>/image` with bearer auth (`Authorization: Bearer <apiKey>`) and body `{ model, context: { input }, options? }` (`PiImageRequest`), where `options` may carry `aspectRatio`, `size`, `sessionId`, and `metadata`.
+
+A `200 OK` response returns `{ output, usage?, responseId? }` (`PiImageResponse`), where `output` is an array of `TextContent` and base64 `ImageContent` blocks. When `usage.cost.total` is present (including cost-only responses without token counts), pi trusts it as authoritative; otherwise pi computes cost from the model catalog. Non-2xx responses use the `{ error: { message, code?, details? } }` envelope. Requests with input images are rejected client-side if `model.input` does not include `"image"`.
+
+```typescript
+import { createProvider, envApiKeyAuth } from '@earendil-works/pi-ai';
+import { piImageApi } from '@earendil-works/pi-ai/api/pi-image.lazy';
+
+const gateway = createProvider({
+  id: 'my-gateway',
+  name: 'My Gateway',
+  auth: { apiKey: envApiKeyAuth('My Gateway API key', ['MY_GATEWAY_API_KEY']) },
+  models: [
+    {
+      type: 'image',
+      id: 'gemini-2.5-flash-image',
+      name: 'Gemini 2.5 Flash Image',
+      api: 'pi-image',
+      provider: 'my-gateway',
+      baseUrl: 'https://gateway.example/v1',
+      input: ['text', 'image'],
+      output: ['image', 'text'],
+      cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0.083333 },
+    },
+  ],
+  images: { 'pi-image': piImageApi() },
+});
+```
+
 ### Notes and Limitations
 
 - Image models and chat models share `Models` and `Provider`; list them with `getModelsOfType('image')` and run them with `generateImages()`, never the chat/stream APIs.
@@ -887,7 +928,7 @@ console.log(model.output); // ['image'] or ['image', 'text']
 - Some models accept image input, others are text-to-image only. Check `model.input`.
 - Like the streaming APIs, image generation supports options such as `apiKey`, `signal`, `headers`, `onPayload`, and `onResponse`, and results may include `stopReason`, `responseId`, and `usage`.
 - If you want a model to analyze images in a conversation or call tools, use the regular chat APIs with a model that supports image input.
-- At the moment, image generation is available through only one provider, OpenRouter.
+- Built-in image generation is available through OpenRouter and dynamically through Radius (via `pi-image`); custom providers can also register `pi-image` or custom image APIs.
 
 ## Classification
 
@@ -903,7 +944,7 @@ Decision models (model type `"classifier"`) consume structured JSON state, and o
 | `openai` | `gpt-6-luna` | `OPENAI_API_KEY` |
 | `github-copilot` | `gpt-6-luna-decisions`, `microsoft-decision-1` | `COPILOT_GITHUB_TOKEN` or GitHub Copilot OAuth |
 
-GitHub Copilot OAuth credentials record the decision models in the account's Copilot model catalog, and `getAvailableOfType('classifier')` lists only those. Microsoft-Decision-1 is limited to Business and Enterprise plans. `gpt-6-luna-decisions` uses the `openai-decisions` API at the account's `/v1/decisions` endpoint.
+GitHub Copilot OAuth credentials record the decision models in the account's Copilot model catalog, and `getAvailableOfType('classifier')` lists only those. Microsoft-Decision-1 is limited to Business and Enterprise plans. `gpt-6-luna-decisions` uses the `openai-decisions` API at the account's `/v1/decisions` endpoint. The `radius` provider also loads decision models dynamically from `/v1/config` via the `pi-decision` API.
 
 ```typescript
 import { builtinModels } from '@earendil-works/pi-ai/providers/all';
@@ -964,6 +1005,37 @@ Vercel AI Gateway and OpenCode list their Jev models with text input only.
 The `openai-decisions` API calls OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) (`POST /v1/decisions`). GPT-6 Luna is its only model. The state is sent as JSON text; with images, the input is one user message with the state followed by the images as data URLs (at most 128). `choice` and `score` questions map to the Decisions types of the same name. `bool` questions become `predicate` questions; predicates have no criteria field, so the meanings of true and false are appended to the instructions. If OpenAI refuses to answer a question, the whole result is an error. Usage reports input tokens only, priced at the catalog input rate with OpenAI's long-context multiplier.
 
 The endpoint needs an OpenAI API key; Sign in with ChatGPT credentials are rejected, so the `openai` provider hides `gpt-6-luna` from `getAvailableOfType('classifier')` while it uses OAuth. The API rejects inputs above 922K tokens, but requests that run longer than about five seconds, currently above roughly 600K input tokens, fail with a gateway timeout (504).
+
+### Pi Decision
+
+The `pi-decision` API sends pi's decision types directly to a backend without provider translation, analogous to `pi-messages`. Each call sends a single `POST` to `<baseUrl>/decision` with bearer auth (`Authorization: Bearer <apiKey>`) and body `{ model, context: { state, images?, questions }, options? }` (`PiDecisionRequest`), where `options` may carry `sessionId`.
+
+A `200 OK` response returns `{ answers, usage?, responseId? }` (`PiDecisionResponse`), where `answers` maps each question ID to a typed `ClassifierAnswer` (`choice`, `score`, or `bool`) validated against the requested criteria and probability bounds. When `usage.cost.total` is present, pi trusts it as authoritative; otherwise pi computes cost from the model catalog. Non-2xx responses use the `{ error: { message, code?, details? } }` envelope. Requests with `context.images` are rejected client-side if `model.input` does not include `"image"`.
+
+```typescript
+import { createProvider, envApiKeyAuth } from '@earendil-works/pi-ai';
+import { piDecisionApi } from '@earendil-works/pi-ai/api/pi-decision.lazy';
+
+const gateway = createProvider({
+  id: 'my-gateway',
+  name: 'My Gateway',
+  auth: { apiKey: envApiKeyAuth('My Gateway API key', ['MY_GATEWAY_API_KEY']) },
+  models: [
+    {
+      type: 'classifier',
+      id: 'jev',
+      name: 'TypeSafe: Jev',
+      api: 'pi-decision',
+      provider: 'my-gateway',
+      baseUrl: 'https://gateway.example/v1',
+      input: ['text', 'image'],
+      cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+    },
+  ],
+  classifiers: { 'pi-decision': piDecisionApi() },
+});
+```
 
 ### Chat models on llama.cpp
 
@@ -1466,7 +1538,7 @@ interface OpenAICompletionsCompat {
   requiresNonNullAssistantContent?: boolean; // Whether replayed assistant messages with no text must send "" instead of null content (default: false)
   requiresThinkingAsText?: boolean;  // Whether thinking blocks must be converted to text (default: false)
   requiresReasoningContentOnAssistantMessages?: boolean; // Whether all replayed assistant messages must include empty reasoning_content when reasoning is enabled (default: auto-detected for DeepSeek)
-  thinkingFormat?: 'openai' | 'openrouter' | 'deepseek' | 'together' | 'baseten' | 'zai' | 'qwen' | 'chat-template' | 'qwen-chat-template' | 'string-thinking' | 'ant-ling'; // Format for reasoning param: 'openai' uses reasoning_effort, 'openrouter' uses reasoning: { effort }, 'deepseek' uses thinking: { type } plus reasoning_effort when supported, 'together' uses reasoning: { enabled } plus reasoning_effort when supported, 'baseten' uses configurable chat_template_args plus reasoning_effort when supported, 'zai' uses thinking: { type }, 'qwen' uses enable_thinking, 'chat-template' uses configurable chat_template_kwargs, 'qwen-chat-template' uses chat_template_kwargs.enable_thinking and preserve_thinking, 'string-thinking' uses top-level thinking, 'ant-ling' uses reasoning: { effort } only for mapped efforts (default: openai)
+  thinkingFormat?: 'openai' | 'openrouter' | 'deepseek' | 'together' | 'baseten' | 'zai' | 'qwen' | 'chat-template' | 'qwen-chat-template' | 'string-thinking'; // Format for reasoning param: 'openai' uses reasoning_effort, 'openrouter' uses reasoning: { effort }, 'deepseek' uses thinking: { type } plus reasoning_effort when supported, 'together' uses reasoning: { enabled } plus reasoning_effort when supported, 'baseten' uses configurable chat_template_args plus reasoning_effort when supported, 'zai' uses thinking: { type }, 'qwen' uses enable_thinking, 'chat-template' uses configurable chat_template_kwargs, 'qwen-chat-template' uses chat_template_kwargs.enable_thinking and preserve_thinking, 'string-thinking' uses top-level thinking (default: openai)
   chatTemplateKwargs?: Record<string, string | number | boolean | null | { '$var': 'thinking.enabled' | 'thinking.effort' | 'thinking.budget'; omitWhenOff?: boolean }>; // chat_template_kwargs values; use $var for pi-controlled thinking values
   chatTemplateArgs?: Record<string, string | number | boolean | null | { '$var': 'thinking.enabled' | 'thinking.effort' | 'thinking.budget'; omitWhenOff?: boolean }>; // chat_template_args values for thinkingFormat: 'baseten'; use $var for pi-controlled thinking values
   thinkingTokenBudgetField?: 'thinking_token_budget' | 'thinking_budget' | 'thinking_budget_tokens'; // Top-level field that caps reasoning tokens from thinkingBudgets (vLLM / Qwen / llama.cpp). Off by default.
@@ -1790,7 +1862,7 @@ Pass `env` in stream options to scope provider configuration to a request. Value
 
 ```typescript
 const models = builtinModels();
-const model = models.getModel('cloudflare-ai-gateway', 'workers-ai/@cf/moonshotai/kimi-k2.6')!;
+const model = models.getModel('cloudflare-ai-gateway', 'workers-ai/@cf/zai-org/glm-5.3')!;
 
 const response = await models.complete(model, context, {
   env: {

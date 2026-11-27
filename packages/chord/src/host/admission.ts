@@ -1,19 +1,23 @@
 // Admission (slice 14 §2): the decision made about a caller before anything is built or started. A remote type's
-// provider declares it with `admit`, run first in every attempt: it reads data about the caller (references with
-// keyed pins, registries, derives, live queries) and returns a watchable of `allow(value)` or `deny(reason)`; the
-// factory is handed the value. A route asks the same way before it resolves or forwards a hold. This file has the
-// app's types and one `Decision`: what one `admit` declared, what it says now, and the watch its owner follows it
-// with. What follows from a decision is its owner's: an attempt parks, goes on or is sealed (`attempt.ts`,
-// `object.ts`), a route holds back, forwards or releases (`route-admission.ts`).
+// provider declares it with `admit`, run first in every attempt: it reads data about the caller (references with keyed
+// pins, registries, derives, live queries) and returns a watchable of `allow(value)` or `deny(reason)`; the factory is
+// handed the value, whose `granted` names the grantable members and flags the caller gets (slice 15 §1.2). A route asks
+// the same way before it resolves or forwards a hold. This file has the app's types and one `Decision`: what one
+// `admit` declared, what it says now, and the watch its owner follows it with. What follows from a decision is its
+// owner's: an attempt parks, goes on or is sealed (`attempt.ts`, `object.ts`), a route holds back, forwards or releases
+// (`route-admission.ts`).
 
-import { type Context, withAbortSignal } from "../context/index.ts";
-import type { AdmittedOf, Contract, NamedQuery, ParamsOf } from "../contracts/index.ts";
-import { ChordError, forbidden, type Principal } from "../data/index.ts";
-import { asChordError, canonicalJson, checkParams } from "../data/internal.ts";
+import type { Context } from "../context/index.ts";
+import type { AllowedOf, Contract, NamedQuery, ParamsOf } from "../contracts/index.ts";
+import { isMessageData, NO_GRANTS } from "../contracts/internal.ts";
+import { ChordError, forbidden, type MessageData, type Principal } from "../data/index.ts";
+import { asChordError, checkParams, sameJson, stackless } from "../data/internal.ts";
 import type { JsonValue } from "../json.ts";
+import { appended, NO_ITEMS } from "../lists.ts";
 import type { Registry, RegistryValue } from "../registries/index.ts";
 import type { RegistryWaiter } from "../registries/internal.ts";
 import { type Dependent, Derive, type DeriveSource, Source } from "../state/internal.ts";
+import { chordMetrics } from "../telemetry.ts";
 import type { NativeWatchable, Watchable } from "../watch.ts";
 import type { Self } from "./attempt.ts";
 import type { Caller } from "./ctx.ts";
@@ -34,10 +38,13 @@ import type { Reader } from "./query-reader.ts";
 import { openReaders, readerSite, rowsReader } from "./read-declarations.ts";
 import { type Binding, type CheckedParams, type Reference, resolveWatchable } from "./reference.ts";
 
-/** An admission's decision: the value the factory is handed about the caller, or a denial with the reason it is shown. */
+/**
+ * An admission's decision: the value the factory is handed about the caller, or a denial with its reason (English, for
+ * logs) and the message the person sees (as data, slice 15 §2).
+ */
 export type Admission<T> =
 	| { readonly kind: "allow"; readonly value: T }
-	| { readonly kind: "deny"; readonly reason: string };
+	| { readonly kind: "deny"; readonly reason: string; readonly message?: MessageData };
 
 /**
  * What `admit` declares with, valid only while it runs: references (`at(key)` on their keyed members), registries,
@@ -54,10 +61,20 @@ export type Admit<C extends Contract, P extends Principal = Principal> = (
 	params: ParamsOf<C>,
 	principal: P,
 	self: AdmitSelf,
-) => Watchable<Admission<AdmittedOf<C>>>;
+) => Watchable<Admission<AllowedOf<C>>>;
 
-/** An allow as a decision keeps it: the same object for as long as the value stays equal (canonical JSON). */
-export type Allowed = { readonly kind: "allow"; readonly value: JsonValue };
+/**
+ * An allow as a decision keeps it: the same object for as long as the value stays equal (as canonical JSON, `granted`
+ * as a set of names). `value` is what the factory is handed (`granted` as a set), `granted` the names.
+ */
+export type Allowed = {
+	readonly kind: "allow";
+	readonly value: JsonValue | AdmittedValue;
+	readonly granted: ReadonlySet<string>;
+};
+
+/** An object's admitted value as its factory gets it: the admitted data, and `granted` as a set. */
+export type AdmittedValue = { readonly [field: string]: unknown; readonly granted: ReadonlySet<string> };
 
 /** A denial as a decision keeps it: the same object, and the same error, for as long as the reason stays. */
 export type Denied = { readonly kind: "deny"; readonly error: ChordError };
@@ -78,21 +95,32 @@ export type DecisionOwner = {
 	readonly caller: Caller;
 	/** The object whose attempt it admits (its references' dependent: cycles, the start barrier); none for a route. */
 	readonly dependent: ChordObject | undefined;
+	/**
+	 * An object's: the names its contract lets an admission grant (grantable members and flags, slice 15 §1.2), against
+	 * which an allowed value is read; none for a route, whose value is passed on as it is.
+	 */
+	readonly grants: readonly string[] | undefined;
 	/** Something it reads changed (a source's state, the decision's value, in that change's batch): check it again. */
 	moved(): void;
 };
 
 /**
- * Allows the caller: `value` is what the factory is handed about it, plain JSON the contract's `admission` schema
- * describes (never validated). Small and rarely changing (a mode, a role): another value rebuilds the caller's object.
+ * Allows the caller: `value` is what the factory is handed about it, plain JSON: the names in `granted` (the grantable
+ * members and flags the caller gets, slice 15 §1.2) and the data the contract's `admission` schema describes (never
+ * validated). Small and rarely changing (a role): another value rebuilds the caller's object. Plain data, immutable
+ * once returned: Chord keeps the value itself (no copy) and compares a later one with it, so a value changed in place
+ * and returned again is the decision it was.
  */
 export function allow<const T extends JsonValue>(value: T): Admission<T> {
 	return { kind: "allow", value };
 }
 
-/** Denies the caller. `reason` reaches it as the message of its `forbidden` error: it is user-facing. */
-export function deny(reason: string): Admission<never> {
-	return { kind: "deny", reason };
+/**
+ * Denies the caller. `reason` is English, for logs: the message of its `forbidden` error. `message` is what the person
+ * sees, as data their client renders in their language (slice 15 §2): it travels in the error's `details.message`.
+ */
+export function deny(reason: string, message?: MessageData): Admission<never> {
+	return message === undefined ? { kind: "deny", reason } : { kind: "deny", reason, message };
 }
 
 /** A reference a decision declared, bound when `admit` returned. */
@@ -100,6 +128,9 @@ type Declared = { readonly binding: Binding; readonly contract: Contract; readon
 
 /** No state members: a decision's derives are exposed by none. */
 const NO_MEMBERS: ReadonlyMap<string, DeriveSource> = new Map();
+
+/** A decision without live queries follows none: the shared wake, never told. */
+const NO_WAKE: Dependent = { invalidate: () => {}, sourceRetired: () => {} };
 
 /**
  * One decision: the `self` its `admit` declares with, the requests it made (held until `release`), and what it says.
@@ -111,34 +142,41 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 	readonly #owner: DecisionOwner;
 	/** The context `admit` declares under, while it runs (its params are checked with it). */
 	#declaring: Context | undefined;
-	readonly #references: Declared[] = [];
-	/** Its requests in declaration order: what its owner parks on. */
-	readonly dependencies: Dependency[] = [];
-	readonly #derives: Derive[] = [];
-	readonly #readers: Reader[] = [];
-	/** What ends its follows of its references and registries: `release`. */
-	readonly #following = new AbortController();
-	readonly #releases: (() => void)[] = [];
+	#references: readonly Declared[] = NO_ITEMS;
+	#dependencies: readonly Dependency[] = NO_ITEMS;
+	#derives: readonly Derive[] = NO_ITEMS;
+	#readers: readonly Reader[] = NO_ITEMS;
+	/** Ends its follows of its references' states (`#unfollow`). */
+	#unfollows: readonly (() => void)[] = NO_ITEMS;
+	/** The signal whose abort ends those follows, while it listens to it (`#followUntilAborted`). */
+	#ending: AbortSignal | undefined;
+	/** Ends its reads of its registries: `release`. */
+	#releases: readonly (() => void)[] = NO_ITEMS;
 	/** The watchable `admit` returned, as Chord follows it. */
 	#source: DeriveSource | undefined;
-	/** The last allow or denial it read, with an allow's value as canonical JSON: an equal one is the same object. */
-	#decided: { readonly verdict: Allowed | Denied; readonly key: string } | undefined;
+	/** The last allow or denial it read, with what it was read from (`Decided`). */
+	#decided: Decided | undefined;
 	/** Whether a change of its source waits for the current batch's flush: one check per batch. */
 	#flushing = false;
-	/** Follows a live query it waits on: its next adoption checks again. */
-	readonly #readerWake: Dependent = { invalidate: () => this.#owner.moved(), sourceRetired: () => {} };
+	/** Follows a live query it waits on: its next adoption checks again. Made by the first settle with live queries. */
+	#readerWake: Dependent | undefined;
 	#released = false;
 
 	constructor(owner: DecisionOwner) {
 		this.#owner = owner;
 	}
 
+	/** Its requests in declaration order: what its owner parks on; none once released. */
+	get dependencies(): readonly Dependency[] {
+		return this.#dependencies;
+	}
+
 	get<C extends Contract>(Type: C, params: ParamsOf<C>): Reference<C> {
 		const { host, dependent, caller } = this.#owner;
 		const checked = checkParams(Type, params, this.#assertDeclaring("get"));
 		const binding = host.reference(Type, dependent, caller, {});
-		this.#references.push({ binding, contract: Type, params: checked });
-		this.dependencies.push({ kind: "reference", binding });
+		this.#references = appended(this.#references, { binding, contract: Type, params: checked });
+		this.#dependencies = appended(this.#dependencies, { kind: "reference", binding });
 		// The binding was built from `Type`'s members.
 		return binding.reference as Reference<C>;
 	}
@@ -146,7 +184,7 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 	registry<C, V>(R: Registry<C, V>): RegistryValue<V> {
 		this.#assertDeclaring("registry");
 		const value = this.#owner.host.registryRecord(R.name).value(R.version);
-		this.dependencies.push({ kind: "registry", value });
+		this.#dependencies = appended(this.#dependencies, { kind: "registry", value });
 		// Its values are the composition as `R`'s version has it, `V`.
 		return value as RegistryValue<V>;
 	}
@@ -166,7 +204,7 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 		this.#assertDeclaring("derive");
 		// The values are the sources' values, in order; the result is `T`.
 		const derive = new Derive(sources, compute as (values: readonly unknown[]) => T, this.#owner.host.batch);
-		this.#derives.push(derive);
+		this.#derives = appended(this.#derives, derive);
 		return derive as unknown as Watchable<T>;
 	}
 
@@ -179,7 +217,7 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 		const { host, label } = this.#owner;
 		const at = readerSite(host, label, () => this.#owner.moved());
 		const { reader, source } = rowsReader(at, query, args, range);
-		this.#readers.push(reader);
+		this.#readers = appended(this.#readers, reader);
 		// Its value is what `present` builds from the query's items.
 		return source as unknown as Watchable<{ rows: T[]; more: boolean }>;
 	}
@@ -210,19 +248,23 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 			const { target } = binding;
 			if (target !== undefined) dependent?.assertNoCycle(target, context);
 		}
-		const following = withAbortSignal(this.#following.signal, context);
+		// Told now and at every change of a reference, until the release or `context`'s abort: its owner checks it again.
+		const moved = (): void => this.#owner.moved();
+		const signal = context.abortSignal;
+		if (signal !== undefined && this.#references.length > 0) this.#followUntilAborted(signal);
 		for (const dependency of this.dependencies) {
 			if (dependency.kind === "registry") {
 				// Read until its release: an older version's mapping is kept meanwhile.
-				this.#releases.push(dependency.value.read(), dependency.value.wait(this));
+				this.#releases = appended(appended(this.#releases, dependency.value.read()), dependency.value.wait(this));
 				continue;
 			}
-			// Checked at every change of the reference until the release (never done): its owner checks it again.
-			const moved = (): boolean => {
-				this.#owner.moved();
-				return false;
-			};
-			dependency.binding.until(moved, following).catch(() => {});
+			// Aborted already (by what an earlier reference's first telling did, too): this one is not followed.
+			if (signal?.aborted) continue;
+			const unfollow = dependency.binding.followState(moved);
+			if (unfollow === undefined) continue;
+			this.#unfollows = appended(this.#unfollows, unfollow);
+			// Told now too, its end kept first: this telling may abort the context, which ends this follow as well.
+			moved();
 		}
 		attachDerives(this.#derives, NO_MEMBERS, () => (error) => {
 			host.report({ kind: "derive_failed", object: label, error });
@@ -246,7 +288,11 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 		const pinned = await pinKeys(bindings, long, context);
 		if (pinned !== undefined) return { kind: "parked", shown: pinned, firstPass: true, cause: pinned.cause };
 		const label = `${this.#owner.label}: a live query of its admission`;
-		const reading = await openReaders(this.#readers, this.#readerWake, long, label, context);
+		// Without live queries nothing is followed: no wake is made.
+		if (this.#readers.length > 0) {
+			this.#readerWake ??= { invalidate: () => this.#owner.moved(), sourceRetired: () => {} };
+		}
+		const reading = await openReaders(this.#readers, this.#readerWake ?? NO_WAKE, long, label, context);
 		if (reading.kind !== "ready") {
 			// A live query whose read has not run yet keeps the last decision, as a source that only loads does.
 			const loading = reading.kind === "parked" && reading.shown.kind === "loading";
@@ -275,19 +321,61 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 		if (this.#released) return;
 		this.#released = true;
 		const { label } = this.#owner;
-		const ended = new ChordError({ code: "released", reason: "ended", message: `${label}: its admission ended` });
-		this.#following.abort(ended);
+		// Only for what takes it (its derives and live queries): a decision without any made one for nothing (0.3 KiB).
+		const takers = this.#readers.length > 0 || this.#derives.length > 0;
+		// Left out only when no loop below runs that takes it.
+		const ended = (
+			takers ? stackless({ code: "released", reason: "ended", message: `${label}: its admission ended` }) : undefined
+		) as ChordError;
+		this.#unfollow();
+		// What it read its last decision from goes (the object, its value): only the verdict is kept, as before.
+		const decided = this.#decided;
+		if (decided !== undefined && decided.kind !== "released") {
+			this.#decided = { kind: "released", verdict: decided.verdict };
+		}
 		const source = this.#source;
 		if (source instanceof Source) source.dependents.delete(this);
 		this.#source = undefined;
+		const wake = this.#readerWake;
 		for (const reader of this.#readers) {
-			reader.source.dependents.delete(this.#readerWake);
+			if (wake !== undefined) reader.source.dependents.delete(wake);
 			reader.close(ended);
 		}
 		for (const derive of this.#derives) derive.detach(ended);
-		for (const release of this.#releases.splice(0)) release();
-		for (const { binding } of this.#references.splice(0)) binding.release();
-		this.dependencies.length = 0;
+		const releases = this.#releases;
+		this.#releases = NO_ITEMS;
+		for (const release of releases) release();
+		const references = this.#references;
+		this.#references = NO_ITEMS;
+		for (const { binding } of references) binding.release();
+		this.#dependencies = NO_ITEMS;
+	}
+
+	/**
+	 * Its follows of its references' states end where a wait under the context it declares under would: among the
+	 * listeners of a signal that depends on the context's, made now. That place in an abort's dispatch decides what
+	 * the decision is still told (after the listeners of the context's own signal and of the signals made from it
+	 * before, ahead of those made later: an opener's, a resolver's), so the signal is the price of it (about 1.1 KiB
+	 * for a decision with references; the decision itself is its listener, `handleEvent`).
+	 */
+	#followUntilAborted(signal: AbortSignal): void {
+		if (signal.aborted) return;
+		this.#ending = AbortSignal.any([signal]);
+		this.#ending.addEventListener("abort", this, { once: true });
+	}
+
+	/** The context it declared under was aborted (`#followUntilAborted`): it follows its references no more. */
+	handleEvent(): void {
+		this.#unfollow();
+	}
+
+	/** Ends its follows of its references' states; it listens for no abort any more. */
+	#unfollow(): void {
+		this.#ending?.removeEventListener("abort", this);
+		this.#ending = undefined;
+		const unfollows = this.#unfollows;
+		this.#unfollows = NO_ITEMS;
+		for (const unfollow of unfollows) unfollow();
 	}
 
 	/** Its source changed in the current batch: its owner checks it in that batch's flush, once however many changed. */
@@ -335,21 +423,120 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 			const shown = waitingOn(`${label}: its admission`, asChordError(error, label));
 			return { kind: "parked", shown, firstPass: true, cause: shown.cause };
 		}
-		const { kind, value, reason } = (decision ?? {}) as { kind?: unknown; value?: JsonValue; reason?: unknown };
+		const decided = this.#decided;
+		// The object it was read from last (a derive that did not recompute, a constant): that decision, read no more
+		// (values handed to Chord are immutable by convention).
+		if (decided !== undefined && decided.kind !== "released" && decision === decided.decision) return decided.verdict;
+		const { kind, value, reason, message } = (decision ?? {}) as {
+			kind?: unknown;
+			value?: JsonValue;
+			reason?: unknown;
+			message?: unknown;
+		};
 		if (kind === "allow" && value !== undefined) {
-			return this.#decide(`allow ${canonicalJson(value, context)}`, () => ({ kind: "allow", value }));
+			const { grants } = this.#owner;
+			// A route's value goes on as it is; an object's is read against its contract's grants.
+			if (grants === undefined) {
+				countWalk(context);
+				return this.#allowRoute(decision, value);
+			}
+			return this.#allowObject(decision, value, grants, label, context);
 		}
 		if (kind === "deny" && typeof reason === "string") {
-			return this.#decide(`deny ${reason}`, () => ({ kind: "deny", error: forbidden(reason) }));
+			if (message !== undefined && !isMessageData(message)) {
+				const error = new Error(`its denial's message is no message as data (MessageSchema): ${reason}`);
+				return { kind: "broken", error: asChordError(error, label) };
+			}
+			countWalk(context);
+			return this.#deny(decision, reason, message);
 		}
 		const error = new Error("its admission's value is neither allow(value) nor deny(reason)");
 		return { kind: "broken", error: asChordError(error, label) };
 	}
 
-	/** The decision with `key`: the one it had when the key is the same, else the one `make` makes. */
-	#decide(key: string, make: () => Allowed | Denied): Allowed | Denied {
-		if (this.#decided?.key !== key) this.#decided = { verdict: make(), key };
-		return this.#decided.verdict;
+	/**
+	 * An object's allowed value: an object whose `granted` is none or a list of the contract's grants (else it breaks
+	 * and counts no walk), compared with the value the last allow was read from: the names against its ones (in any
+	 * order, repeated or not), the other fields field by field. An equal read is that decision, kept as read from this
+	 * value from now on, and allocates nothing; any other makes the new one.
+	 */
+	#allowObject(
+		decision: unknown,
+		value: JsonValue,
+		grants: readonly string[],
+		label: string,
+		context: Context,
+	): Verdict {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			return brokenRead("its admission's value is an object (allow({ granted, ...data }))", label);
+		}
+		const listed = value.granted;
+		// The names as bits of their grants' indexes (a contract of up to 60 grants): repeated names and their order do
+		// not count, an equal read compares two numbers.
+		let low = 0;
+		let high = 0;
+		if (listed !== undefined) {
+			if (!Array.isArray(listed)) return brokenRead("its admission's granted is a list of names", label);
+			// The table only for a listed name: a version whose decisions grant none never makes its index (115 KB at
+			// 4,096 flags).
+			if (listed.length > 0) {
+				const { indexes } = grantTable(grants);
+				// Indexed: a for-of allocates an iterator per list.
+				for (let index = 0; index < listed.length; index++) {
+					const name = listed[index];
+					const at = typeof name === "string" ? indexes.get(name) : undefined;
+					if (at === undefined) {
+						return brokenRead(
+							`its admission granted ${JSON.stringify(name)}: no grantable member or flag of its contract`,
+							label,
+						);
+					}
+					if (at < BITS) low |= 1 << at;
+					else high |= 1 << (at - BITS);
+				}
+			}
+		}
+		countWalk(context);
+		const last = this.#decided?.kind === "allow" ? this.#decided : undefined;
+		// A larger contract: its names sorted, without duplicates, compared with the last allow's.
+		const sorted =
+			grants.length <= 2 * BITS || listed === undefined ? undefined : [...new Set(listed as string[])].sort();
+		const sameNames =
+			sorted === undefined
+				? last?.low === low && last.high === high
+				: last !== undefined && sameList(sorted, namesOf(last.verdict.granted));
+		if (last !== undefined && sameNames && sameJson(last.value, value, "granted"))
+			return readAgain(last, decision, value);
+		const names = sorted ?? namesOfBits(grants, low, high);
+		const { granted: _, ...data } = value;
+		const granted = names.length === 0 ? NO_GRANTS : grantedSet(grants, names);
+		const verdict: Allowed = { kind: "allow", value: { ...data, granted } as AdmittedValue, granted };
+		this.#decided = { kind: "allow", verdict, decision, value, low, high };
+		return verdict;
+	}
+
+	/** A route's allowed value, passed on as it is: compared with the value the last allow was read from. */
+	#allowRoute(decision: unknown, value: JsonValue): Allowed {
+		const last = this.#decided?.kind === "allow" ? this.#decided : undefined;
+		if (last !== undefined && sameJson(last.value, value)) return readAgain(last, decision, value);
+		const verdict: Allowed = { kind: "allow", value, granted: NO_GRANTS };
+		this.#decided = { kind: "allow", verdict, decision, value, low: 0, high: 0 };
+		return verdict;
+	}
+
+	/** A denial (its message checked, its walk counted): the last one when its reason and message are the same. */
+	#deny(decision: unknown, reason: string, message: unknown): Denied {
+		const last = this.#decided?.kind === "deny" ? this.#decided : undefined;
+		if (last !== undefined && last.reason === reason && sameJson(last.message, message)) {
+			last.decision = decision;
+			last.message = message;
+			return last.verdict;
+		}
+		// Checked by the caller: a message as data.
+		const details = message === undefined ? undefined : { message: message as MessageData };
+		const verdict: Denied = { kind: "deny", error: forbidden(reason, details) };
+		this.#decided = { kind: "deny", verdict, decision, reason, message };
+		return verdict;
 	}
 
 	/** The context `admit` runs under; outside it, `declaration` is refused. */
@@ -361,6 +548,149 @@ export class Decision implements AdmitSelf, Dependent, RegistryWaiter {
 		return declaring;
 	}
 }
+
+function brokenRead(message: string, label: string): Extract<Verdict, { readonly kind: "broken" }> {
+	return { kind: "broken", error: asChordError(new Error(message), label) };
+}
+
+/** The bits of one word of a decision's names: small integers in every tier of V8 (a 31st bit is not). */
+const BITS = 30;
+
+/** The names whose grant indexes `low` and `high` have, in the grants' order (sorted, `fingerprint.ts`). */
+function namesOfBits(grants: readonly string[], low: number, high: number): readonly string[] {
+	if (low === 0 && high === 0) return NO_ITEMS;
+	const names: string[] = [];
+	for (let at = 0; at < grants.length; at++) {
+		const seen = at < BITS ? low & (1 << at) : high & (1 << (at - BITS));
+		if (seen !== 0) names.push(grants[at]!);
+	}
+	return names;
+}
+
+/** Whether two of Chord's sorted name lists are the same. */
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) return false;
+	return true;
+}
+
+/** One walk of a decision's value per read, as canonical JSON counted it. */
+function countWalk(context: Context): void {
+	chordMetrics(context.telemetry.metrics).counter("chord.data.walks").add(1);
+}
+
+/**
+ * The last allow a decision read: its verdict, the decision object and value it was read from (the latest of equal
+ * ones: an earlier object is not kept; values are immutable by convention) and its names as bits of their grants'
+ * indexes (a contract of up to 60 grants; none for a route).
+ */
+type DecidedAllow = {
+	readonly kind: "allow";
+	readonly verdict: Allowed;
+	decision: unknown;
+	value: JsonValue;
+	readonly low: number;
+	readonly high: number;
+};
+
+/** An equal read of `decision` and `value`: `last`'s verdict, kept as read from them. */
+function readAgain(last: DecidedAllow, decision: unknown, value: JsonValue): Allowed {
+	last.decision = decision;
+	last.value = value;
+	return last.verdict;
+}
+
+/** What a decision read last: an allow, a denial with what it was read from, or once released only the verdict. */
+type Decided =
+	| DecidedAllow
+	| { readonly kind: "deny"; readonly verdict: Denied; decision: unknown; readonly reason: string; message: unknown }
+	| { readonly kind: "released"; readonly verdict: Allowed | Denied };
+
+/**
+ * The set of `names` (sorted, without duplicates, not empty, of the contract whose grantable names are `grants`): one
+ * per version and set of names while any decision has it, shared by every decision that grants them (a thousand
+ * callers granted the same names keep one set). Found by a hash of the names' indexes and compared name by name (no
+ * key made per lookup). Held weakly: a set goes with the last decision that granted it, its entry right after, and
+ * all of a version's with its contract.
+ */
+function grantedSet(grants: readonly string[], names: readonly string[]): ReadonlySet<string> {
+	const sets = grantTable(grants);
+	const { buckets, indexes } = sets;
+	// Every index mixed in, in the names' (sorted) order (FNV-1a over 32 bits): an OR of index bits modulo 31 put every
+	// combination of a contract with more than 31 grants that shares 31 of them into one bucket. Collisions are told
+	// apart name by name.
+	let hash = 0x811c9dc5;
+	for (let index = 0; index < names.length; index++) {
+		hash = Math.imul(hash ^ (indexes.get(names[index]!)! + 1), 0x01000193);
+	}
+	const bucket = buckets.get(hash);
+	if (bucket !== undefined) {
+		for (let index = 0; index < bucket.length; index++) {
+			const granted = bucket[index]!.deref();
+			if (granted !== undefined && granted.size === names.length && names.every((name) => granted.has(name))) {
+				return granted;
+			}
+		}
+	}
+	const granted: ReadonlySet<string> = new Set(names);
+	setNames.set(granted, names);
+	const ref = new WeakRef(granted);
+	if (bucket === undefined) buckets.set(hash, [ref]);
+	else bucket.push(ref);
+	sets.collected.register(granted, { hash, ref });
+	return granted;
+}
+
+/**
+ * The sorted names of a granted set (`grantedSet`'s, or none): what a decision compares a read's names with, by
+ * position. Kept with the set, weakly.
+ */
+function namesOf(granted: ReadonlySet<string>): readonly string[] {
+	return setNames.get(granted) ?? NO_ITEMS;
+}
+
+const setNames = new WeakMap<ReadonlySet<string>, readonly string[]>();
+
+/** A version's granted sets by the hash of their names, each while a decision has it. */
+type Buckets = Map<number, WeakRef<ReadonlySet<string>>[]>;
+
+/**
+ * A version's grant table: each grant's index, its granted sets' buckets and the registry that drops a collected set's
+ * entry; owned by the version's entry alone (the registry's holdings name no table), so a set an app keeps keeps neither
+ * the buckets nor their registrations once the version is gone.
+ */
+type GrantedSets = {
+	readonly indexes: ReadonlyMap<string, number>;
+	readonly buckets: Buckets;
+	readonly collected: FinalizationRegistry<{ readonly hash: number; readonly ref: WeakRef<ReadonlySet<string>> }>;
+};
+
+/**
+ * The grant table of the version whose grants are `grants`, made by the first use. A function of its own: the
+ * registry's callback closes over this function's variables alone.
+ */
+function grantTable(grants: readonly string[]): GrantedSets {
+	let table = grantedSets.get(grants);
+	if (table === undefined) {
+		const buckets: Buckets = new Map();
+		// Drops the entry of a collected set (its bucket with it when it was the last).
+		const collected = new FinalizationRegistry<{ readonly hash: number; readonly ref: WeakRef<ReadonlySet<string>> }>(
+			({ hash, ref }) => {
+				const bucket = buckets.get(hash);
+				if (bucket === undefined) return;
+				const index = bucket.indexOf(ref);
+				if (index >= 0) bucket.splice(index, 1);
+				if (bucket.length === 0) buckets.delete(hash);
+			},
+		);
+		table = { indexes: new Map(grants.map((grant, index) => [grant, index])), buckets, collected };
+		grantedSets.set(grants, table);
+	}
+	return table;
+}
+
+/** The granted sets of each version, by its grants: gone with the version. */
+const grantedSets = new WeakMap<readonly string[], GrantedSets>();
 
 /**
  * Refuses `self.job` in an admitted type's factory (slice 14 §2.1), in an attempt and in staging: work for a person
@@ -376,8 +706,10 @@ export function refuseAdmittedJob(served: Served, label: string): void {
 
 /**
  * What a denial rejects the calls running for the denied caller with (slice 14 §2.2): `forbidden/revoked`, naming
- * `label` and the denial's reason. The denied object itself shows `denial`, `forbidden` with the reason alone.
+ * `label` and the denial's reason, with its details (the message for the person, slice 15 §2). The denied object
+ * itself shows `denial`, `forbidden` with the reason alone and the same details.
  */
 export function revoked(label: string, denial: ChordError): ChordError {
-	return new ChordError({ code: "forbidden", reason: "revoked", message: `${label}: ${denial.message}` });
+	const { details } = denial;
+	return new ChordError({ code: "forbidden", reason: "revoked", message: `${label}: ${denial.message}`, details });
 }

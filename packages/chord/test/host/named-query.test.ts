@@ -1,11 +1,13 @@
 // Named queries (slice 14 §3.1, §5, test list 2, 7, 11, 18): what `self.queries` returns implements a `queries`
 // member; a joined query's mapping gets the row and its partner, projected; `page` reads without a live read; the
 // member check and staging; and a column set's binding across its publisher's reloads: unchanged code, a migration,
-// a used column dropped, the set no longer exposed and exposed again, two tables exposing one name.
+// a used column dropped, the set no longer exposed and exposed again, two tables exposing one name. And a reference's
+// named queries, made on first use (slice 15 §5).
 
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT as context } from "../../src/context/index.ts";
 import { arr, bool, hostKind, int, local, method, obj, opt, queries, str } from "../../src/contracts/index.ts";
+import { currentVersion } from "../../src/contracts/internal.ts";
 import {
 	createHost,
 	defineFacet,
@@ -14,7 +16,7 @@ import {
 	type HostError,
 	type StoreSelf,
 } from "../../src/host/index.ts";
-import { ownQueries } from "../../src/host/named-query.ts";
+import { ownQueries, type ReferenceQuery } from "../../src/host/named-query.ts";
 import { defineColumns } from "../../src/store/column-set.ts";
 import { eq, exists } from "../../src/store/expression.ts";
 import { host as hostColumn } from "../../src/store/host-column.ts";
@@ -809,5 +811,64 @@ describe("staging (code review round 1)", () => {
 		expect(counted.n.value).toBe(0);
 		await host.close(context);
 		await store.close(context);
+	});
+});
+
+describe("a reference's named queries, made on first use (slice 15 §5)", () => {
+	/** A store contract of `count` named queries over the team rows, `q0` to `q<count - 1>`. */
+	function manyQueries(count: number) {
+		const args = Object.fromEntries(Array.from({ length: count }, (_, index) => [`q${index}`, obj({ team: str() })]));
+		return local("app.many", { version: 1, params: {}, members: { rows: queries(TeamItem, args) } });
+	}
+
+	it("a reference to 23 named queries, none read, keeps none; one read is made once and works as before", async () => {
+		const Many = manyQueries(23);
+		const store = await memoryStore();
+		const host = createHost({ store, onError: () => {} });
+		const plugin = defineFacet((h) => {
+			serveSessions(h);
+			h.serve(Many, (_, self) => {
+				const builders = Object.fromEntries(
+					Array.from({ length: 23 }, (_, index) => [
+						`q${index}`,
+						({ team }: { team: string }) => query(TeamRows).where((t) => eq(t.team, team)),
+					]),
+				);
+				return {
+					rows: self.queries(
+						self.table(TeamRows),
+						{ map: (row) => ({ session: row.session.params.id, title: row.team, touched: 0 }) },
+						builders,
+					),
+				};
+			});
+		});
+		await host.load([{ name: "@test/many", facet: plugin }], context);
+		const many = await host.get(Many, {}, context);
+		// No `ReferenceQuery` exists: the member's object has no own property, its names are its class's getters.
+		expect(Object.getOwnPropertyNames(many.rows)).toEqual([]);
+		expect("q7" in many.rows).toBe(true);
+		const q7 = many.rows.q7;
+		expect(Object.getOwnPropertyNames(many.rows)).toEqual(["q7"]);
+		expect(many.rows.q7).toBe(q7);
+		// Read as before; its label (errors and reports) is built when asked.
+		expect(await q7.page({ team: "u12" }, 5, context)).toEqual({ items: [] });
+		expect((q7 as unknown as ReferenceQuery).label).toMatch(/^app\.many.*: query "rows\.q7"$/);
+		await host.close(context);
+		await store.close(context);
+	});
+
+	it("keeps no contract: the classes of the members' objects are held weakly by the contract's version", async () => {
+		const host = createHost({ onError: () => {} });
+		await host.load([], context);
+		// A reference made and released: the class cached for the member's `QueriesData` goes with its contract (the
+		// cache's key, not the contract's handle, is what a strong cache would keep; review round 1, Astra 8).
+		const key = await (async () => {
+			const Many = manyQueries(3);
+			host.hold(Many, {}, context).release();
+			return new WeakRef(currentVersion(Many).members.queries.get("rows")!);
+		})();
+		await host.close(context);
+		await expectCollected(key);
 	});
 });

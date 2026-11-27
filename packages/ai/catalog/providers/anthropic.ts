@@ -3,8 +3,8 @@ import { addMissing, defineProvider, mergeCompat, mergeThinking, modelsDevModels
 import {
 	CLAUDE_55_THINKING_LEVELS,
 	enableClaudeMidConvoEffort,
+	supportsClaudeMidConvoChanges,
 	supportsClaudeMidConvoEffort,
-	supportsClaudeMidConvoSystemMessages,
 } from "../families/anthropic.ts";
 
 // Models the API may fall back to, with the price the caller is billed.
@@ -53,13 +53,13 @@ export default defineProvider({
 		if (model.api !== "anthropic-messages") return;
 		const messagesModel = model as Model<"anthropic-messages">;
 		if (supportsClaudeMidConvoEffort(model.id)) enableClaudeMidConvoEffort(messagesModel);
-		if (supportsClaudeMidConvoSystemMessages(model.id)) {
+		if (supportsClaudeMidConvoChanges(model.id)) {
 			mergeCompat(messagesModel, { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true });
 		}
 		mergeCompat(messagesModel, { supportsStrictTools: true });
 		// Ephemeral entries have a hard five-minute lifetime; `ttl: "1h"` extends
-		// it to one hour. Only direct Anthropic is annotated so cache warming does
-		// not assume equivalent behavior through proxies.
+		// it to one hour. Proxies are annotated only after their lifetimes were
+		// checked (github-copilot), so cache warming does not assume them.
 		// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 		model.promptCache = { short: 300, long: 3600 };
 		withInputLimits(model, {

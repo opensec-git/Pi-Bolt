@@ -5,11 +5,11 @@
 
 import type { Context } from "../context/index.ts";
 import { ChordError, invalid } from "../data/index.ts";
-import { canonicalJson } from "../data/internal.ts";
+import { canonicalJsonOnly } from "../data/internal.ts";
 import type { JsonValue } from "../json.ts";
 import { type Batch, type Dependent, type DeriveSource, type FramedSource, Source } from "../state/internal.ts";
-import type { LiveTarget } from "../store/live-query.ts";
-import type { NamedQueryHandle } from "./named-query.ts";
+import type { LiveTarget } from "../store/shared-read.ts";
+import type { NamedQueryHandle, NamedTarget } from "./named-query.ts";
 
 /** The arguments a factory gave a reader: a value, or a watchable the arguments follow. */
 export type GivenArguments =
@@ -140,7 +140,10 @@ export class GivenQuery implements Dependent {
 	/** The canonical JSON of the arguments read last; `undefined` before the first read and after a failed one. */
 	#read: string | undefined;
 	#moved: (() => void) | undefined;
-	#release: (() => void) | undefined;
+	/** The release of its follow of the provider's instances, while it follows (fields, not a closure: 112 B less). */
+	#releaseInstance: (() => void) | undefined;
+	/** The arguments' source it follows, while it follows. */
+	#source: Source | undefined;
 	/** Set from an invalidation until the batch's flush compares the arguments. */
 	#checking = false;
 
@@ -154,31 +157,30 @@ export class GivenQuery implements Dependent {
 	 * What reading the query reads now: the provider's declaration for the arguments' value. Throws while the provider
 	 * is not live or the arguments have no value; arguments the provider refuses throw its `invalid/args`.
 	 */
-	target(context: Context): LiveTarget {
+	target(context: Context): NamedTarget {
 		this.#read = undefined;
 		const args = this.#value();
 		const target = this.handle.provided().target(args, context);
-		this.#read = canonicalJson(args, context);
+		this.#read = target.sharing.args;
 		return target;
 	}
 
 	/** Calls `moved` from now on whenever `target` would read something else, until `release`. */
 	follow(moved: () => void): void {
 		this.#moved = moved;
-		const releaseInstance = this.handle.follow(moved);
+		this.#releaseInstance = this.handle.follow(moved);
 		const args = this.#args;
 		// A constant never changes: only a source is followed.
 		const source = args.kind === "following" && args.source instanceof Source ? args.source : undefined;
 		source?.dependents.add(this);
-		this.#release = () => {
-			releaseInstance();
-			source?.dependents.delete(this);
-		};
+		this.#source = source;
 	}
 
 	release(): void {
-		this.#release?.();
-		this.#release = undefined;
+		this.#releaseInstance?.();
+		this.#source?.dependents.delete(this);
+		this.#releaseInstance = undefined;
+		this.#source = undefined;
 		this.#moved = undefined;
 	}
 
@@ -190,9 +192,9 @@ export class GivenQuery implements Dependent {
 			this.#checking = false;
 			let now: string | undefined;
 			try {
-				now = canonicalJson(this.#value(), context);
+				now = canonicalJsonOnly(this.#value(), context);
 			} catch {
-				// Arguments that cannot be computed: the reader tries to read and shows that failure.
+				// Arguments that cannot be computed, or are no JSON: the reader tries to read and shows that failure.
 				now = undefined;
 			}
 			if (now === undefined || now !== this.#read) this.#moved?.();

@@ -7,12 +7,34 @@
 // contract bumped with and without `accepts`), of the admitted type itself (rehearsal by fingerprint, an unrehearsed
 // factory's error at its activation, a decision change while its old attempt drains or its successor opens a native).
 
+import { performance } from "node:perf_hooks";
+import { InMemoryTelemetryContext, NOOP_TELEMETRY_CONTEXT, NOOP_TELEMETRY_METRICS } from "@earendil-works/pi-telemetry";
 import { describe, expect, it, vi } from "vitest";
-import { awaitWithContext, BACKGROUND_CONTEXT as context } from "../../src/context/index.ts";
-import { evolve, int, local, map, method, obj, oneOf, queries, remote, str } from "../../src/contracts/index.ts";
-import { broken, ChordError } from "../../src/data/index.ts";
+import {
+	awaitWithContext,
+	type Context,
+	BACKGROUND_CONTEXT as context,
+	withCancel,
+	withTelemetry,
+} from "../../src/context/index.ts";
+import {
+	evolve,
+	grantable,
+	int,
+	local,
+	map,
+	method,
+	obj,
+	oneOf,
+	queries,
+	remote,
+	str,
+} from "../../src/contracts/index.ts";
+import { currentVersion } from "../../src/contracts/internal.ts";
+import { broken, ChordError, type MessageData } from "../../src/data/index.ts";
 import { defineState } from "../../src/documents/index.ts";
-import { Decision } from "../../src/host/admission.ts";
+import { type Allowed, Decision } from "../../src/host/admission.ts";
+import { ChordHost } from "../../src/host/host.ts";
 import {
 	type Admit,
 	allow,
@@ -28,6 +50,7 @@ import { ChordObject } from "../../src/host/object.ts";
 import { defineJob } from "../../src/jobs/index.ts";
 import { memoryLinkPair } from "../../src/link/index.ts";
 import { constant } from "../../src/state/index.ts";
+import { Source } from "../../src/state/internal.ts";
 import { query } from "../../src/store/index.ts";
 import { defineTable } from "../../src/store/table.ts";
 import {
@@ -35,6 +58,7 @@ import {
 	delivered,
 	expectCollected,
 	failLive,
+	flagLabel,
 	holdNextCommit,
 	instancesOf,
 	linked,
@@ -42,6 +66,7 @@ import {
 	metered,
 	rejection,
 	Server,
+	settledHeap,
 	statesOf,
 	type TestPrincipal,
 	valuesOf,
@@ -85,17 +110,24 @@ const Missing = local("test.missing", { version: 1, params: {}, members: { n: in
 
 const Mode = obj({ mode: oneOf("read", "write") });
 
-/** The admitted type: a reader or a writer variant by the admitted mode. */
+/** The admitted type: everyone admitted reads its text; the admitted mode `write` grants `write`. */
 const Doc = remote("test.doc", {
 	version: 1,
 	params: { id: str() },
 	hostAddress: () => Server(),
 	admission: Mode,
-	variants: {
-		reader: { state: { text: str() } },
-		writer: { state: { text: str() }, methods: { write: method(str(), str()) } },
-	},
+	state: { text: str() },
+	methods: { write: grantable(method(str(), str())) },
 });
+
+/** How a document's reference was admitted: `writer` granted `write`, `reader` live without it, else `undefined`. */
+function role(doc: {
+	readonly granted: ReadonlySet<string>;
+	readonly state: { readonly value: { readonly kind: string } };
+}) {
+	if (doc.granted.has("write")) return "writer";
+	return doc.state.value.kind === "live" ? "reader" : undefined;
+}
 
 /** `Doc` with another admission schema (the same wire fingerprint): a reload does not rehearse across it. */
 const DocV2 = evolve(Doc, (e) => e.admission(obj({ mode: oneOf("read", "write"), since: int() })));
@@ -174,7 +206,8 @@ declare function stateOf(): {
 /** What a mode means to the admission. */
 function decide(mode: string | undefined) {
 	if (mode === "throw") throw new Error("the rule threw");
-	return mode === "read" || mode === "write" ? allow({ mode }) : deny("no access");
+	if (mode === "read") return allow({ mode });
+	return mode === "write" ? allow({ mode, granted: ["write"] }) : deny("no access");
 }
 
 /** The admission of `Doc`: the caller's mode in `Access`; with `share`, its per-document source too. */
@@ -238,7 +271,6 @@ function docFacet(
 					);
 				}
 				const shown = self.derive([text], ([t]) => t.text);
-				if (admitted.mode === "read") return { variant: "reader", members: { text: shown } };
 				const write = async (next: string, ctx: Parameters<typeof text.change>[1]) => {
 					// As a handler waits: its caller's cancellation and its attempt's seal end the wait.
 					await awaitWithContext(code.gate ?? Promise.resolve(), ctx);
@@ -248,7 +280,7 @@ function docFacet(
 					}, ctx);
 					return `${admitted.mode}:${next}`;
 				};
-				return { variant: "writer", members: { text: shown, write } };
+				return { text: shown, write };
 			},
 			{ admit: code.admit ?? admitBy(), linger: code.linger },
 		);
@@ -316,8 +348,560 @@ function reports(errors: readonly HostError[]): string[] {
 	);
 }
 
+/** Denies with the message of key `<key>` for a mode `deny:<key>`, an invalid one for `bad`, else as `decide`. */
+const messageAdmit: Admit<typeof Doc, TestPrincipal> = (_params, principal, self) =>
+	self.derive([self.get(Access, {}).modes], ([all]) => {
+		const mode = all[principal.kind];
+		if (mode === "bad") return deny("no access", { namespace: "docs", key: 7 } as never);
+		if (mode?.startsWith("deny:")) {
+			return deny("no access", { namespace: "docs", key: mode.slice(5), params: [principal.kind] });
+		}
+		return decide(mode);
+	});
+
+/** The message a reference's failure carries for the person, if any (`details.message`, slice 15 §2). */
+function messageOf(doc: { readonly state: { readonly value: unknown } }): unknown {
+	const state = doc.state.value as { cause?: { error: ChordError } };
+	return (state.cause?.error.details as { message?: unknown } | undefined)?.message;
+}
+
+describe("a denial's message (slice 15 §2)", () => {
+	const admit = messageAdmit;
+
+	it("reaches the holder with the reason; without one there are no details", async () => {
+		const built: string[] = [];
+		const { h, set } = await served({ built, admit }, { mode: "deny:noShare" });
+		const doc = h.hold(Doc, { id: "a" }, context);
+		await vi.waitFor(() => expect(doc.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } }));
+		expect(told((doc.state.value as { cause: { error: unknown } }).cause.error)).toEqual({
+			code: "forbidden",
+			message: "no access",
+		});
+		expect(messageOf(doc)).toEqual({ namespace: "docs", key: "noShare", params: ["server"] });
+		await set("none");
+		await delivered();
+		expect(doc.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } });
+		expect(messageOf(doc)).toBe(undefined);
+		expect(built).toEqual([]);
+		await h.close(context);
+	});
+
+	it("goes with a call refused by the denial and with one running at the seal", async () => {
+		const gate = Promise.withResolvers<void>();
+		const { h, set } = await served({ built: [], admit, gate: gate.promise }, { mode: "write" });
+		const doc = await h.get(Doc, { id: "a" }, context);
+		const running = rejection(doc.write!("x", context));
+		await set("deny:revoked");
+		const revokedCall = (await running) as ChordError;
+		expect([revokedCall.code, revokedCall.reason]).toEqual(["forbidden", "revoked"]);
+		expect((revokedCall.details as { message: unknown }).message).toEqual({
+			namespace: "docs",
+			key: "revoked",
+			params: ["server"],
+		});
+		const refused = (await rejection(doc.text.watch(context).then(() => doc.text.value))) as ChordError;
+		expect(refused.code).toBe("forbidden");
+		expect((refused.details as { message: unknown }).message).toMatchObject({ key: "revoked" });
+		gate.resolve();
+		await h.close(context);
+	});
+
+	it("is part of the decision: another message is a new failure, without a rebuild or a new hold", async () => {
+		const built: string[] = [];
+		const { h, set } = await served({ built, admit }, { mode: "deny:first" });
+		const doc = h.hold(Doc, { id: "a" }, context);
+		await vi.waitFor(() => expect(messageOf(doc)).toMatchObject({ key: "first" }));
+		const started = decisions.length;
+		await set("deny:second");
+		await vi.waitFor(() => expect(messageOf(doc)).toMatchObject({ key: "second" }));
+		expect([built, decisions.length - started]).toEqual([[], 0]);
+		await h.close(context);
+	});
+
+	it("is told apart from a reason that ends like its JSON (review round 2, Sol 3)", async () => {
+		const message = { namespace: "docs", key: "noShare", params: ["server"] };
+		// The message's canonical JSON, as a key that joins reason and message would end.
+		const reason = 'no access {"key":"noShare","namespace":"docs","params":["server"]}';
+		const admit: Admit<typeof Doc, TestPrincipal> = (_params, principal, self) =>
+			self.derive([self.get(Access, {}).modes], ([all]) =>
+				all[principal.kind] === "plain" ? deny(reason) : deny("no access", message),
+			);
+		const { h, set } = await served({ built: [], admit }, { mode: "plain" });
+		const doc = h.hold(Doc, { id: "a" }, context);
+		await vi.waitFor(() => expect(doc.state.value).toMatchObject({ cause: { error: { message: reason } } }));
+		await set("message");
+		await vi.waitFor(() => expect(messageOf(doc)).toEqual(message));
+		await h.close(context);
+	});
+
+	it("that is no message as data breaks the attempt, reported once", async () => {
+		const { h, errors } = await served({ built: [], admit }, { mode: "bad" });
+		const doc = h.hold(Doc, { id: "a" }, context);
+		await vi.waitFor(() => expect(doc.state.value).toMatchObject({ kind: "failed", cause: { kind: "broken" } }));
+		expect(reports(errors)).toEqual([
+			"activation_failed: test.doc(a): its denial's message is no message as data (MessageSchema): no access",
+		]);
+		await h.close(context);
+	});
+});
+
+describe("an empty grant (review round 1, Astra 6)", () => {
+	it("allow without granted and with an empty list are one decision: switching between them rebuilds nothing", async () => {
+		const built: string[] = [];
+		const admit: Admit<typeof Doc, TestPrincipal> = (_params, principal, self) =>
+			self.derive([self.get(Access, {}).modes], ([all]) =>
+				all[principal.kind] === "listed" ? allow({ mode: "read", granted: [] }) : allow({ mode: "read" }),
+			);
+		const { h, set } = await served({ built, admit }, { mode: "unlisted" });
+		const doc = await h.get(Doc, { id: "a" }, context);
+		const started = decisions.length;
+		await set("listed");
+		await set("unlisted");
+		await delivered();
+		expect([built, decisions.length - started, doc.state.value.kind]).toEqual([["a:read"], 0, "live"]);
+		await h.close(context);
+	});
+});
+
+describe("an equal decision of another object (hot-path pass, 2026-11-26)", () => {
+	const Picked = remote("eq.thing", {
+		version: 1,
+		params: {},
+		hostAddress: () => Server(),
+		state: { name: str() },
+		methods: { add: grantable(method(str(), str())) },
+		flags: { export: flagLabel("export") },
+	});
+	const Picks = defineState("picks", { schema: obj({ pick: str() }), version: 1, initial: () => ({ pick: "first" }) });
+	const Pick = local("eq.pick", { version: 1, params: {}, members: { pick: str(), set: method(str()) } });
+	const message = { namespace: "docs", key: "noShare", params: [1, "a"] };
+	/** Each read makes its decision afresh: equal ones are other objects. */
+	const cases: Record<string, () => unknown> = {
+		first: () => allow({ level: 1, tags: ["x"], n: 0, granted: ["add", "export"] }),
+		reordered: () => allow({ granted: ["export", "add", "add"], n: -0, tags: ["x"], level: 1 }),
+		data: () => allow({ level: 2, tags: ["x"], n: 0, granted: ["add", "export"] }),
+		fewer: () => allow({ n: 0, tags: ["x"], level: 2, granted: ["add", "add"] }),
+		unknown: () => allow({ n: 0, tags: ["x"], level: 2, granted: ["add", "nope"] }),
+		denied: () => deny("no", message),
+		deniedAgain: () => deny("no", { params: [1, "a"], key: "noShare", namespace: "docs" }),
+		otherMessage: () => deny("no", { ...message, params: [2, "a"] }),
+	};
+
+	async function picked() {
+		const errors: HostError[] = [];
+		const built: unknown[] = [];
+		const h = createHost<TestPrincipal>({
+			address: Server(),
+			principal: { kind: "server" },
+			onError: (error) => errors.push(error),
+		});
+		const facet = defineFacet<TestPrincipal>((host) => {
+			host.serve(Pick, (_, self) => {
+				const state = self.state(Picks);
+				return {
+					pick: self.derive([state], ([s]) => s.pick),
+					set: async (pick, ctx) => {
+						await state.change((draft) => {
+							draft.pick = pick;
+						}, ctx);
+						return null;
+					},
+				};
+			});
+			host.serve(
+				Picked,
+				(_params, _principal, admitted) => {
+					built.push(admitted);
+					return { name: constant("n"), add: async (text: string) => text };
+				},
+				{ admit: (_p, _principal, self) => self.derive([self.get(Pick, {}).pick], ([p]) => cases[p]!() as never) },
+			);
+		});
+		await h.load([{ name: "@test/picked", facet }], context);
+		const pick = await h.get(Pick, {}, context);
+		const set = async (name: string) => {
+			await pick.set(name, context);
+			await delivered();
+		};
+		return { h, set, built, errors };
+	}
+
+	it("names in another order, repeated, and -0 for 0 are the same decision: no rebuild, the same granted set", async () => {
+		const { h, set, built } = await picked();
+		const thing = await h.get(Picked, {}, context);
+		const granted = thing.granted;
+		expect([...granted]).toEqual(["add", "export"]);
+		await set("reordered");
+		expect([built.length, thing.granted, thing.state.value.kind]).toEqual([1, granted, "live"]);
+		expect(thing.granted).toBe(granted);
+		// The factory's value is the first one's: an equal decision is that decision.
+		expect(built[0]).toMatchObject({ level: 1, tags: ["x"], n: 0 });
+		await set("data");
+		await vi.waitFor(() => expect(built).toHaveLength(2));
+		expect(built[1]).toMatchObject({ level: 2 });
+		await set("fewer");
+		await vi.waitFor(() => expect([...thing.granted]).toEqual(["add"]));
+		expect(built).toHaveLength(3);
+		await h.close(context);
+	});
+
+	it("a name that is no grant breaks even when the data and the other names are the last decision's", async () => {
+		const { h, set, errors } = await picked();
+		await set("fewer");
+		const thing = await h.get(Picked, {}, context);
+		await set("unknown");
+		await vi.waitFor(() => expect(thing.state.value).toMatchObject({ kind: "failed", cause: { kind: "broken" } }));
+		expect(reports(errors)).toEqual([
+			'activation_failed: eq.thing: its admission granted "nope": no grantable member or flag of its contract',
+		]);
+		await h.close(context);
+	});
+
+	it("an equal denial of another object is the same failure; another message is a new one", async () => {
+		const { h, set } = await picked();
+		await set("denied");
+		const thing = h.hold(Picked, {}, context);
+		await vi.waitFor(() => expect(thing.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } }));
+		const shown = thing.state.value;
+		await set("deniedAgain");
+		expect(thing.state.value).toBe(shown);
+		await set("otherMessage");
+		await vi.waitFor(() => expect(thing.state.value).not.toBe(shown));
+		expect(thing.state.value).toMatchObject({ cause: { error: { details: { message: { params: [2, "a"] } } } } });
+		await h.close(context);
+	});
+});
+
+/** A decision over a source whose value the test sets one read at a time. */
+function reading() {
+	const host = new ChordHost<TestPrincipal>({
+		address: Server(),
+		principal: { kind: "server" },
+		onError: () => {},
+	});
+	const source = new (class extends Source {
+		next: unknown;
+		get value(): never {
+			return this.next as never;
+		}
+		deliver() {}
+	})(host.batch);
+	const caller = { principal: host.principal, incarnation: host.incarnation };
+	const decision = new Decision({
+		host,
+		label: "doc",
+		dependent: undefined,
+		caller,
+		grants: ["a", "b"],
+		moved() {},
+	});
+	decision.declare(() => source, context);
+	return { decision, source };
+}
+
+// Found by the review of the hot-path pass (Astra, 2026-11-26): a direct comparison only for plain JSON; anything else
+// as before (its text made at read time), with the same order of checks, counts and errors.
+describe("a re-read of a value that is no plain JSON", () => {
+	it("a released decision still reachable keeps no list its source dropped", async () => {
+		const { decision, source } = reading();
+		const ref = (() => {
+			const raw = Array(40).fill("a");
+			source.next = { kind: "allow", value: { granted: raw } };
+			decision.now(context);
+			return new WeakRef(raw);
+		})();
+		decision.release();
+		source.next = null;
+		await expectCollected(ref);
+		expect(decision.dependencies).toHaveLength(0);
+	});
+
+	it("equal values nested 5,000 deep, built apart, are one decision", () => {
+		const deep = (depth: number) => {
+			let x: unknown = 0;
+			for (let level = 0; level < depth; level++) x = { x };
+			return { kind: "allow", value: { x } };
+		};
+		for (let depth = 250; depth <= 5000; depth += 250) {
+			const { decision, source } = reading();
+			source.next = deep(depth);
+			const first = decision.now(context);
+			source.next = deep(depth);
+			expect(decision.now(context) === first).toBe(true);
+		}
+	});
+});
+
+// The reviews of the hot-path pass (Astra, 2026-11-26): what a decision compares a read with, and what it keeps.
+describe("what a decision compares a read with", () => {
+	function read(decision: ReturnType<typeof reading>, wrapped: unknown) {
+		decision.source.next = wrapped;
+		return decision.decision.now(context);
+	}
+	const allowing = (value: unknown) => ({ kind: "allow", value });
+
+	it("the first list and object are collected after an equal read of others while the decision stays", async () => {
+		const s = reading();
+		const refs = (() => {
+			const list = Array(64).fill("a");
+			const raw = { granted: list };
+			read(s, allowing(raw));
+			return [new WeakRef(list), new WeakRef(raw)];
+		})();
+		read(s, allowing({ granted: ["a"] }));
+		await expectCollected(...refs);
+		expect(s.decision.now(context).kind).toBe("allow");
+	});
+
+	it("equal plain values of other objects: -0, a __proto__ key, null prototypes, frozen data, deep and long", () => {
+		const deep = (depth: number) => {
+			let value: unknown = 1;
+			for (let level = 0; level < depth; level++) value = { value };
+			return value;
+		};
+		const pairs: unknown[][] = [
+			[{ v: -0 }, { v: 0 }],
+			[JSON.parse('{"__proto__":1}'), Object.assign(Object.create(null), JSON.parse('{"__proto__":1}'))],
+			[Object.seal({ x: 2 }), Object.freeze({ x: 2 })],
+			...[14, 15, 16, 17].map((depth) => [deep(depth), deep(depth)]),
+			...[253, 254, 255, 256, 257].map((length) => [{ v: Array(length).fill("a") }, { v: Array(length).fill("a") }]),
+		];
+		for (const pair of pairs) {
+			const s = reading();
+			const first = read(s, allowing(pair[0]));
+			for (const value of pair.slice(1)) expect(read(s, allowing(value))).toBe(first);
+		}
+	});
+});
+
+// The third review of the hot-path pass (Astra, 2026-11-26): 30 to 33 names; 31 names compare as fast as 30; a changed
+// read walks the listed names, not every grant of the contract.
+describe("the order of a read", () => {
+	/** A decision granting `grants`, read with an allow of `value` under `under`. */
+	function reader(grants: readonly string[], host = readerHost()) {
+		const read = decisionReader(grants, host);
+		return (value: unknown, under: Context = context) => read({ kind: "allow", value }, under);
+	}
+
+	/** A decision granting `grants`, read with the decision object `decided` under `under`. */
+	function decisionReader(grants: readonly string[], host = readerHost()) {
+		const source = new (class extends Source {
+			next: unknown;
+			get value(): never {
+				return this.next as never;
+			}
+			deliver() {}
+		})(host.batch);
+		const caller = { principal: host.principal, incarnation: host.incarnation };
+		const decision = new Decision({ host, label: "doc", dependent: undefined, caller, grants, moved() {} });
+		decision.declare(() => source, context);
+		return (decided: unknown, under: Context = context) => {
+			source.next = decided;
+			return decision.now(under) as Allowed;
+		};
+	}
+
+	function readerHost() {
+		return new ChordHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+	}
+
+	// The owner's rule (2026-11-26, 03:12 UTC): values handed to Chord are immutable by convention.
+	it("the same decision object read again is the same verdict and counts no walk (1,000 reads)", async () => {
+		const read = decisionReader(["a", "b"]);
+		const decided = { kind: "allow", value: { level: 1, tags: ["x"], granted: ["b", "a"] } };
+		const first = read(decided);
+		const telemetry = new InMemoryTelemetryContext();
+		const walks = () => telemetry.getMetrics().filter(({ name }) => name === "chord.data.walks").length;
+		await telemetry.startSpan({ name: "reads" }, (span) => {
+			const under = withTelemetry(span, context);
+			let same = 0;
+			for (let index = 0; index < 1_000; index++) if (read(decided, under) === first) same++;
+			expect([same, walks()]).toEqual([1_000, 0]);
+			// An equal value of another object walks once: the counter is the one a read would add to.
+			read({ kind: "allow", value: { level: 1, tags: ["x"], granted: ["a", "b"] } }, under);
+			expect(walks()).toBe(1);
+		});
+	});
+
+	// Found by the review of the pass (first reviewer, 2026-11-26): the first allow of a version made the version's
+	// index of its grants (115 KB at 4,096 flags) though no decision listed a name.
+	it("a version whose decisions grant no name keeps no index of its grants (heap guard, 4,096 flags)", async () => {
+		const host = readerHost();
+		const versions = Array.from({ length: 48 }, (_, at) => {
+			const grants = Array.from({ length: 4_096 }, (_, index) => `v${at}f${index}`);
+			return { grants, read: reader(grants, host) };
+		});
+		const before = await settledHeap();
+		for (const { read } of versions) {
+			read({});
+			read({ n: 1, granted: [] });
+		}
+		const each = ((await settledHeap()) - before) / versions.length;
+		expect(versions.every(({ read }) => read({ n: 1 }).granted.size === 0)).toBe(true);
+		// Measured: 191 B per version on the base, 115,379 B with the index made at the first allow (116,690 B here),
+		// under 1.5 KB now.
+		expect(each).toBeLessThan(8 * 1024);
+	}, 60_000);
+
+	// Found by the review of the pass (first reviewer, 2026-11-26): a reused scratch list kept the size of the widest
+	// value a decision ever read (2,735 B per decision); a decision keeps only what its last read needs.
+	it("a short-lived wide value leaves no storage per decision once a small value replaces it (heap guard)", async () => {
+		const host = readerHost();
+		const reads = Array.from({ length: 6_000 }, () => reader([], host));
+		const small = { n: 1 };
+		const wide = Object.fromEntries(Array.from({ length: 128 }, (_, n) => [`f${n}`, n]));
+		for (const read of reads) {
+			read(small);
+			read(small);
+		}
+		const before = await settledHeap();
+		for (const read of reads) {
+			read(wide);
+			read(small);
+			read(small);
+		}
+		const each = ((await settledHeap()) - before) / reads.length;
+		expect(reads[400]!(small).value).toMatchObject({ n: 1 });
+		// Measured: under 1 B on the base, 2,735 B with the scratch list, under 3 B now.
+		expect(each).toBeLessThan(512);
+	}, 60_000);
+
+	it("equal reads stay one verdict and changes rebuild, from 30 to 33 names", () => {
+		for (const n of [30, 31, 32, 33]) {
+			const names = Array.from({ length: n }, (_, index) => `f${String(index).padStart(3, "0")}`);
+			const read = reader(names);
+			const raw = { granted: names.slice(), v: { a: [{ b: 1 }] } };
+			const first = read(raw);
+			expect([...first.granted]).toEqual(names);
+			expect(read({ ...raw, granted: [...names].reverse().concat(names[0]!) })).toBe(first);
+			const minus = names.slice(1).concat(names[1]!);
+			const next = read({ ...raw, granted: minus });
+			expect(next).not.toBe(first);
+			expect([...next.granted]).toEqual(names.slice(1));
+			expect(read({ ...raw, granted: [...minus].reverse() })).toBe(next);
+			const changed = read({ ...raw, granted: minus, v: { c: [1] } });
+			expect(read({ ...raw, granted: minus, v: { c: [1] } })).toBe(changed);
+		}
+	});
+
+	it("grants the base's sorted names without duplicates, in any order and repeated, at 3 to 65 names", () => {
+		let seed = 11;
+		const next = () => {
+			seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+			return seed / 2_147_483_648;
+		};
+		for (const size of [3, 31, 32, 33, 59, 60, 61, 65]) {
+			const grants = Array.from({ length: size }, (_, index) => `n${String(index).padStart(2, "0")}`);
+			const read = reader(grants);
+			for (let round = 0; round < 20; round++) {
+				const listed = grants.filter(() => next() < 0.6);
+				for (let extra = 0; extra < 3 && listed.length > 0; extra++) {
+					listed.push(listed[Math.floor(next() * listed.length)]!);
+				}
+				listed.sort(() => next() - 0.5);
+				const verdict = read({ granted: listed });
+				expect([size, round, [...verdict.granted]]).toEqual([size, round, [...new Set(listed)].sort()]);
+				// The same names in another order, repeated once more: the same decision.
+				expect(read({ granted: [...listed].reverse().concat(listed.slice(0, 1)) })).toBe(verdict);
+			}
+		}
+	});
+
+	// Found by the review of the pass (second reviewer, 2026-11-26): the last decision is taken after the walk is counted.
+	it("a read made while the walk is counted leaves the outer read's verdict kept", () => {
+		const read = reader(["a", "b"]);
+		read({ p: 1, granted: ["a"] });
+		let once = true;
+		const metrics = {
+			...NOOP_TELEMETRY_METRICS,
+			counter: (name: string) => ({
+				add: () => {
+					if (name !== "chord.data.walks" || !once) return;
+					once = false;
+					read({ p: 2, granted: ["b"] });
+				},
+			}),
+		};
+		const outer = read(
+			{ p: 1, granted: ["a"] },
+			withTelemetry({ ...NOOP_TELEMETRY_CONTEXT, metrics } as never, context),
+		);
+		expect(read({ p: 1, granted: ["a"] })).toBe(outer);
+	});
+
+	it("the admitted value has the rest copy's own keys in their order and its prototype", () => {
+		const read = reader(["a"]);
+		const value = Object.assign(
+			Object.create(null),
+			JSON.parse('{"v":"data","__proto__":{},"granted":["a"],"3":"i","tail":1}'),
+		);
+		const admitted = read(value).value as object;
+		expect(Reflect.ownKeys(admitted)).toEqual(["3", "v", "__proto__", "tail", "granted"]);
+		expect([Object.getPrototypeOf(admitted), Object.hasOwn(admitted, "__proto__")]).toEqual([Object.prototype, true]);
+	});
+
+	/** A decision over a contract of `n` flags granting the first `listed`, read `runs` times: its time. */
+	function flags(n: number, listed: number, change: boolean) {
+		const codes = Array.from({ length: n }, (_, index) => `f${String(index).padStart(4, "0")}`);
+		const Flagged = remote(`app.flags${n}`, {
+			version: 1,
+			params: {},
+			hostAddress: () => Server(),
+			state: {},
+			flags: Object.fromEntries(codes.map((flag) => [flag, flagLabel(flag)])),
+		});
+		const read = reader(currentVersion(Flagged).grants);
+		const granted = codes.slice(0, listed);
+		const values = [0, 1].map((role) => ({ granted, role: change ? role : 0 }));
+		return (runs: number): number => {
+			let sum = 0;
+			const start = performance.now();
+			for (let run = 0; run < runs; run++) sum += (read(values[run % 2]).value as { role: number }).role;
+			const duration = performance.now() - start;
+			expect(sum).toBe(change ? runs / 2 : 0);
+			return duration;
+		};
+	}
+
+	const median = (list: number[]) => list.sort((a, b) => a - b)[Math.floor(list.length / 2)]!;
+
+	it("a changed role granting the first of 4,096 flags walks the listed names, not every flag", () => {
+		const [small, big] = [flags(1, 1, true), flags(4096, 1, true)];
+		small(2000);
+		big(2000);
+		const ratios = Array.from({ length: 7 }, () => big(6000) / small(6000));
+		expect(median(ratios)).toBeLessThan(4);
+	});
+
+	it("31 kept names of 2,048 flags compare as fast as 30", () => {
+		const [thirty, thirtyOne] = [flags(2048, 30, false), flags(2048, 31, false)];
+		thirty(100);
+		thirtyOne(100);
+		const ratios = Array.from({ length: 7 }, () => thirtyOne(400) / thirty(400));
+		expect(median(ratios)).toBeLessThan(3);
+	});
+});
+
+describe("a decision's settle (hot-path pass: no async frames where nothing waits)", () => {
+	it("answers in the turns it took as an async function throughout, without keys to load or live queries", async () => {
+		const { decision, source } = reading();
+		source.next = { kind: "allow", value: { granted: ["a"] } };
+		let turns = 0;
+		let answered = -1;
+		void decision.settle({ blockedBy: () => {} }, context).then(() => {
+			answered = turns;
+		});
+		for (let turn = 0; turn < 8; turn++) {
+			await null;
+			turns++;
+		}
+		// Measured on 1cbc0e094 (settle, pinKeys and openReaders all async functions).
+		expect(answered).toBe(2);
+	});
+});
+
 describe("deny, then allow", () => {
-	it("a direct hold shows failed { denied } with the reason, then binds the variant the value selects", async () => {
+	it("a direct hold shows failed { denied } with the reason, then binds with what the value grants", async () => {
 		const built: string[] = [];
 		const { h, errors, set } = await served({ built });
 		const doc = h.hold(Doc, { id: "a" }, context);
@@ -332,7 +916,7 @@ describe("deny, then allow", () => {
 		expect(built).toEqual([]);
 		await set("read");
 		await delivered();
-		expect([doc.state.value.kind, doc.variant, doc.text.value]).toEqual(["live", "reader", "t"]);
+		expect([doc.state.value.kind, role(doc), doc.text.value]).toEqual(["live", "reader", "t"]);
 		expect(built).toEqual(["a:read"]);
 		expect(states).toEqual(["failed: no access", "loading", "live"]);
 		expect(errors).toEqual([]);
@@ -347,7 +931,7 @@ describe("deny, then allow", () => {
 		});
 		await set("write");
 		const doc = await h.get(Doc, { id: "a" }, context);
-		expect(doc.variant).toBe("writer");
+		expect(role(doc)).toBe("writer");
 		await h.close(context);
 	});
 
@@ -375,7 +959,7 @@ describe("the watch table (2.2)", () => {
 		const { h, set } = await served({ built, gate: gate.promise }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
 		const states = statesOf(await doc.state.watch(context));
-		const writing = doc.variant === "writer" ? doc.write("x", context) : undefined;
+		const writing = doc.write ? doc.write("x", context) : undefined;
 		// Another person's mode changes the source's value, not this caller's decision.
 		await set("read", "guest");
 		await set("write");
@@ -387,20 +971,20 @@ describe("the watch table (2.2)", () => {
 		await h.close(context);
 	});
 
-	it("another allowed value seals the attempt: its calls reject unavailable, its holders see loading, then the new variant", async () => {
+	it("another allowed value seals the attempt: its calls reject unavailable, its holders see loading, then the new grant", async () => {
 		const built: string[] = [];
 		const { h, errors, set } = await served({ built, gate: new Promise<void>(() => {}) }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
 		const states = statesOf(await doc.state.watch(context));
 		const frames = changesOf(await doc.text.watch(context));
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await set("read");
 		// In the flush of the change: sealed, and loading with the last value readable.
 		expect(doc.state.value.kind).toBe("loading");
 		expect(doc.text.value).toBe("t");
 		expect(told(await writing)).toEqual({ code: "unavailable", message: "test.doc(a): its admission changed" });
 		await delivered();
-		expect([doc.state.value.kind, doc.variant]).toEqual(["live", "reader"]);
+		expect([doc.state.value.kind, role(doc)]).toEqual(["live", "reader"]);
 		expect(built).toEqual(["a:write", "a:read"]);
 		expect(states).toEqual(["loading", "live"]);
 		// The same text on the new instance: no frame.
@@ -414,7 +998,7 @@ describe("the watch table (2.2)", () => {
 		const { h, set } = await served({ built, gate: new Promise<void>(() => {}) }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
 		const states = statesOf(await doc.state.watch(context));
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await set("none");
 		expect(doc.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } });
 		expect(told(await writing)).toEqual({
@@ -433,7 +1017,7 @@ describe("the watch table (2.2)", () => {
 		const built: string[] = [];
 		const { h, set } = await served({ built, gate: new Promise<void>(() => {}) }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await set("throw");
 		expect(((await writing) as ChordError).code).toBe("unavailable");
 		await delivered();
@@ -475,14 +1059,13 @@ describe("the watch table (2.2)", () => {
 	it("a call that crossed a seal runs on the next attempt under its value", async () => {
 		const { h, set } = await served({ built: [] }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
-		const writer = doc as unknown as { write(text: string, ctx: typeof context): Promise<string> };
+		const writer = { write: doc.write! };
 		await set("read");
 		// Made while the new attempt admits (the reference is loading): it waits at the gate, never `not_ready`, and
 		// meets the reader the new value selects, not the writer it was sent to.
 		expect(told(await rejection(writer.write("y", context)))).toEqual({
-			code: "invalid",
-			reason: "member",
-			message: 'test.doc(a) (variant reader) has no method "write"',
+			code: "forbidden",
+			message: 'test.doc(a) has not granted "write"',
 		});
 		await set("write");
 		expect(await writer.write("z", context)).toBe("write:z");
@@ -504,7 +1087,7 @@ describe("what a denial removes", () => {
 			code: "forbidden",
 			message: "no access",
 		});
-		expect(doc.variant).toBe(undefined);
+		expect(role(doc)).toBe(undefined);
 		expect(valuesOf(frames)).toEqual([{ failed: "no access" }]);
 		// Data already delivered to application code is not retracted.
 		expect(watch.value).toBe("t");
@@ -564,7 +1147,7 @@ describe("a failed admitted object", () => {
 			retryAt: undefined,
 		});
 		expect(() => doc.text.value).toThrow("no access");
-		expect([doc.variant, present.value]).toEqual([undefined, []]);
+		expect([role(doc), present.value]).toEqual([undefined, []]);
 		await delivered();
 		expect([built, decisions.length - made]).toEqual([["a:read"], 0]);
 		// Allowed again: another decision than the denial, so the object is retried.
@@ -591,8 +1174,143 @@ describe("a failed admitted object", () => {
 		expect([doc.state.value, built]).toMatchObject([{ kind: "failed", cause: { kind: "broken" } }, ["a:write"]]);
 		await set("read");
 		await delivered();
-		expect([doc.state.value.kind, doc.variant, built]).toEqual(["live", "reader", ["a:write", "a:read"]]);
+		expect([doc.state.value.kind, role(doc), built]).toEqual(["live", "reader", ["a:write", "a:read"]]);
 		doc.release();
+		await h.close(context);
+	});
+
+	// Found by the review of the hold-memory pass (2026-11-25): a decision follows its references' states until its
+	// attempt's context is aborted, not for its own life.
+	it("whose factory broke is not retried by a reference of its admission that went down and came back", async () => {
+		const built: string[] = [];
+		const admit: Admit<typeof Doc, TestPrincipal> = (_params, _principal, self) => {
+			self.get(Access, {});
+			return constant(allow({ mode: "read" }));
+		};
+		const declare = () => {
+			if (built.length === 1) throw new Error("the factory is broken");
+		};
+		const { h, reload } = await served({ built, admit, declare });
+		const doc = h.hold(Doc, { id: "a" }, context);
+		await delivered();
+		expect(doc.state.value).toMatchObject({ kind: "failed", cause: { kind: "broken" } });
+		// Its admission's reference parks on a type nobody serves, then is live again: the decision is the same allow.
+		await reload({ access: accessFacet({ needsMissing: true }) });
+		await delivered();
+		await reload({ access: accessFacet() });
+		await delivered();
+		expect([doc.state.value, built]).toMatchObject([{ kind: "failed", cause: { kind: "broken" } }, ["a:read"]]);
+		doc.release();
+		await h.close(context);
+	});
+
+	// Found by the same review: the follows end ahead of the listeners of signals made from the attempt's context
+	// later (an opener's). Ended after them, the admission below ran twice and the object showed `failed { waiting }`.
+	it("whose opener timed out is not admitted again by a reference that fails in the opener's abort listener", async () => {
+		const Health = local("test.health", { version: 1, params: {}, members: { status: str() } });
+		const Item = remote("test.item", {
+			version: 1,
+			params: {},
+			hostAddress: () => Server(),
+			state: { name: str() },
+			admission: obj({}),
+		});
+		let fail = (): void => {
+			throw new Error("the monitor is not followed yet");
+		};
+		const stopped = Promise.withResolvers<void>();
+		let admitted = 0;
+		const facet = defineFacet<TestPrincipal>((host) => {
+			host.serve(Health, (_, self) => ({
+				status: self.follow(async (observer) => {
+					fail = () => observer.end({ kind: "failed", error: new Error("the monitor stopped") });
+					return { value: "ok", detach() {} };
+				}),
+			}));
+			host.serve(
+				Item,
+				(_params, _principal, _admitted, self) => {
+					// An opener that never opens; cancelled (the ready timeout), it stops the monitor in its abort listener.
+					self.open(
+						(opening) => {
+							const { context: waiting } = withCancel(opening);
+							return new Promise<never>((_resolve, reject) => {
+								waiting.abortSignal!.addEventListener("abort", () => {
+									fail();
+									stopped.resolve();
+									reject(waiting.abortSignal!.reason);
+								});
+							});
+						},
+						() => {},
+					);
+					return { name: constant("item") };
+				},
+				{
+					admit: (_params, _principal, self) => {
+						admitted++;
+						self.get(Health, {});
+						return constant(allow({}));
+					},
+				},
+			);
+		});
+		const options = {
+			address: Server(),
+			principal: { kind: "server" },
+			readyTimeout: 50,
+			onError: () => {},
+		} as const;
+		const h = createHost<TestPrincipal>(options);
+		await h.load([{ name: "@test/health", facet }], context);
+		const item = h.hold(Item, {}, context);
+		await stopped.promise;
+		await delivered();
+		expect([admitted, item.state.value]).toMatchObject([1, { kind: "failed", cause: { kind: "transient" } }]);
+		item.release();
+		await h.close(context);
+	});
+
+	// Found by the same review, on a decision of its own (no owner of today cancels in its first telling): a context
+	// aborted by a reference's first telling ends that reference's follow too, and follows no later one.
+	it("a decision whose first telling aborts its context is told of no reference after it", async () => {
+		const Health = local("test.health", { version: 1, params: {}, members: { status: str() } });
+		let fail = (): void => {
+			throw new Error("the monitor is not followed yet");
+		};
+		const facet = defineFacet<TestPrincipal>((host) =>
+			host.serve(Health, (_, self) => ({
+				status: self.follow(async (observer) => {
+					fail = () => observer.end({ kind: "failed", error: new Error("the monitor stopped") });
+					return { value: "ok", detach() {} };
+				}),
+			})),
+		);
+		const h = new ChordHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+		await h.load([{ name: "@test/health", facet }], context);
+		const held = await h.get(Health, {}, context);
+		const stopping = withCancel(context);
+		let told = 0;
+		const decision = new Decision({
+			host: h,
+			label: "a decision",
+			caller: { principal: h.principal, incarnation: h.incarnation },
+			dependent: undefined,
+			grants: undefined,
+			moved: () => {
+				if (++told === 1) stopping.cancel();
+			},
+		});
+		decision.declare((self) => {
+			self.get(Health, {});
+			self.get(Health, {});
+			return constant(allow(null));
+		}, stopping.context);
+		expect(told).toBe(1);
+		fail();
+		expect(told).toBe(1);
+		decision.release();
+		held.release();
 		await h.close(context);
 	});
 });
@@ -810,16 +1528,16 @@ describe("declaration errors", () => {
 			version: 1,
 			params: {},
 			hostAddress: () => Server(),
-			variants: { only: { state: { n: int() } } },
+			state: { n: int() },
 		});
 		const serve = (facet: FacetHost<TestPrincipal>) => facet.serve as (...args: unknown[]) => void;
-		const factory = () => ({ variant: "only", members: { n: constant(1) } });
+		const factory = () => ({ n: constant(1) });
 		const admit = () => constant(allow({ mode: "read" }));
 		expect(await refused((facet) => serve(facet)(Doc, factory))).toEqual([
-			'plugin "@test/app": test.doc: its contract declares an admission: serve it with admit',
+			'plugin "@test/app": test.doc: its contract takes an admission (its admission, grantable members or flags): serve it with admit',
 		]);
 		expect(await refused((facet) => serve(facet)(Plain, factory, { admit }))).toEqual([
-			'plugin "@test/app": test.plain: admit needs the contract to declare its admission',
+			'plugin "@test/app": test.plain: admit needs an admission, grantable members or flags in the contract',
 		]);
 		expect(await refused((facet) => serve(facet)(Share, () => ({ open: constant("yes") }), { admit }))).toEqual([
 			'plugin "@test/app": test.share: only a remote type takes an admission (admit)',
@@ -890,11 +1608,11 @@ describe("over a link", () => {
 		});
 		await set("write");
 		await delivered();
-		expect([doc.state.value.kind, doc.variant, doc.text.value]).toEqual(["live", "writer", "t"]);
+		expect([doc.state.value.kind, role(doc), doc.text.value]).toEqual(["live", "writer", "t"]);
 		const frames = changesOf(await doc.text.watch(context));
 		await set("none");
 		await delivered();
-		expect(doc.variant).toBe(undefined);
+		expect(role(doc)).toBe(undefined);
 		expect(told(await rejection((async () => doc.text.value)()))).toEqual({
 			code: "forbidden",
 			message: "no access",
@@ -902,9 +1620,21 @@ describe("over a link", () => {
 		expect(valuesOf(frames)).toEqual([{ failed: "no access" }]);
 		await set("read");
 		await delivered();
-		expect([doc.state.value.kind, doc.variant, doc.text.value]).toEqual(["live", "reader", "t"]);
+		expect([doc.state.value.kind, role(doc), doc.text.value]).toEqual(["live", "reader", "t"]);
 		expect(valuesOf(frames)).toEqual([{ failed: "no access" }, "t"]);
 		expect(states).toEqual(["failed: no access", "loading", "live", "failed: no access", "loading", "live"]);
+		doc.release();
+		await client.close(context);
+		await server.close(context);
+	});
+
+	it("a denial's message reaches the holder over the link (slice 15 §2)", async () => {
+		const { server, client, set } = await overLink({ built: [], admit: messageAdmit });
+		await set("deny:noShare");
+		const doc = client.hold(Doc, { id: "a" }, context);
+		await vi.waitFor(() => expect(messageOf(doc)).toEqual({ namespace: "docs", key: "noShare", params: ["owner"] }));
+		await set("deny:later");
+		await vi.waitFor(() => expect(messageOf(doc)).toMatchObject({ key: "later" }));
 		doc.release();
 		await client.close(context);
 		await server.close(context);
@@ -914,13 +1644,13 @@ describe("over a link", () => {
 		const { server, client, set } = await overLink({ built: [], gate: new Promise<void>(() => {}) });
 		await set("write");
 		const doc = await client.get(Doc, { id: "a" }, context);
-		const first = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const first = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await delivered();
 		await set("none");
 		expect(told(await first)).toMatchObject({ code: "forbidden", reason: "revoked" });
 		await set("write");
 		await delivered();
-		const second = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const second = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await delivered();
 		await set("read");
 		expect(told(await second)).toMatchObject({ code: "unavailable" });
@@ -950,7 +1680,7 @@ describe("over a link", () => {
 		const access = await server.get(Access, {}, context);
 		await access.set({ who: "owner", mode: "write" }, context);
 		const doc = await client.get(Doc, { id: "a" }, context);
-		const writer = doc as unknown as { write(text: string, ctx: typeof context): Promise<string> };
+		const writer = { write: doc.write! };
 		// The server announced a window of one call: the others wait at the consumer. The running call's answer frees
 		// its slot, so the second is sent and crosses the `failed` on the wire; the third still waits when it arrives.
 		const running = rejection(writer.write("running", context));
@@ -1030,7 +1760,7 @@ describe("a reload of an admission's source (test 20)", () => {
 		const { h, errors, reload } = await served(code, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
 		const states = statesOf(await doc.state.watch(context));
-		const writing = doc.variant === "writer" ? doc.write("x", context) : undefined;
+		const writing = doc.write ? doc.write("x", context) : undefined;
 		// The source's successor stays loading until its native opens: the last decision is kept meanwhile.
 		const report = await reload({ access: accessFacet({ opened: opened.promise }) });
 		expect(report.objects).toEqual([{ object: "test.access", kind: "restarted" }]);
@@ -1205,7 +1935,7 @@ describe("a reload of the admitted type (2.5, test 20)", () => {
 		const gate = Promise.withResolvers<void>();
 		const { h, errors, set, reload } = await served({ built: [], gate: gate.promise }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await reload({ doc: docFacet({ built }) });
 		// The old attempt drains its call; its successor waits for it.
 		expect(doc.state.value.kind).toBe("live");
@@ -1230,7 +1960,7 @@ describe("a reload of the admitted type (2.5, test 20)", () => {
 		const gate = Promise.withResolvers<void>();
 		const { h, set, reload } = await served({ built: [], gate: gate.promise }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		// The new admission also needs a type nobody serves: the successor parks on it and decides nothing.
 		const waits: Admit<typeof Doc, TestPrincipal> = (params, principal, self) => {
 			self.get(Missing, {});
@@ -1253,14 +1983,14 @@ describe("a reload of the admitted type (2.5, test 20)", () => {
 		const gate = Promise.withResolvers<void>();
 		const { h, errors, set, reload } = await served({ built: [], gate: gate.promise }, { mode: "write" });
 		const doc = await h.get(Doc, { id: "a" }, context);
-		const writing = rejection(doc.variant === "writer" ? doc.write("x", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("x", context) : Promise.resolve());
 		await reload({ doc: docFacet({ built }) });
 		await set("read");
 		expect([doc.state.value.kind, doc.text.value]).toEqual(["loading", "t"]);
 		expect(told(await writing)).toMatchObject({ code: "unavailable" });
 		gate.resolve();
 		await delivered();
-		expect([doc.state.value.kind, doc.variant]).toEqual(["live", "reader"]);
+		expect([doc.state.value.kind, role(doc)]).toEqual(["live", "reader"]);
 		expect(errors).toEqual([]);
 		await h.close(context);
 	});
@@ -1298,17 +2028,17 @@ describe("an admission that reads a named query", () => {
 		version: 1,
 		params: {},
 		hostAddress: () => Server(),
-		admission: str(),
-		variants: { one: { state: { label: str() } } },
+		admission: obj({ shelf: str() }),
+		state: { label: str() },
 	});
 
 	/** A facet serving `Reader`, whose admission reads the shelf's items live. */
 	const readerFacet = () =>
 		defineFacet<TestPrincipal>((facet) =>
-			facet.serve(Reader, () => ({ variant: "one", members: { label: constant("x") } }), {
+			facet.serve(Reader, () => ({ label: constant("x") }), {
 				admit: (_params, _principal, self) => {
 					const items = self.liveQuery(self.get(Shelf, {}).items.all, {}, { first: 3 });
-					return self.derive([items], () => allow("yes"));
+					return self.derive([items], () => allow({ shelf: "yes" }));
 				},
 			}),
 		);
@@ -1399,7 +2129,7 @@ describe("a commit in flight at the cut", () => {
 		const doc = await h.get(Doc, { id: "a" }, context);
 		const frames = changesOf(await doc.text.watch(context));
 		const held = holdNextCommit(store);
-		const writing = rejection(doc.variant === "writer" ? doc.write("kept", context) : Promise.resolve());
+		const writing = rejection(doc.write ? doc.write("kept", context) : Promise.resolve());
 		await held.entered;
 		// The cut, with the journal's commit admitted and its step running.
 		await access.set({ who: "server", mode: "none" }, context);
@@ -1413,4 +2143,261 @@ describe("a commit in flight at the cut", () => {
 		await h.close(context);
 		await store.close(context);
 	});
+});
+
+describe("what a decision keeps (hold memory)", () => {
+	/** A thing: plain and grantable members and a flag; admitted by the names a shared object lists. */
+	const Thing = remote("heap.thing", {
+		version: 1,
+		params: { id: str() },
+		hostAddress: () => Server(),
+		state: { name: str() },
+		methods: { use: method(str(), str()), add: grantable(method(str(), str())) },
+		flags: { export: flagLabel("export") },
+	});
+	const Roles = local("heap.roles", { version: 1, params: {}, members: { names: map(str()) } });
+
+	function things(host: FacetHost<TestPrincipal>): void {
+		host.serve(Roles, () => ({ names: constant({ owner: "add" }) }));
+		host.serve(Thing, ({ id }) => ({ name: constant(id), use: async (text) => text, add: async (text) => text }), {
+			admit: (_params, principal, self) =>
+				self.derive([self.get(Roles, {}).names], ([names]) =>
+					names[principal.kind] === "add" ? allow({ granted: ["add", "export"] }) : allow({}),
+				),
+		});
+	}
+
+	it("decisions granting the same names share one set", async () => {
+		const { server, client } = await linked(things, { child: { kind: "owner" } });
+		const first = await client.get(Thing, { id: "a" }, context);
+		const second = await client.get(Thing, { id: "b" }, context);
+		expect([[...first.granted], [...second.granted]]).toEqual([
+			["add", "export"],
+			["add", "export"],
+		]);
+		const granted = objects
+			.map((object) => object.deref())
+			.filter((object) => object?.label.startsWith("heap.thing(") === true)
+			.map((object) => object!.granted);
+		expect(granted.length).toBe(2);
+		expect(granted[0]).toBe(granted[1]);
+		first.release();
+		second.release();
+		await client.close(context);
+		await server.close(context);
+	});
+
+	// Found by the review of the hold-memory pass (2026-11-25): shared sets were kept for the contract's life.
+	it("a set of names no decision grants any more is collected while its contract is served (255 combinations)", async () => {
+		const Flagged = remote("heap.flagged", {
+			version: 1,
+			params: { n: int() },
+			hostAddress: () => Server(),
+			state: { name: str() },
+			flags: {
+				f0: flagLabel("f0"),
+				f1: flagLabel("f1"),
+				f2: flagLabel("f2"),
+				f3: flagLabel("f3"),
+				f4: flagLabel("f4"),
+				f5: flagLabel("f5"),
+				f6: flagLabel("f6"),
+				f7: flagLabel("f7"),
+			},
+		});
+		const flags = ["f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7"] as const;
+		const namesOf = (n: number) => flags.filter((_, index) => (n & (1 << index)) !== 0);
+		const errors: HostError[] = [];
+		const onError = (error: HostError) => void errors.push(error);
+		const h = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError });
+		const facet = defineFacet<TestPrincipal>((host) =>
+			host.serve(Flagged, () => ({ name: constant("n") }), {
+				admit: ({ n }) => constant(allow({ granted: namesOf(n) })),
+			}),
+		);
+		await h.load([{ name: "@test/flags", facet }], context);
+		// In a function of its own: the last reference stays in no variable of this test.
+		const granted = async (): Promise<WeakRef<ReadonlySet<string>>[]> => {
+			const sets: WeakRef<ReadonlySet<string>>[] = [];
+			for (let n = 1; n < 256; n++) {
+				const reference = await h.get(Flagged, { n }, context);
+				sets.push(new WeakRef(reference.granted));
+				reference.release();
+			}
+			return sets;
+		};
+		await expectCollected(...(await granted()));
+		// Granted again: a set of the same names.
+		const again = await h.get(Flagged, { n: 5 }, context);
+		expect([[...again.granted], errors]).toEqual([["f0", "f2"], []]);
+		again.release();
+		await h.close(context);
+	});
+
+	// Found by the wire builder's review (2026-11-26): the registry's holdings named the version's table, so a set an
+	// app kept kept the table and its entries after the version was gone.
+	it("a version gone keeps no table or entry of its granted sets, while an app keeps every set", async () => {
+		const tables: WeakRef<object>[] = [];
+		const entries: WeakRef<object>[] = [];
+		const set = Map.prototype.set;
+		// Watches the insertions into the version's table only: it keeps neither the table nor its entries.
+		Map.prototype.set = function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
+			const first: unknown = Array.isArray(value) ? value[0] : undefined;
+			const held = first instanceof WeakRef ? first.deref() : undefined;
+			if (typeof key === "number" && held instanceof Set && [...held].some((name) => `${name}`.startsWith("kept"))) {
+				tables.push(new WeakRef(this));
+				entries.push(new WeakRef(value as object), new WeakRef(first as object));
+			}
+			return set.call(this, key, value);
+		};
+		let kept: { readonly version: WeakRef<object>; readonly sets: ReadonlySet<string>[] };
+		try {
+			kept = await (async () => {
+				const flags = ["kept0", "kept1", "kept2", "kept3", "kept4"] as const;
+				const Kept = remote("heap.kept-sets", {
+					version: 1,
+					params: { n: int() },
+					hostAddress: () => Server(),
+					state: { name: str() },
+					flags: {
+						kept0: flagLabel("kept0"),
+						kept1: flagLabel("kept1"),
+						kept2: flagLabel("kept2"),
+						kept3: flagLabel("kept3"),
+						kept4: flagLabel("kept4"),
+					},
+				});
+				const h = createHost<TestPrincipal>({
+					address: Server(),
+					principal: { kind: "server" },
+					onError: () => {},
+				});
+				const facet = defineFacet<TestPrincipal>((host) =>
+					host.serve(Kept, () => ({ name: constant("n") }), {
+						admit: ({ n }) => constant(allow({ granted: flags.filter((_, index) => (n & (1 << index)) !== 0) })),
+					}),
+				);
+				await h.load([{ name: "@test/kept", facet }], context);
+				const sets: ReadonlySet<string>[] = [];
+				for (let n = 1; n < 32; n++) {
+					const reference = await h.get(Kept, { n }, context);
+					sets.push(reference.granted);
+					reference.release();
+				}
+				await h.close(context);
+				return { version: new WeakRef(currentVersion(Kept)), sets };
+			})();
+		} finally {
+			Map.prototype.set = set;
+		}
+		expect(tables.length).toBeGreaterThan(0);
+		await expectCollected(kept.version);
+		await expectCollected(...tables, ...entries);
+		expect(kept.sets.at(-1)!.size).toBe(5);
+	});
+
+	it("sets of a contract with more than 31 grants are told apart and shared", async () => {
+		const names = Array.from({ length: 40 }, (_, index) => `g${String(index).padStart(2, "0")}`);
+		const Many = remote("heap.many", {
+			version: 1,
+			params: { n: int() },
+			hostAddress: () => Server(),
+			state: { name: str() },
+			// Typed by a template: a plain record of strings would claim every name, `name` too.
+			flags: Object.fromEntries(names.map((name) => [name, flagLabel(name)])) as Record<`g${number}`, MessageData>,
+		});
+		// g00 and g31 are indexes 0 and 31 of the sorted grants (one hash when it was a bit per index modulo 31).
+		const lists: `g${number}`[][] = [["g00"], ["g31"], ["g31", "g00"], ["g00", "g31", "g00"], ["g31"]];
+		const h = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+		const facet = defineFacet<TestPrincipal>((host) =>
+			host.serve(Many, () => ({ name: constant("n") }), {
+				admit: ({ n }) => constant(allow({ granted: lists[n]! })),
+			}),
+		);
+		await h.load([{ name: "@test/many", facet }], context);
+		const held = [];
+		for (let n = 0; n < lists.length; n++) held.push(await h.get(Many, { n }, context));
+		expect(held.map((reference) => [...reference.granted])).toEqual([
+			["g00"],
+			["g31"],
+			["g00", "g31"],
+			["g00", "g31"],
+			["g31"],
+		]);
+		expect(held[0]!.granted).not.toBe(held[1]!.granted);
+		expect(held[2]!.granted).toBe(held[3]!.granted);
+		expect(held[4]!.granted).toBe(held[1]!.granted);
+		for (const reference of held) reference.release();
+		await h.close(context);
+	});
+
+	// Found by the review of the hot-path pass (astra2, 2026-11-26): a hash of index bits modulo 31 put the 4,096 roles
+	// of a contract with 43 flags, 31 of them granted to all, into one bucket.
+	it("re-acquiring a known set of names costs as much among 4,096 cached roles as among 256 (ratio guard)", async () => {
+		const names = Array.from({ length: 43 }, (_, index) => `g${String(index).padStart(2, "0")}`);
+		const Roles = remote("heap.roles", {
+			version: 1,
+			params: { id: int(), mask: int() },
+			hostAddress: () => Server(),
+			state: {},
+			flags: Object.fromEntries(names.map((name) => [name, flagLabel(name)])) as Record<`g${number}`, MessageData>,
+		});
+		const selections = Array.from({ length: 4096 }, (_, mask) =>
+			names.filter((_, index) => index < 31 || ((1 << (index - 31)) & mask) !== 0),
+		) as `g${number}`[][];
+		const h = createHost<TestPrincipal>({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+		const facet = defineFacet<TestPrincipal>((host) =>
+			host.serve(Roles, () => ({}), { admit: ({ mask }) => constant(allow({ granted: selections[mask]! })) }),
+		);
+		await h.load([{ name: "@test/roles", facet }], context);
+		const kept: ReadonlySet<string>[] = [];
+		let id = 0;
+		const median: number[] = [];
+		try {
+			for (const size of [256, 4096]) {
+				for (let mask = kept.length; mask < size; mask++) {
+					const held = await h.get(Roles, { id: id++, mask }, context);
+					kept.push(held.granted);
+					held.release();
+				}
+				const hot = size - (1 << Math.floor(Math.log2(size) / 2));
+				const times: number[] = [];
+				for (let round = 0; round < 6; round++) {
+					const start = performance.now();
+					for (let call = 0; call < 200; call++) {
+						const held = await h.get(Roles, { id: id++, mask: hot }, context);
+						expect(held.granted).toBe(kept[hot]);
+						held.release();
+					}
+					times.push(performance.now() - start);
+				}
+				median.push(times.slice(1).sort((a, b) => a - b)[2]!);
+			}
+		} finally {
+			await h.close(context);
+		}
+		// Measured 0.8 on the base of the pass, 4.75 with the saturated hash.
+		expect(median[1]! / median[0]!).toBeLessThan(2);
+	}, 60_000);
+
+	it("an admitted object held over a link, its admission reading one reference: under 14 KiB at both ends", async () => {
+		const { server, client } = await linked(things, { child: { kind: "owner" } });
+		const hold = async (from: number, to: number) => {
+			const references = [];
+			for (let id = from; id < to; id++) references.push(await client.get(Thing, { id: `t${id}` }, context));
+			return references;
+		};
+		// A warm-up first: what the first holds make for good (compiled code, caches) is no hold's.
+		const warm = await hold(0, 300);
+		const before = await settledHeap();
+		const held = await hold(300, 2_300);
+		const each = ((await settledHeap()) - before) / held.length;
+		// Measured 11.6 KiB for both ends (the object, its attempt, decision, reference and derive here; the hold's
+		// reference and replica there); 18.4 KiB when a decision followed each reference by a promise and an abort
+		// listener under a signal joined with its attempt's, and every source kept a set for its one dependent.
+		expect(each).toBeLessThan(14 * 1024);
+		for (const reference of [...warm, ...held]) reference.release();
+		await client.close(context);
+		await server.close(context);
+	}, 60_000);
 });

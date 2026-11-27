@@ -6,9 +6,8 @@ it touches and reports the numbers in its Linear issue; a number that gets worse
 ## The budget: 55 MiB per session worker
 
 No session worker's USS (the memory only that process holds: what one more worker costs) may exceed 55 MiB, in any
-phase. The memory test (`apps/p3/old/test/release/memory.test.ts`, on the old base; to be ported to the skeleton with
-the harness core, ERNDL-855) checks it: four
-workers, each with Durable's harness, the coding tools, a subagent tool, real pi-ai providers against a local HTTPS
+phase. The memory test (the old base's `apps/p3/old/test/release/memory.test.ts`, in git at `753bc0bb2`; to be
+ported to the skeleton with the harness core, ERNDL-855) checks it: four workers, each with Durable's harness, the coding tools, a subagent tool, real pi-ai providers against a local HTTPS
 stub and telemetry; idle, one streamed answer, a burst of 20 turns with tool calls, five subagents streaming at once.
 
 Where it stands (slayer, Node 26.11.1, the release, USS MiB, median of 20 workers):
@@ -31,24 +30,77 @@ the provider SDKs are bundled and load per provider on first use; the worker's V
 
 | What | slayer, release | the phone, from source |
 | --- | --- | --- |
-| server launch to listening, warm | 128 ms (105 ms on the old base, with one plugin) | 1.6 to 1.9 s |
-| worker start, warm | 64 ms (old base, same bench: 68 ms) | about 1 s |
-| idle worker, settled (sessions and runner only, no harness) | 14.0 MiB (old base, same bench: 14.9) | 19.6 MiB |
-| server, settled | 35.5 MiB (old base, same bench: 40.8) | 44 to 46 MiB |
-
-The skeleton's numbers are `bench/skeleton.ts --release` (2026-11-20); the old base's ran the same bench against a
-release of `30a3e0b1f`, back to back. The memory test's idle worker (17.9 MiB above) carries the harness, the coding
-tools and a subagent tool: never compare the two.
+| server launch to ready (its owner link printed), warm | 117 ms (cold 139 ms; old base, to listening: 105 ms) | 1.6 to 1.9 s |
+| an apply, nothing changed, right after a start, no worker (it builds the worker plugins) | 8.0 ms | |
+| an apply, nothing changed, 21 workers running (builds nothing: the socket's round trip) | 0.3 ms | |
+| worker start to its first object, the first after a start, before any apply (builds the worker plugins) | 95 ms | |
+| worker start to its first object, warm | 70 ms (old base, earlier bench: 68 ms) | about 1 s |
+| idle worker, settled (sessions and runner only, no harness) | 14.3 MiB (old base, earlier bench: 14.9) | 19.6 MiB |
+| server, settled | 35.1 MiB (old base, earlier bench: 40.8) | 44 to 46 MiB |
 | plain `p3` to its owner link | about 250 ms | 3.4 to 3.9 s |
 | the owner's list, open / `more`, at 100,000 sessions | 0.6 / 0.45 ms | 3.4 to 5.3 / 2.6 to 4.5 ms |
 
+The skeleton's numbers are `bench/skeleton.ts --release` (2026-11-21, review round 3 fixed, Node 26.11.1; medians of
+20 warm runs, the cold first apart; slayer under load 3 falling to 2; a second run right after gave the same within
+6 ms and 0.2 MiB). The old base's numbers ran the bench's earlier version against a release of `30a3e0b1f`; it timed
+the launch to listening and fewer runs. The worker plugins are built by whichever comes first after a start, the first
+worker or the first apply (Chord's rollout makes the whole set of every kind it rolls out): round 2's table timed the
+apply first, so its "8 ms apply, nothing changed" was that build and its first worker built nothing. The bench now
+times the first worker before any apply, the build's apply on fresh starts, and the no-change apply with the workers
+running. The first worker's 25 ms over a warm one is mostly not the build (about 7 ms for two small facets, the
+apply's number): round 2's first worker, which built nothing, cost as much more. The idle worker's USS counts session workers only (esbuild's service, also the server's
+child, no longer). The memory test's idle worker (17.9 MiB above) carries the harness, the coding tools and a subagent
+tool: never compare the two.
+
 - **Every start builds every plugin again** (no build cache): about 30 ms for one plugin today, one esbuild call per
-  facet. A package with large facets says what it adds to the start, on the phone too.
+  facet. The server facets are built before the server listens; the worker facets when they are first needed (the
+  first worker's start or the first apply, whichever comes first; a later apply builds only the plugins that
+  changed), so the first of them after a start pays their build: the bench's first worker start and its apply right
+  after a start include it, the warm starts and the apply with workers running do not. A package with large facets says
+  what it adds to the start, on the phone too. The old base's `NODE_DEBUG=p3` (what a start spends building) does
+  not exist in the skeleton: the new base never had it.
+- **The server holds every pi-ai provider** (the providers plugin's `builtinProviders`, to offer every sign-in).
+  - **Measured at the push of the login kind** (`c417ecec7` against `17580b384`, releases, `bench/skeleton.ts
+    --release`, slayer, Node 26.11.1, 2026-11-26, alternating runs, a busy machine): the settled server went from 72.5
+    to 78.1 MiB USS (medians of 3 and 4 runs), and an idle worker from 18.4 to 18.8 MiB (nothing of a provider loads
+    before a login's first request). The launch showed no change beyond the noise.
+  - **Round 1's figures** (66 MiB without the plugin, 84 and 86 MiB in two runs with it) were measured on an older base.
+  - **Where the cost sits:** `/v1/server` itself imports pi-ai's `providers/all` (`export { builtinProviders }`). So the
+    base server bundle holds every provider whether the providers plugin is installed or not: removing
+    `plugins/providers` from a release install left the server at 80.8 and 87.3 MiB.
+  - **A later improvement, which also has to take that import out of `/v1/server`:** offer the choices from a list of
+    names, and load a provider only when a person signs in to it or a login of it authorizes.
+- **Many workers at once:** the waker starts the worker of every `working` session together after a restart, and
+  nothing caps live workers. On Android that meets the 32-child-process limit unless it is lifted (`testing.md`,
+  Android).
 - **Telemetry:** a healthy turn should store no spans; at most 1 KB of metrics per process per 10 s; the store
   bounded by size (slice 28's targets, `slices/28-telemetry.md`).
+- **The access index (things plugin):** its first question about a workspace reads it and every ancestor not loaded
+  (five reads each) and a person (two); after a commit only the touched workspaces and persons are read again. A
+  kinds change (a plugin with a kind loaded, reloaded or removed) reads every loaded workspace again, up to the
+  forgetting budget (1,000 unwatched) plus the watched ones and their ancestors, in the index's queue: the writes and
+  questions behind it wait for it. `bench/things.ts` times the root and leaf changes, one worker's start and the cold
+  first question; a kind's plugin reload under load is not timed yet. Since slice 2 (ERNDL-1143) a workspace's own thing is answered at
+  itself (its own grants, with `makes`, `above` and each answer's `depth`), and the page's lists are probes over the
+  index: a probe is asked again after every commit at or above its workspace (lists of children and roots: after every
+  commit), so a page holds few of them; each runs its `prepare` reads (names, children) when asked.
 - **Bytes on the wire:** none measured per action yet. A UI package sets a budget for its common actions (opening a
   session, switching conversations, a streamed answer) and measures it with `chord.link.bytes`. The page bundle starts
   at about 140 KB gzipped for Chord's web client alone.
+
+## A kind's numbers
+
+What a kind measures and reports in its issue, as a table `| | target | measured |`. A number not measured says "not
+measured" and why; one above its target says so in bold.
+
+| Number | Target | How | Example |
+| --- | --- | --- | --- |
+| heap per held thing over Chord's own cost | at most 2 KiB | 200 holders, after GC, against the things plugin's bare test kind, the kinds alternated, the median of 5 rounds after a first round apart | `bench/machine-kinds.ts:1-7` (what it measures and how to run it) |
+| the worker facet with the part loaded, idle | under 0.1 MiB of heap; the worker within 55 MiB USS | the heap difference after GC; the memory test once it is ported (ERNDL-855) | – |
+| a change reaching the last of 100 holders | under 10 ms | the median, the cold run apart | – |
+| opening a thing: the first page | one index read | not measured by a test yet: the plans test shows the first page's index (`test/plans.test.ts:179`), and the counted test pins the runs per write, taken after the holds are open (`plugins/notes/test/server.test.ts:480-506`) | – |
+| what the view adds to the page bundle | measured, gzipped | – | – |
+| the kind's own (a key typed reaching the terminal, one `authorize`) | set in the issue | a bench of its own | `bench/files-page.ts` |
 
 ## How to measure
 
@@ -60,7 +112,7 @@ tools and a subagent tool: never compare the two.
   so note its load.
 - **Where:** slayer and the phone; source and release. Name the machine, the Node, the layout, the date and n.
 - **A bench per package:** `apps/p3/bench/<name>.ts`, modelled on `bench/skeleton.ts` (launched processes, both
-  layouts, `--release <install>`). `NODE_DEBUG=p3` prints what a start spends building.
+  layouts, `--release <dir>`).
 
 ## Rules
 
@@ -88,4 +140,6 @@ tools and a subagent tool: never compare the two.
 | WebAssembly compiled a second time, optimized | 8 to 10 MiB per worker | `--liftoff-only` |
 | a memory reading taken right after work | readings too high | settled readings |
 | a list cost measured once after a start | 2.3 ms reported, 0.7 ms real | medians, cold run apart |
+| a build credited to the wrong phase (the worker plugins' build is in whichever of the first worker and the first apply comes first) | an 8 ms "no-change apply" that was the build; a first worker that built nothing | time the phases in the order a Pi meets them, the first of each apart, and count the builds when unsure |
 | an ordered `inArray`, a count behind a hot column, one index for two lists | every row read, every page sorted | see `chord-practices.md`, Rules |
+| every pi-ai provider loaded in a worker (`builtinProviders`, its generated catalog 7.4 MiB of it) | 12 to 14 MiB per worker, against 1.6 to 2 MiB for one provider (slayer, Node 26, pi-ai's dist, settled USS, 2026-11-26) | a worker loads only the providers of its logins, on the first request (`loadProvider` of `/v1/worker`); their models come from the login's `catalog` |

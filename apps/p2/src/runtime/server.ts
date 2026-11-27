@@ -24,8 +24,10 @@ import {
 	type Facet,
 	type FacetHost,
 	forbidden,
+	grantBy,
 	type Host,
 	keyedRegistry,
+	notGranted,
 	type Self,
 	serveKeyed,
 } from "./chord.ts";
@@ -217,17 +219,25 @@ export type RequestOrigin = {
 	 * them because a session is shared with their email; authenticators map them to what is shared with them now.
 	 */
 	readonly relayUser?: RelayUser;
+	/**
+	 * Someone Radius admitted through one of this server's invites, without a Radius account (relayed requests only).
+	 * Radius refuses them once the server stops renewing their admission; authenticators map them to what they joined.
+	 */
+	readonly relayGuest?: RelayGuest;
 };
 
 /** A person Radius authenticated: their Radius user ID and normalized, verified email. */
 export type RelayUser = { readonly id: string; readonly email: string };
+
+/** A guest Radius admitted: their admission's ID and the invite reference this server gave the invite. */
+export type RelayGuest = { readonly admission: string; readonly invite: string };
 
 /** Who sent an HTTP request (undefined: nobody authenticated, e.g. a guest before joining) and from where. */
 export type RequestAccess = { readonly principal: P2Principal | undefined; readonly origin: RequestOrigin };
 
 /**
  * Trusted transports may authenticate a marked loopback request as remote, before ordinary Host checks. Without a
- * principal, the authenticators decide who the request is (a relayed Radius user: see `RequestOrigin.relayUser`).
+ * principal, the authenticators decide who the request is (a relayed Radius user or guest: see `RequestOrigin`).
  */
 export type RequestResolver = (request: IncomingMessage, ctx: Ctx) => RequestAccess | undefined;
 export const RequestResolvers = keyedRegistry<RequestResolver>("p2.request-resolvers");
@@ -425,13 +435,10 @@ export function serverCore(host: Host, info: ServerInfo, parts: ServerParts): Fa
 			if (!isOwner(principal)) throw forbidden("the server's name is the owner's");
 			const source = self.get(ServerName, {});
 			return {
-				variant: "owner",
-				members: {
-					name: self.derive([source.name], ([value]) => value),
-					chosen: self.derive([source.chosen], ([value]) => value),
-					device: self.derive([source.device], ([value]) => value),
-					rename: (args, ctx) => source.rename(args, ctx),
-				},
+				name: self.derive([source.name], ([value]) => value),
+				chosen: self.derive([source.chosen], ([value]) => value),
+				device: self.derive([source.device], ([value]) => value),
+				rename: (args, ctx) => source.rename(args, ctx),
 			};
 		});
 		facet.serve(Hosts, (_params, self) => {
@@ -445,24 +452,26 @@ export function serverCore(host: Host, info: ServerInfo, parts: ServerParts): Fa
 				},
 			};
 		});
-		facet.serve(Access, (_params, principal) => {
-			if (isOwner(principal)) return { variant: "owner", members: {} };
-			if (!isGuest(principal)) throw forbidden("owners and guests only");
-			// One object per grant revision: the grant never changes within it.
-			const { id, name, email, home, sessions } = principal;
-			return {
-				variant: "guest",
-				members: {
-					grant: constant({
-						id,
-						name,
-						session: home,
-						mode: sessions[home] ?? "view",
-						sessions,
-						...(email === undefined ? {} : { email }),
-					}),
-				},
-			};
-		});
+		facet.serve(
+			Access,
+			(_params, principal) => {
+				if (isOwner(principal)) return { grant: notGranted };
+				if (!isGuest(principal)) throw forbidden("owners and guests only");
+				// One object per grant revision: the grant never changes within it.
+				const { id, name, email, home, sessions } = principal;
+				return {
+					grant: () =>
+						constant({
+							id,
+							name,
+							session: home,
+							mode: sessions[home] ?? "view",
+							sessions,
+							...(email === undefined ? {} : { email }),
+						}),
+				};
+			},
+			{ admit: grantBy((principal) => (isGuest(principal) ? ["grant"] : [])) },
+		);
 	});
 }

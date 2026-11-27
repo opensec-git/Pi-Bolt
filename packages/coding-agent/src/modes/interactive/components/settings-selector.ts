@@ -85,7 +85,6 @@ export interface SettingsConfig {
 	mermaidRenderingMode: MermaidRenderingMode;
 	shadedCodeBlocks: boolean;
 	collapseChangelog: boolean;
-	enableInstallTelemetry: boolean;
 	remoteControlEnabled: boolean;
 	/** Pi-Bolt's `piBolt.autoUpdate`; the setting is not listed without it (a build that is not Pi-Bolt). */
 	piBoltAutoUpdate?: boolean;
@@ -129,7 +128,6 @@ export interface SettingsCallbacks {
 	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onShadedCodeBlocksChange: (shaded: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
-	onEnableInstallTelemetryChange: (enabled: boolean) => void;
 	onRemoteControlEnabledChange: (enabled: boolean) => void;
 	onPiBoltAutoUpdateChange?: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
@@ -612,13 +610,6 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "header", "false"],
 			},
 			{
-				id: "install-telemetry",
-				label: "Install telemetry",
-				description: "Send an anonymous version/update ping after changelog-detected updates",
-				currentValue: config.enableInstallTelemetry ? "true" : "false",
-				values: ["true", "false"],
-			},
-			{
 				id: "remote-control",
 				label: "Remote control",
 				description:
@@ -818,7 +809,7 @@ export class SettingsSelectorComponent extends Container {
 			{
 				id: "fullscreen-copy-on-select",
 				label: "Fullscreen copy on select",
-				description: "Automatically copy selected text in fullscreen mode; disable to copy selections with Ctrl+X",
+				description: `Automatically copy selected text in fullscreen mode; disable to copy selections with ${keyDisplayText("app.message.copy")}`,
 				currentValue: config.fullscreenCopyOnSelect ? "true" : "false",
 				values: ["true", "false"],
 			},
@@ -1017,9 +1008,6 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "header" ? "header" : newValue === "true");
-						break;
-					case "install-telemetry":
-						callbacks.onEnableInstallTelemetryChange(newValue === "true");
 						break;
 					case "remote-control":
 						callbacks.onRemoteControlEnabledChange(newValue === "true");

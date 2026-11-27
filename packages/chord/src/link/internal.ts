@@ -2,7 +2,7 @@
 // message type, parts with their limits and compression, and errors in messages.
 
 export { binaryCodec } from "./binary.ts";
-export { Channel, type ChannelHandler } from "./channel.ts";
+export { Channel, type ChannelHandler, type LinkCloseReason } from "./channel.ts";
 export { errorFromWire, wireError } from "./errors.ts";
 export type { Link } from "./link.ts";
 export {
@@ -35,4 +35,4 @@ export {
 	type PartLimits,
 } from "./part.ts";
 export { describeMessage, textCodec } from "./text.ts";
-export { jsonPart, parsePart, parsePayload, payloadPart } from "./values.ts";
+export { jsonPart, parsePart, parsePayload, payloadPart, readUtf8 } from "./values.ts";

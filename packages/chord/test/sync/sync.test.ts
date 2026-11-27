@@ -1,7 +1,7 @@
 // The sync protocol over stores with an outbox: slots created once, uploads from the outbox, pulls through
 // `applyBatch()`, archives for stores whose outbox does not reach back, folds into snapshots. The stores hold a plain
 // table: sync knows nothing of what a store keeps.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -127,6 +127,9 @@ class MemoryState implements SyncStateStore {
 	async set(sessionId: string, state: SyncState, _context: Context): Promise<void> {
 		this.states.set(sessionId, state);
 	}
+	async delete(sessionId: string, _context: Context): Promise<void> {
+		this.states.delete(sessionId);
+	}
 }
 
 /** `store` with some methods replaced: the remote keeps private fields, so the rest stay bound to it. */
@@ -198,7 +201,7 @@ function device(name: string, remoteStore: FileSystemSyncRemote) {
 		async forget(sessionId = SESSION): Promise<void> {
 			const store = copies.get(sessionId);
 			copies.delete(sessionId);
-			await state.set(sessionId, { syncedHead: undefined }, context);
+			await state.delete(sessionId, context);
 			if (store !== undefined) {
 				stores.splice(stores.indexOf(store), 1);
 				await store.close(context);
@@ -448,7 +451,7 @@ describe("syncing a session between devices", () => {
 			);
 		expect(await upload()).toEqual({ type: "remote_empty", at: synced });
 		// The host forgets the bookmark: the next upload is the whole store, as an archive (the outbox was trimmed).
-		await laptop.state.set(SESSION, { syncedHead: undefined }, context);
+		await laptop.state.delete(SESSION, context);
 		const source = await laptop.store();
 		expect(await upload()).toEqual({ type: "uploaded", head: source.lastSeq });
 		expect((await emptied.list(SESSION, context)).batches).toEqual([
@@ -457,6 +460,30 @@ describe("syncing a session between devices", () => {
 		const replica = device("replica", emptied);
 		await replica.pull();
 		expect(await reads(await replica.store())).toEqual(await reads(source));
+	});
+
+	it("reports a slot the remote refuses for good, keeping its bookmark and outbox", async () => {
+		const store = await remote();
+		const laptop = device("laptop", store);
+		await laptop.commit(seedBatches().slice(0, 3));
+		const refusing = overriding(store, {
+			putBatch: async () => ({ type: "refused", reason: "next_id_regression" }),
+		});
+		const source = await laptop.store();
+		expect(
+			await uploadSession({
+				sessionId: SESSION,
+				device: "laptop",
+				source,
+				store: refusing,
+				state: laptop.state,
+				context,
+			}),
+		).toEqual({ type: "refused", reason: "next_id_regression" });
+		expect(await laptop.state.get(SESSION, context)).toBeUndefined();
+		expect(source.outbox!.floor).toBe(0);
+		// Nothing was written: the remote that accepts takes the same slot.
+		expect((await laptop.upload()).type).toBe("uploaded");
 	});
 
 	it("refuses to upload a copy that lost uploaded commits, and pulls them back", async () => {
@@ -848,10 +875,71 @@ describe("host pieces", () => {
 		expect(await state.get(SESSION, context)).toBeUndefined();
 		await state.set(SESSION, { syncedHead: 3, pulling: 7 }, context);
 		expect(await state.get(SESSION, context)).toEqual({ syncedHead: 3, pulling: 7 });
-		await state.set(SESSION, { syncedHead: undefined }, context);
-		expect(await state.get(SESSION, context)).toEqual({ syncedHead: undefined });
+		await state.set(SESSION, {}, context);
+		expect(await state.get(SESSION, context)).toEqual({});
 		await state.delete(SESSION, context);
 		expect(await state.get(SESSION, context)).toBeUndefined();
+	});
+});
+
+describe("the directory remote", () => {
+	/** A body of a few bytes: these tests look at slots, not at what they hold. */
+	async function* bytes(): AsyncGenerator<Uint8Array> {
+		yield new Uint8Array([1, 2, 3]);
+	}
+
+	it("creates a slot once when two uploads of a session race for it", async () => {
+		const store = await remote();
+		const [laptop, desktop] = await Promise.all([
+			store.putBatch(SESSION, 0, 5, "laptop", bytes(), context),
+			store.putBatch(SESSION, 0, 7, "desktop", bytes(), context),
+		]);
+		expect(laptop).toEqual({ type: "created" });
+		expect(desktop).toEqual({ type: "exists", to: 5, device: "laptop" });
+		expect((await store.list(SESSION, context)).batches).toEqual([slot(0, 5, "laptop")]);
+	});
+
+	it("finds the head from its file, also when the file is behind or missing", async () => {
+		const store = await remote();
+		await store.putBatch(SESSION, 0, 5, "laptop", bytes(), context);
+		await store.putBatch(SESSION, 5, 9, "laptop", bytes(), context);
+		expect(await store.putBatch(SESSION, 3, 12, "laptop", bytes(), context)).toEqual({ type: "not_head", head: 9 });
+		const root = directories.at(-1)!;
+		const head = join(root, SESSION, "head.json");
+		// Written after each slot: where the history ends.
+		expect(JSON.parse(await readFile(head, "utf8"))).toEqual({ head: 9 });
+		// A crash between a slot and the head file: the file names the slot before.
+		await writeFile(head, JSON.stringify({ head: 5 }));
+		expect(await store.putBatch(SESSION, 3, 12, "laptop", bytes(), context)).toEqual({ type: "not_head", head: 9 });
+		// A directory written before head files.
+		await rm(head);
+		expect((await store.sessions(undefined, context)).sessions.map((session) => session.head)).toEqual([9]);
+		expect(await store.putBatch(SESSION, 9, 12, "laptop", bytes(), context)).toEqual({ type: "created" });
+	});
+
+	it("flushes every file to disk before renaming it into place", async () => {
+		const operations: string[] = [];
+		const files: SyncFileSystem = {
+			...nodeFiles,
+			flushFile: (path, ctx) => {
+				operations.push(`flush ${path}`);
+				return nodeFiles.flushFile(path, ctx);
+			},
+			renameFile: (source, destination, ctx) => {
+				operations.push(`rename ${source}`);
+				return nodeFiles.renameFile(source, destination, ctx);
+			},
+		};
+		const store = await remote(files);
+		await store.putBatch(SESSION, 0, 5, "laptop", bytes(), context);
+		const renamed = operations.filter((operation) => operation.startsWith("rename "));
+		// The body, the slot, the head file.
+		expect(renamed).toHaveLength(3);
+		for (const rename of renamed) {
+			const path = rename.slice("rename ".length);
+			expect(operations.indexOf(`flush ${path}`)).toBeLessThan(operations.indexOf(rename));
+			expect(operations.indexOf(`flush ${path}`)).toBeGreaterThanOrEqual(0);
+		}
 	});
 });
 

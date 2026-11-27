@@ -6,7 +6,7 @@
 // released with the last); a failed source; `RouteHandle.retry`; a hold behind the route's own route (`invalid/cycle`).
 
 import { describe, expect, it } from "vitest";
-import { BACKGROUND_CONTEXT as context } from "../../src/context/index.ts";
+import { BACKGROUND_CONTEXT as context, withCancel } from "../../src/context/index.ts";
 import { local, map, method, obj, str } from "../../src/contracts/index.ts";
 import type { ChordError } from "../../src/data/index.ts";
 import { defineState } from "../../src/documents/index.ts";
@@ -23,13 +23,15 @@ import {
 } from "../../src/host/index.ts";
 import { memoryLinkPair } from "../../src/link/index.ts";
 import { jsonPart, type Message } from "../../src/link/internal.ts";
-import type { Writable } from "../../src/state/index.ts";
+import { constant, type Writable } from "../../src/state/index.ts";
 import { type Batch, Source } from "../../src/state/internal.ts";
 import type { Watchable } from "../../src/watch.ts";
 import {
 	EDITOR,
 	expectCollected,
+	grantOf,
 	instancesOf,
+	NOTES_EDITOR,
 	PlacedNotes,
 	RawPeer,
 	rawWorkers,
@@ -254,7 +256,7 @@ describe("a denial", () => {
 		const notes = await tab.get(PlacedNotes, { session: "S1" }, context);
 		const worker = workers.get("session|S1")!;
 		expect(worker.activity.value.references).toBe(1);
-		const waiting = rejection(notes.variant === "editor" ? notes.wait(context) : Promise.resolve());
+		const waiting = rejection(notes.wait(context));
 		await transported();
 		await set("no");
 		expect(told(await waiting)).toMatchObject({ code: "forbidden", reason: "revoked" });
@@ -264,7 +266,7 @@ describe("a denial", () => {
 			code: "forbidden",
 			message: "no access",
 		});
-		expect(notes.variant).toBe(undefined);
+		expect([grantOf(notes), notes.add]).toEqual([[], undefined]);
 		expect(worker.activity.value.references).toBe(0);
 		// Allowed again: `loading` at once, not "no access" until the hold is bound; then forwarded behind the fence (the
 		// worker answers the `ping`), under the tab's hold.
@@ -284,7 +286,7 @@ describe("a denial", () => {
 		const guest = await tabOf(server, { kind: "guest", session: "S1" });
 		const owners = await tab.get(PlacedNotes, { session: "S1" }, context);
 		const guests = await guest.get(PlacedNotes, { session: "S1" }, context);
-		expect([owners.variant, guests.variant]).toEqual(["editor", "reader"]);
+		expect([grantOf(owners), grantOf(guests)]).toEqual([NOTES_EDITOR, []]);
 		await set("no", "guest");
 		await transported();
 		expect(guests.state.value).toMatchObject({ kind: "failed", cause: { kind: "denied" } });
@@ -302,10 +304,11 @@ describe("one decision per principal and address", () => {
 		const before = decisions.length;
 		const a = await tab.get(PlacedNotes, { session: "S1" }, context);
 		const b = await second.get(PlacedNotes, { session: "S1" }, context);
-		// Two holds of one principal on one address: one decision. Another address: another.
-		expect(decisions.length - before).toBe(1);
-		const other = await tab.get(PlacedNotes, { session: "S2" }, context);
+		// Two holds of one principal on one address: one decision of the route (and one of its object's admission,
+		// slice 15). Another address: another of each.
 		expect(decisions.length - before).toBe(2);
+		const other = await tab.get(PlacedNotes, { session: "S2" }, context);
+		expect(decisions.length - before).toBe(4);
 		a.release();
 		await transported();
 		// Still held by the second tab: denied with it.
@@ -317,6 +320,50 @@ describe("one decision per principal and address", () => {
 		await transported();
 		await expectCollected(...decisions.slice(before));
 		await server.close(context);
+	});
+
+	// From the review of the hold-memory pass (2026-11-25): a decision's follows of its references end where a wait
+	// under its context would, after the listeners of that context's own signal. Ended before them, the hold below
+	// stayed `loading`.
+	it("is still told of a reference that fails in a listener of its route's aborted context: the waiting hold shows it", async () => {
+		const stopping = withCancel(context);
+		const Health = local("test.health", { version: 1, params: {}, members: { status: str() } });
+		let fail = (): void => {
+			throw new Error("the monitor is not followed yet");
+		};
+		const resolving = Promise.withResolvers<void>();
+		const cleaned = Promise.withResolvers<void>();
+		const relay = await relayed({
+			context: stopping.context,
+			server: (facet) =>
+				facet.serve(Health, (_, self) => ({
+					status: self.follow(async (observer) => {
+						fail = () => observer.end({ kind: "failed", error: new Error("the monitor stopped") });
+						return { value: "ok", detach() {} };
+					}),
+				})),
+			admit: (_principal, _address, self) => {
+				self.get(Health, {});
+				return constant(allow(null));
+			},
+			// A resolver that stops the monitor when its context is aborted, and goes on cleaning up.
+			resolve: async (_address, _worker, ctx) => {
+				ctx.abortSignal!.addEventListener("abort", fail, { once: true });
+				resolving.resolve();
+				await cleaned.promise;
+				throw new Error("the resolver stopped");
+			},
+		});
+		const hold = relay.tab.hold(PlacedNotes, { session: "S1" }, context);
+		await resolving.promise;
+		expect(hold.state.value.kind).toBe("loading");
+		stopping.cancel();
+		await transported();
+		expect(hold.state.value).toMatchObject({ kind: "failed", cause: { kind: "waiting" } });
+		cleaned.resolve();
+		hold.release();
+		await relay.server.close(context);
+		await relay.tab.close(context);
 	});
 
 	it("a failed source leaves bound holds alone and fails new ones waiting; it heals with the source", async () => {
@@ -434,7 +481,7 @@ function holdPlaced(peer: RawPeer, hold: number): void {
 /** A hold as a raw worker received it. */
 type Held = Extract<Message, { readonly kind: "hold" }>;
 
-/** `held`'s binding on the raw worker: the editor variant with `count`. */
+/** `held`'s binding on the raw worker: an editor's grant with `count`. */
 function bound(held: Held, count: number): Message {
 	const members = [
 		{ member: EDITOR.state.notes!, value: "[]" },
@@ -443,7 +490,7 @@ function bound(held: Held, count: number): Message {
 	return {
 		kind: "bound",
 		origin: held.origin,
-		holds: [{ hold: held.hold, variant: EDITOR.variant, members, failed: [] }],
+		holds: [{ hold: held.hold, granted: EDITOR.granted, members, failed: [] }],
 	};
 }
 
@@ -624,7 +671,7 @@ describe("across reloads (test 21)", () => {
 		await set("yes");
 		const notes = await tab.get(PlacedNotes, { session: "S1" }, context);
 		const worker = workers.get("session|S1")!;
-		const adding = notes.variant === "editor" ? notes.add({ text: "x" }, context) : undefined;
+		const adding = notes.add ? notes.add({ text: "x" }, context) : undefined;
 		await server.reload(again(), context);
 		await transported();
 		expect(await adding).toBe(1);
@@ -694,7 +741,8 @@ describe("across reloads (test 21)", () => {
 			context,
 		);
 		await transported();
-		expect([notes.state.value.kind, decisions.length - before, resolves]).toEqual(["live", 0, ["session|S1"]]);
+		// The route's decision is not asked again; the object's own admission runs in its new attempt (slice 15).
+		expect([notes.state.value.kind, decisions.length - before, resolves]).toEqual(["live", 1, ["session|S1"]]);
 		await server.close(context);
 	});
 });

@@ -3,7 +3,7 @@ import { RequestResolvers, Server, ServerName, ShareUrls } from "@p2/app/v1/serv
 import { BackupTargets } from "../backup/contract.ts";
 import { isTerminalSyncError, RadiusSyncRemote } from "../backup/radius-remote.ts";
 import { ForwardStore, ForwardsNative } from "../ports/contract.ts";
-import { Shares } from "../sharing/contract.ts";
+import { type ShareInviter, ShareInviters, Shares } from "../sharing/contract.ts";
 import { RadiusBrain, type RadiusStatus } from "./brain.ts";
 import { RadiusConnections, RadiusService } from "./contract.ts";
 import { RelayAccess } from "./relay-access.ts";
@@ -26,6 +26,12 @@ export default defineFacet((host) => {
 		const serverName = self.get(ServerName, {});
 		self.get(ForwardStore, {});
 		const forwards = nativeOf(self, ForwardsNative, "The forwards");
+		/** Sharing's inviter, offered once the brain knows its own Radius origin (invites point there). */
+		const inviters = self.writable<Readonly<Record<string, ShareInviter>>>({});
+		const inviter: ShareInviter = {
+			invite: (link, path, validFor) => connection.value.brain.invite(link, path, validFor),
+			withdraw: (link) => connection.value.brain.withdrawInvites(link),
+		};
 		const connection = self.open(
 			async () => {
 				const relay = new RelayAccess();
@@ -36,6 +42,9 @@ export default defineFacet((host) => {
 					relay,
 					name: serverName.name.value ?? undefined,
 					forwards: forwards().forwards,
+					onOrigin: () => {
+						if (!inviters.value.radius) inviters.set({ radius: inviter });
+					},
 					// As Pi Mobile: each new status once, retries with their error.
 					onStatus: (status) => {
 						const text = radiusStatusText(status);
@@ -58,10 +67,12 @@ export default defineFacet((host) => {
 					port: server.info.value.port,
 					...(relayed.shellOrigin === undefined ? {} : { relayShellOrigin: relayed.shellOrigin }),
 				};
-				// Anyone else is whom sharing finds by their email (the sessions shared with them), or nobody.
-				return relayed.user === undefined
-					? { principal: { kind: "owner", access: "relay" }, origin }
-					: { principal: undefined, origin: { ...origin, relayUser: relayed.user } };
+				// Anyone else is whom sharing finds by their email or admission (what they were given), or nobody.
+				if (relayed.user !== undefined)
+					return { principal: undefined, origin: { ...origin, relayUser: relayed.user } };
+				if (relayed.guest !== undefined)
+					return { principal: undefined, origin: { ...origin, relayGuest: relayed.guest } };
+				return { principal: { kind: "owner", access: "relay" }, origin };
 			},
 		});
 		// Radius shows the server under its name: a copy, which follows every rename.
@@ -73,6 +84,12 @@ export default defineFacet((host) => {
 		self.on(shares.emails, async ({ value: emails }) => {
 			connection.value.brain.reportShares(emails);
 		});
+		// Radius keeps admitting the guests whose pages are open; the others lapse.
+		self.on(shares.admissions, async ({ value: admissions }) => {
+			connection.value.brain.reportGuests(admissions);
+		});
+		// Through Radius, a link holder needs an invite.
+		self.contribute(ShareInviters, inviters);
 		self.contribute(ShareUrls, {
 			radius: (session) => {
 				const page = connection.value.brain.shellPage;

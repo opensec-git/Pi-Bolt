@@ -15,6 +15,7 @@ export type {
 export type { Ctx } from "./ctx.ts";
 export { defineFacet, type Facet, type FacetHost, type FacetSelf, type ServeOptions } from "./facet.ts";
 export type { FollowAttach, FollowAttachment, FollowObserver } from "./follow.ts";
+export type { FollowOverAttach } from "./follow-over.ts";
 export {
 	type CommittedReload,
 	createHost,
@@ -37,7 +38,7 @@ export type { PartnerRow, QueriesOptions } from "./named-query.ts";
 export type { Native, NativeCloseReason, NativeOptions } from "./native.ts";
 export type { Presence } from "./presence.ts";
 export type { RefState } from "./ref-state.ts";
-export type { Held, Reference, RefIn } from "./reference.ts";
+export type { Reference } from "./reference.ts";
 export type { RevokedBy } from "./revocation.ts";
 export type { RootOptions } from "./root.ts";
 export type { RouteHandle, RouteOptions } from "./route.ts";

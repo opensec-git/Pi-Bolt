@@ -1,5 +1,7 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { BACKGROUND_CONTEXT as context } from "../../src/context/index.ts";
+import type { Message as PublicMessage } from "../../src/index.ts";
 import {
 	binaryCodec,
 	checkMessage,
@@ -67,13 +69,13 @@ const EVERY_KIND: Message[] = [
 	{ kind: "abort", call: 3 },
 	{
 		kind: "bound",
-		holds: [{ hold: 0, variant: 1, members: [{ member: 0, value: '[1,"a"]' }], failed: [{ member: 1, error }] }],
+		holds: [{ hold: 0, granted: [1], members: [{ member: 0, value: '[1,"a"]' }], failed: [{ member: 1, error }] }],
 	},
 	{
 		kind: "bound",
 		holds: [
-			{ hold: 0, variant: 0, members: [], failed: [] },
-			{ hold: 5, variant: 2, members: [{ member: 1, value: "null" }], failed: [] },
+			{ hold: 0, granted: [], members: [], failed: [] },
+			{ hold: 5, granted: [2], members: [{ member: 1, value: "null" }], failed: [] },
 		],
 	},
 	{
@@ -160,7 +162,7 @@ const EVERY_KIND: Message[] = [
 	{ kind: "call", origin: 2, call: 1, hold: 3, method: 0, args: "[1]" },
 	{ kind: "abort", origin: 2, call: 1 },
 	{ kind: "retry", origin: 2, hold: 3, hops: 16 },
-	{ kind: "bound", origin: 2, holds: [{ hold: 3, variant: 0, members: [], failed: [] }] },
+	{ kind: "bound", origin: 2, holds: [{ hold: 3, granted: [], members: [], failed: [] }] },
 	{ kind: "state", origin: 2, holds: [] },
 	{
 		kind: "failed",
@@ -287,7 +289,7 @@ forEachCodec(() => {
 				{ kind: "result", call: 0, value: deflated(), segments: [new Uint8Array([7])] },
 				{
 					kind: "bound",
-					holds: [{ hold: 0, variant: 0, members: [{ member: 0, value: deflated() }], failed: [] }],
+					holds: [{ hold: 0, granted: [], members: [{ member: 0, value: deflated() }], failed: [] }],
 				},
 				{ kind: "state", holds: [{ hold: 0, members: [{ member: 0, ops: deflated() }], failed: [], retired: [] }] },
 				{ kind: "event", origin: 2, events: [{ hold: 0, member: 1, at: 5, value: deflated() }] },
@@ -560,13 +562,243 @@ describe("the binary codec", () => {
 			{ member: 0, value },
 			{ member: 1, value: "1" },
 		];
-		const bytes = binaryCodec.encode({ kind: "bound", holds: [{ hold: 0, variant: 0, members, failed: [] }] });
+		const bytes = binaryCodec.encode({ kind: "bound", holds: [{ hold: 0, granted: [], members, failed: [] }] });
 		expect(bytes.buffer.byteLength - bytes.byteLength).toBeLessThanOrEqual(4096);
 		const small = binaryCodec.encode({ kind: "release", hold: 1 });
 		expect(small.buffer.byteLength).toBe(small.byteLength);
 		// A message of about two thirds of the starting buffer keeps no spare room either.
 		const medium = binaryCodec.encode({ kind: "result", call: 0, value: jsonPart("x".repeat(160)) });
 		expect(medium.buffer.byteLength).toBe(medium.byteLength);
+	});
+
+	it("returns messages that share no buffer: a later encode leaves an earlier message as it was", () => {
+		const first = binaryCodec.encode({ kind: "result", call: 0, value: '"a"' });
+		const copy = [...first];
+		binaryCodec.encode({ kind: "result", call: 1, value: '"bbbbbbbb"' });
+		expect([...first]).toEqual(copy);
+		expect(first.buffer.byteLength).toBe(first.byteLength);
+		// A message that grew the kept buffer (5 KiB) is copied out of it too.
+		const grown = binaryCodec.encode({ kind: "result", call: 0, value: jsonPart("a".repeat(5_000)) });
+		const grownCopy = [...grown];
+		binaryCodec.encode({ kind: "result", call: 1, value: jsonPart("b".repeat(5_000)) });
+		expect([...grown]).toEqual(grownCopy);
+		expect(grown.buffer.byteLength).toBe(grown.byteLength);
+	});
+
+	it("writes a fingerprint and an incarnation only as lowercase hex of their length, dashes left out wherever they are", () => {
+		const hold = (fingerprint: string, incarnation?: string): Message => ({
+			kind: "hold",
+			hold: 0,
+			type: "t",
+			version: 1,
+			fingerprint,
+			params: "{}",
+			address: server,
+			...(incarnation === undefined ? {} : { incarnation }),
+		});
+		for (const bad of ["0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "0123456789abcdeg", ""]) {
+			expect(() => binaryCodec.encode(hold(bad))).toThrow(/^binary: not 8 bytes of hex$/);
+		}
+		const dashed = "0192f5e2-7c3a-7def-8abc-0123456789ab";
+		const decoded = binaryCodec.decode(binaryCodec.encode(hold("0123456789abcdef", dashed.replace("-", "--"))));
+		expect((decoded as Extract<Message, { kind: "hold" }>).incarnation).toBe(dashed);
+		for (const bad of [dashed.slice(1), `${dashed}0`, dashed.toUpperCase(), dashed.replace("0", "x")]) {
+			expect(() => binaryCodec.encode(hold("0123456789abcdef", bad))).toThrow(/^binary: not 16 bytes of hex$/);
+		}
+	});
+
+	it("decodes optional fields in their order and leaves absent ones unset (no key of `undefined`)", () => {
+		const incarnation = "0192f5e2-7c3a-7def-8abc-0123456789ab";
+		const keys = (message: Message) => Object.keys(binaryCodec.decode(binaryCodec.encode(message)));
+		const hold = {
+			kind: "hold",
+			hold: 0,
+			type: "t",
+			version: 1,
+			fingerprint: "0123456789abcdef",
+			params: "{}",
+			address: server,
+		} as const;
+		expect(keys(hold)).toEqual(["kind", "hold", "type", "version", "fingerprint", "params", "address"]);
+		expect(
+			keys({ ...hold, principal: { kind: "p" }, incarnation, chain: [incarnation], limit: 3, trace: { a: "b" } }),
+		).toEqual([
+			"kind",
+			"hold",
+			"type",
+			"version",
+			"fingerprint",
+			"params",
+			"address",
+			"principal",
+			"incarnation",
+			"chain",
+			"limit",
+			"trace",
+		]);
+		expect(keys({ kind: "call", call: 0, hold: 0, method: 0 })).toEqual(["kind", "call", "hold", "method"]);
+		const segments = [new Uint8Array([1])];
+		expect(keys({ kind: "call", call: 0, hold: 0, method: 0, args: "[]", segments, old: true })).toEqual([
+			"kind",
+			"call",
+			"hold",
+			"method",
+			"args",
+			"segments",
+			"old",
+		]);
+		expect(keys({ kind: "result", call: 0 })).toEqual(["kind", "call"]);
+		expect(keys({ kind: "result", call: 0, value: "1", origin: 2 })).toEqual(["kind", "call", "value", "origin"]);
+		const cause = { kind: "broken", error: { kind: "chord", error: { code: "released", message: "" } } } as const;
+		expect(keys({ kind: "failed", hold: 0, cause })).toEqual(["kind", "hold", "cause"]);
+		expect(keys({ kind: "failed", hold: 0, cause, retryIn: 0 })).toEqual(["kind", "hold", "cause", "retryIn"]);
+	});
+
+	it("leaves a decoded message's lists its own: the public type keeps a state entry's failed list mutable", () => {
+		const error = { kind: "chord", error: { code: "unavailable", message: "m" } } as const;
+		const state: Message = {
+			kind: "state",
+			holds: [
+				{
+					hold: 0,
+					members: [],
+					failed: [
+						{ member: 2, error },
+						{ member: 1, error },
+					],
+					retired: [],
+				},
+			],
+		};
+		const decoded: PublicMessage = binaryCodec.decode(binaryCodec.encode(state));
+		// A tool's own sort of what it decoded compiles (a type test) and changes nothing of the codec's.
+		if (decoded.kind === "state") for (const entry of decoded.holds) entry.failed.sort((a, b) => a.member - b.member);
+		expect((decoded as Extract<Message, { kind: "state" }>).holds[0]!.failed.map(({ member }) => member)).toEqual([
+			1, 2,
+		]);
+	});
+
+	it("allocates about one frame per encode of a frame a little past the kept buffer (review of f17e4a999)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const value = new TextEncoder().encode(`"${"x".repeat(1_022)}"`);
+		for (const count of [16, 18, 34]) {
+			const members = Array.from({ length: count }, (_, member) => ({ member, value }));
+			const frame: Message = { kind: "bound", holds: [{ hold: 0, granted: [], members, failed: [] }] };
+			const length = binaryCodec.encode(frame).byteLength;
+			gc();
+			const before = process.memoryUsage().arrayBuffers;
+			for (let index = 0; index < 32; index++) binaryCodec.encode(frame);
+			// Regrown from the kept buffer at every send, an 18 KiB frame took 80 KB of buffers (the base 36 KB).
+			expect((process.memoryUsage().arrayBuffers - before) / 32).toBeLessThan(3 * length);
+		}
+	});
+
+	it("allocates about one frame for a mid-size frame right after a much larger one (review of 4b2ae2444)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const part = (bytes: number) => new TextEncoder().encode(`"${"x".repeat(bytes - 2)}"`);
+		const bound = (members: { member: number; value: Uint8Array }[]): Message => ({
+			kind: "bound",
+			holds: [{ hold: 0, granted: [], members, failed: [] }],
+		});
+		const large = bound([{ member: 0, value: part(1024 * 1024) }]);
+		const mid = bound(Array.from({ length: 20 }, (_, member) => ({ member, value: part(1024) })));
+		const length = binaryCodec.encode(mid).byteLength;
+		let allocated = 0;
+		for (let round = 0; round < 20; round++) {
+			binaryCodec.encode(large);
+			gc();
+			const before = process.memoryUsage().arrayBuffers;
+			binaryCodec.encode(mid);
+			allocated += process.memoryUsage().arrayBuffers - before;
+		}
+		// Sized from the large frame before it, each mid-size frame took a MiB.
+		expect(allocated / 20).toBeLessThan(3 * length);
+	});
+
+	it("allocates about one frame for a frame of many small parts (review of adcbac474)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const value = new TextEncoder().encode(`"${"x".repeat(510)}"`);
+		const members = Array.from({ length: 2048 }, (_, member) => ({ member, value }));
+		const frame: Message = { kind: "bound", holds: [{ hold: 0, granted: [], members, failed: [] }] };
+		const length = binaryCodec.encode(frame).byteLength;
+		gc();
+		const before = process.memoryUsage().arrayBuffers;
+		for (let index = 0; index < 8; index++) binaryCodec.encode(frame);
+		// Estimated by its parts alone, it fell short by its fields and doubled: four frames.
+		expect((process.memoryUsage().arrayBuffers - before) / 8).toBeLessThan(1.5 * length);
+	});
+
+	it("allocates about one frame for a text that changes density: ASCII, then three-byte (review of 35496c9c8)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const value = JSON.stringify({ en: "a".repeat(524_288), zh: "源".repeat(524_288) });
+		const frame: Message = {
+			kind: "bound",
+			holds: [{ hold: 0, granted: [], members: [{ member: 0, value }], failed: [] }],
+		};
+		const length = binaryCodec.encode(frame).byteLength;
+		gc();
+		const before = process.memoryUsage().arrayBuffers;
+		for (let index = 0; index < 4; index++) binaryCodec.encode(frame);
+		// Reserved at the density of its ASCII half, the three-byte half fell short again and again: 4.4 frames.
+		expect((process.memoryUsage().arrayBuffers - before) / 4).toBeLessThan(1.6 * length);
+	});
+
+	it("allocates about one frame for several long two-byte texts in one message (review of 3b9a00775)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const value = JSON.stringify("é".repeat(65_536));
+		const members = Array.from({ length: 4 }, (_, member) => ({ member, value }));
+		const frame: Message = { kind: "bound", holds: [{ hold: 0, granted: [], members, failed: [] }] };
+		const length = binaryCodec.encode(frame).byteLength;
+		gc();
+		const before = process.memoryUsage().arrayBuffers;
+		for (let index = 0; index < 4; index++) binaryCodec.encode(frame);
+		// Each text falling short on its own copied the frame so far again: 3.8 frames.
+		expect((process.memoryUsage().arrayBuffers - before) / 4).toBeLessThan(1.6 * length);
+	});
+
+	it("allocates no more than the base for a state of 256 failed members with 1 KiB errors (review of 98a93c706)", () => {
+		const gc = runInNewContext("gc") as () => void;
+		const failed = Array.from({ length: 256 }, (_, member) => ({
+			member,
+			error: {
+				kind: "plugin" as const,
+				code: "ELOAD",
+				message: `could not load member ${member}`,
+				details: { reason: `failed to parse schema at ${"segment/".repeat(120)}${member}` },
+			},
+		}));
+		const frame: Message = { kind: "state", holds: [{ hold: 1, members: [], retired: [], failed }] };
+		const length = binaryCodec.encode(frame).byteLength;
+		gc();
+		const before = process.memoryUsage().arrayBuffers;
+		for (let index = 0; index < 4; index++) binaryCodec.encode(frame);
+		// Grown by exactly each error once sized, the frame so far was copied 256 times: 31 frames (the base 4.4; the
+		// errors are not estimated, so a shortfall doubles).
+		expect((process.memoryUsage().arrayBuffers - before) / 4).toBeLessThan(4.5 * length);
+	});
+
+	it("encodes a failure whose error is null or missing as the base did: the estimate reads no error (review of 46f7f5f2e)", () => {
+		const state = (error: unknown, ops: string): Message => ({
+			kind: "state",
+			// Any JSON may come from a peer there (the schema's unknown), decoded by the text codec as it is.
+			holds: [
+				{
+					hold: 1,
+					members: ops === "" ? [] : [{ member: 1, ops }],
+					retired: [],
+					failed: [{ member: 0, error: error as never }],
+				},
+			],
+		});
+		const nullError = [6, 1, 1, 0, 2, 0, 29, ...new TextEncoder().encode('{"kind":"chord","error":null}')];
+		expect([...binaryCodec.encode(state({ kind: "chord", error: null }, ""))]).toEqual(nullError);
+		expect(binaryCodec.decode(binaryCodec.encode(state({ kind: "chord" }, "")))).toEqual(
+			state({ kind: "chord" }, ""),
+		);
+		// Past the kept buffer too (a buffer of its own, estimated).
+		const large = state({ kind: "chord", error: null }, JSON.stringify("x".repeat(20_000)));
+		const decoded = binaryCodec.decode(binaryCodec.encode(large)) as Extract<Message, { kind: "state" }>;
+		expect(decoded.holds[0]!.failed).toEqual([{ member: 0, error: { kind: "chord", error: null } }]);
 	});
 
 	it("refuses invalid UTF-8 in strings", () => {
@@ -591,8 +823,8 @@ describe("the text codec", () => {
 		expect(text({ kind: "release", hold: 3 })).toBe('["R",3]');
 		expect(text({ kind: "call", call: 1, hold: 0, method: 2 })).toBe('["c",1,0,2]');
 		const members = [{ member: 0, value: "5" }];
-		expect(text({ kind: "bound", holds: [{ hold: 0, variant: 1, members, failed: [] }] })).toBe(
-			'["b",[[0,1,[[0,[0,5]]]]]]',
+		expect(text({ kind: "bound", holds: [{ hold: 0, granted: [1, 3], members, failed: [] }] })).toBe(
+			'["b",[[0,[1,3],[[0,[0,5]]]]]]',
 		);
 		expect(text({ kind: "retry", hold: 2, hops: 16 })).toBe('["T",2,16]');
 		expect(text({ kind: "loading", hold: 2 })).toBe('["l",2]');
@@ -754,9 +986,63 @@ describe("the binary codec's strings", () => {
 				{ member: 0, value: jsonPart("€".repeat(length)) },
 				{ member: 1, value: "1" },
 			];
-			const message: Message = { kind: "bound", holds: [{ hold: 1, variant: 0, members, failed: [] }] };
+			const message: Message = { kind: "bound", holds: [{ hold: 1, granted: [], members, failed: [] }] };
 			expect(plain(binaryCodec.decode(binaryCodec.encode(message)))).toEqual(message);
 		}
+	});
+});
+
+describe("the binary codec's medium strings", () => {
+	/** A result message as bytes, built by hand: kind, call, payload flags, the part's doubled length, its UTF-8. */
+	const expected = (text: string): number[] => {
+		const bytes = new TextEncoder().encode(text);
+		const prefix: number[] = [];
+		for (let rest = bytes.byteLength * 2; ; rest = Math.floor(rest / 0x80)) {
+			if (rest < 0x80) {
+				prefix.push(rest);
+				break;
+			}
+			prefix.push((rest % 0x80) | 0x80);
+		}
+		return [8, 0, 1, ...prefix, ...bytes];
+	};
+
+	it("are written behind their minimal length, at every length around a prefix's growth and the ASCII bound", () => {
+		const lengths = [...Array.from({ length: 140 }, (_, index) => index), 4_094, 4_095];
+		const texts = [
+			...lengths.map((length) => "x".repeat(length)),
+			// Below `LONG` (4,096 units) with the "é": from there a fixed five-byte prefix.
+			...lengths.filter((length) => length < 4_095).map((length) => `${"x".repeat(length)}é`),
+			...[2_729, 2_730, 2_731, 2_732, 4_095].map((length) => "€".repeat(length)),
+			"\ud800 a lone surrogate",
+		];
+		for (const text of texts) {
+			expect([...binaryCodec.encode({ kind: "result", call: 0, value: text })]).toEqual(expected(text));
+		}
+	});
+
+	it("cost no more than a long one's per byte: 4,095 ASCII bytes take less than twice as long as 4,096", () => {
+		const encode = (bytes: number) => {
+			const message: Message = { kind: "result", call: 0, value: "a".repeat(bytes) };
+			const start = performance.now();
+			for (let index = 0; index < 2_000; index++) binaryCodec.encode(message);
+			return performance.now() - start;
+		};
+		// Warmed up first: while the encoder is still being compiled the two paths tier up at different times, and the
+		// ratio then says when, not what they cost (2.0 to 2.2 cold, 1.1 warm).
+		for (let round = 0; round < 10; round++) {
+			encode(4_095);
+			encode(4_096);
+		}
+		const medium: number[] = [];
+		const long: number[] = [];
+		for (let round = 0; round < 11; round++) {
+			medium.push(encode(4_095));
+			long.push(encode(4_096));
+		}
+		const median = (list: number[]) => list.sort((a, b) => a - b)[5]!;
+		// Unit by unit (a loop over the text) this was 3 times as long; with an encoded copy 1.3 times.
+		expect(median(medium) / median(long)).toBeLessThan(2);
 	});
 });
 

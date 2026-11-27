@@ -8,7 +8,7 @@ import type { Duplex } from "node:stream";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT, statusOf, whenLive } from "@p2/app/v1";
 import { WebSocket, WebSocketServer } from "ws";
-import { Chat } from "../../plugins/chat/contract.ts";
+import { CHAT_PARTICIPANT, Chat } from "../../plugins/chat/contract.ts";
 import { Devices } from "../../plugins/devices/contract.ts";
 import { ProviderLogin } from "../../plugins/login/contract.ts";
 import {
@@ -19,7 +19,8 @@ import {
 	writeRadiusConfig,
 } from "../../plugins/radius/brain.ts";
 import {
-	encodeRelayUser,
+	encodeRelayHeader,
+	RELAY_GUEST_HEADER,
 	RELAY_ORIGIN_HEADER,
 	RELAY_SECRET_HEADER,
 	RELAY_SHELL_HEADER,
@@ -27,13 +28,13 @@ import {
 	RelayAccess,
 } from "../../plugins/radius/relay-access.ts";
 import { radiusStatusText } from "../../plugins/radius/server.ts";
-import { Sessions } from "../../plugins/sessions/contract.ts";
-import { Sharing } from "../../plugins/sharing/contract.ts";
+import { SESSIONS_OWNER, Sessions } from "../../plugins/sessions/contract.ts";
+import { GuestPresence, ShareInvite, Sharing } from "../../plugins/sharing/contract.ts";
 import { Terminals } from "../../plugins/terminals/contract.ts";
 import { radiusTransport } from "../../src/hosts/tui-radius.ts";
 import { Access } from "../../src/runtime/access.ts";
 import { ServerNameSettings } from "../../src/runtime/server-name.ts";
-import { clientHost, expectChord, holdIn, http, localOwner, poll, until } from "./helpers.ts";
+import { clientHost, expectChord, holdWith, http, localOwner, poll, until } from "./helpers.ts";
 import { radiusFixture as fixture, OWNER, PUBLIC_ORIGIN } from "./radius-fixture.ts";
 
 test(
@@ -84,10 +85,10 @@ test(
 		const socket = new WebSocket(`ws://127.0.0.1:${f.server.port}/chord`, { headers: marked });
 		const browser = clientHost(socket);
 		t.after(() => browser.close(BACKGROUND_CONTEXT));
-		await holdIn(browser, Access, {}, "owner");
+		await holdWith(browser, Access, {});
 		const login = browser.hold(ProviderLogin, {}, BACKGROUND_CONTEXT);
 		await whenLive(login);
-		assert.equal(login.variant, "owner");
+		assert.equal(login.state.value.kind, "live");
 		const devices = browser.hold(Devices, {}, BACKGROUND_CONTEXT);
 		await expectChord(devices.token(BACKGROUND_CONTEXT), "forbidden");
 		assert.equal((await http(f.server.port, "/owner-token", { headers: marked })).status, 403);
@@ -113,7 +114,7 @@ test(
 		// Radius needs no local credential, and loopback alone is nobody.
 		assert.equal((await http(f.server.port, "/probe")).status, 403);
 		// A plugin's own WebSocket upgrade (a terminal's byte channel) admits the relayed owner too.
-		const session = await (await holdIn(browser, Sessions, {}, "owner")).create(
+		const session = await (await holdWith(browser, Sessions, {}, ...SESSIONS_OWNER)).create(
 			{ cwd: f.directory },
 			BACKGROUND_CONTEXT,
 		);
@@ -144,9 +145,10 @@ test("Radius-relayed artifact previews may sit below the Radius shell's frame", 
 	const f = await fixture(t);
 	const owner = clientHost(await localOwner(f.server));
 	t.after(() => owner.close(BACKGROUND_CONTEXT));
-	const session = (await (await holdIn(owner, Sessions, {}, "owner")).create({ cwd: f.directory }, BACKGROUND_CONTEXT))
-		.id;
-	const chat = await holdIn(owner, Chat, { session, conversation: 1 }, "participant");
+	const session = (
+		await (await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER)).create({ cwd: f.directory }, BACKGROUND_CONTEXT)
+	).id;
+	const chat = await holdWith(owner, Chat, { session, conversation: 1 }, ...CHAT_PARTICIPANT);
 	await chat.send({ text: "artifact", requestId: "artifact" }, BACKGROUND_CONTEXT);
 	await until(chat.view, (view) =>
 		(view?.entries ?? []).some((entry) =>
@@ -173,7 +175,7 @@ test(
 		const owner = clientHost(await localOwner(f.server));
 		t.after(() => owner.close(BACKGROUND_CONTEXT));
 		const session = (
-			await (await holdIn(owner, Sessions, {}, "owner")).create({ cwd: f.directory }, BACKGROUND_CONTEXT)
+			await (await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER)).create({ cwd: f.directory }, BACKGROUND_CONTEXT)
 		).id;
 		await writeFile(join(f.directory, "note.txt"), "hello");
 		const path = `/workspace-file?${new URLSearchParams({ session, conversation: "1", path: "note.txt" })}`;
@@ -239,7 +241,7 @@ test("Radius admits people sessions are shared with by email, across organizatio
 	assert(config);
 	const owner = clientHost(await localOwner(f.server));
 	t.after(() => owner.close(BACKGROUND_CONTEXT));
-	const sessions = await holdIn(owner, Sessions, {}, "owner");
+	const sessions = await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER);
 	const first = await sessions.create({ cwd: f.directory, title: "First" }, BACKGROUND_CONTEXT);
 	const second = await sessions.create({ cwd: f.directory, title: "Second" }, BACKGROUND_CONTEXT);
 	const sharing = owner.hold(Sharing, { session: first.id }, BACKGROUND_CONTEXT);
@@ -278,18 +280,21 @@ test("Radius admits people sessions are shared with by email, across organizatio
 		[RELAY_SECRET_HEADER]: f.relay.secret,
 		[RELAY_ORIGIN_HEADER]: PUBLIC_ORIGIN,
 		[RELAY_SHELL_HEADER]: "https://radius.earendil.com",
-		[RELAY_USER_HEADER]: encodeRelayUser(user),
+		[RELAY_USER_HEADER]: encodeRelayHeader(user),
 		Origin: PUBLIC_ORIGIN,
 	});
 	const socket = new WebSocket(`ws://127.0.0.1:${f.server.port}/chord`, { headers: as(ann) });
 	const browser = clientHost(socket);
 	t.after(() => browser.close(BACKGROUND_CONTEXT));
-	const access = await holdIn(browser, Access, {}, "guest");
+	const access = await holdWith(browser, Access, {}, "grant");
 	const grant = await until(access.grant, Boolean);
 	assert.deepEqual(grant?.sessions, { [first.id]: "view", [second.id]: "full" });
 	assert.equal(grant?.session, second.id, "she lands in the session shared last");
 	assert.equal(grant?.email, "annexample@gmail.com");
-	const listed = await until((await holdIn(browser, Sessions, {}, "guest")).sessions, (value) => value?.length === 2);
+	const listed = await until(
+		(await holdWith(browser, Sessions, {}, "sessions")).sessions,
+		(value) => value?.length === 2,
+	);
 	assert.deepEqual(listed?.map((session) => session.id).sort(), [first.id, second.id].sort());
 	await assert.rejects(whenLive(browser.hold(Sharing, { session: first.id }, BACKGROUND_CONTEXT)), /owner-only/);
 	// Links are for browsers on this device or a tunnel; Radius users have no cookie to join with.
@@ -307,6 +312,113 @@ test("Radius admits people sessions are shared with by email, across organizatio
 	await secondSharing.remove({ guestId: grant?.id ?? "" }, BACKGROUND_CONTEXT);
 	await poll(() => f.radius.shares.at(-1)?.length === 0, 10_000, "Radius forgets her");
 });
+
+test(
+	"Radius admits link holders through invites while the brain renews their admissions",
+	{ timeout: 30_000 },
+	async (t) => {
+		const f = await fixture(t);
+		const owner = clientHost(await localOwner(f.server));
+		t.after(() => owner.close(BACKGROUND_CONTEXT));
+		const sessions = await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER);
+		const session = await sessions.create({ cwd: f.directory, title: "Shared" }, BACKGROUND_CONTEXT);
+		const invites = owner.hold(ShareInvite, { session: session.id }, BACKGROUND_CONTEXT);
+		await whenLive(invites);
+		assert.equal(await until(invites.invites, (value) => value !== undefined), false);
+		const before = await invites.invite({ mode: "view", validFor: 3600 }, BACKGROUND_CONTEXT);
+		assert.equal(before.expiresAt, null, "before the brain knows its Radius origin, the link itself");
+		assert.match(before.url, /^http:\/\/127\.0\.0\.1:\d+\/join\//);
+		// Once the brain knows its Radius origin (the owner opened it there), a copied link is an invite.
+		assert.equal((await f.radius.response(f.open("/probe"))).status, 200);
+		await poll(async () => (await readRadiusConfig(f.directory))?.publicOrigin === PUBLIC_ORIGIN);
+		assert.equal(await until(invites.invites, Boolean), true, "the owner now picks how long it is valid");
+		const link = await invites.invite({ mode: "view", validFor: 86_400 }, BACKGROUND_CONTEXT);
+		assert.equal(link.url, `${PUBLIC_ORIGIN}/__join#token-${f.radius.invites.length}`);
+		assert.equal(link.expiresAt, Date.parse("2030-01-01T00:15:00.000Z"));
+		const linkId = f.radius.invites.at(-1)?.ref ?? "";
+		assert.deepEqual(f.radius.invites.at(-1), { ref: linkId, path: "/join/radius", ttl_seconds: 86_400 });
+		const sharing = owner.hold(Sharing, { session: session.id }, BACKGROUND_CONTEXT);
+		assert.equal((await until(sharing.links, (links) => links?.length === 1))?.[0]?.mode, "view");
+
+		// The brain passes the guest Radius admitted on, on its UI only.
+		const admission = randomUUID();
+		const guest = { kind: "guest" as const, id: admission, invite: linkId };
+		assert.deepEqual(
+			JSON.parse((await f.radius.body(f.open("/probe", { principal: guest }))).toString()).origin.relayGuest,
+			{ admission, invite: linkId },
+		);
+		for (const rejected of [
+			f.open("/probe", { principal: guest, forward: "abc" }),
+			f.open("/probe", { principal: { kind: "guest", id: admission } }),
+		])
+			await poll(() =>
+				f.radius.controls.some(
+					(message) => message.type === "connection_close" && message.connection_id === rejected,
+				),
+			);
+
+		const as = (value: { admission: string; invite: string }, extra: Record<string, string> = {}) => ({
+			[RELAY_SECRET_HEADER]: f.relay.secret,
+			[RELAY_ORIGIN_HEADER]: PUBLIC_ORIGIN,
+			[RELAY_SHELL_HEADER]: "https://radius.earendil.com",
+			[RELAY_GUEST_HEADER]: encodeRelayHeader(value),
+			Origin: PUBLIC_ORIGIN,
+			...extra,
+		});
+		const headers = as({ admission, invite: linkId });
+		assert.equal((await http(f.server.port, "/", { headers })).status, 403, "not before joining");
+		const page = await http(f.server.port, "/join/radius", { headers });
+		assert.equal(page.status, 200);
+		assert.match(page.body, /Shared/);
+		const joined = await http(f.server.port, "/join", {
+			method: "POST",
+			headers: { ...headers, "Content-Type": "application/json" },
+			body: JSON.stringify({ token: "radius", name: "Gus" }),
+		});
+		assert.equal(joined.status, 200);
+		assert.deepEqual(JSON.parse(joined.body), { session: session.id });
+		assert.equal(joined.headers["set-cookie"], undefined, "Radius admits the guest, not a cookie");
+		// Both a user and a guest, or a guest of another admission, is nobody.
+		assert.equal(
+			(
+				await http(f.server.port, "/probe", {
+					headers: as(
+						{ admission, invite: linkId },
+						{ [RELAY_USER_HEADER]: encodeRelayHeader({ id: "u", email: "e@x.io" }) },
+					),
+				})
+			).status,
+			403,
+		);
+		assert.equal(
+			(await http(f.server.port, "/", { headers: as({ admission: randomUUID(), invite: linkId }) })).status,
+			403,
+		);
+
+		const socket = new WebSocket(`ws://127.0.0.1:${f.server.port}/chord`, { headers });
+		const browser = clientHost(socket);
+		t.after(() => browser.close(BACKGROUND_CONTEXT));
+		const access = await holdWith(browser, Access, {}, "grant");
+		const grant = await until(access.grant, Boolean);
+		assert.equal(grant?.id, admission);
+		assert.equal(grant?.name, "Gus");
+		assert.deepEqual(grant?.sessions, { [session.id]: "view" });
+		// While the guest's page is open, the brain renews the admission.
+		const presence = browser.hold(GuestPresence, {}, BACKGROUND_CONTEXT);
+		await whenLive(presence);
+		await poll(() => f.radius.renewals.at(-1)?.includes(admission) === true, 10_000, "the brain renews the guest");
+		assert.deepEqual(
+			(await until(sharing.guests, (guests) => guests?.length === 1))?.map(({ id, name }) => ({ id, name })),
+			[{ id: admission, name: "Gus" }],
+		);
+
+		// Resetting the link ends the guest's access at once, whatever Radius still admits, and withdraws its invites.
+		await sharing.link({ mode: "view", reset: true }, BACKGROUND_CONTEXT);
+		assert.deepEqual(f.radius.withdrawals, [linkId]);
+		await poll(() => socket.readyState === WebSocket.CLOSED, 10_000, "the guest's old principal ended");
+		assert.equal((await http(f.server.port, "/join/radius", { headers })).status, 410);
+	},
+);
 
 test(
 	"Radius HTTP bodies follow credit in both directions; uplink congestion loses no data",
@@ -450,7 +562,7 @@ test("Radius v5 gives each WebSocket channel its own socket to the relay", { tim
 	const channel = await f.radius.channel(id);
 	const browser = clientHost(channel);
 	t.after(() => browser.close(BACKGROUND_CONTEXT));
-	const owner = await holdIn(browser, Access, {}, "owner");
+	const owner = await holdWith(browser, Access, {});
 	// Nothing of the channel crossed the host socket.
 	assert.equal(f.radius.frames.filter((frame) => frame.id === id).length, 0);
 	// HTTP stays on the host socket.
@@ -813,7 +925,7 @@ test(
 
 test("The owner's rename of the server reaches Radius while connected", { timeout: 30_000 }, async (t) => {
 	const f = await fixture(t);
-	const names = await holdIn(clientHost(await localOwner(f.server)), ServerNameSettings, {}, "owner");
+	const names = await holdWith(clientHost(await localOwner(f.server)), ServerNameSettings, {});
 	await names.rename({ name: "Studio" }, BACKGROUND_CONTEXT);
 	await poll(() => f.radius.names.at(-1) === "Studio", 10_000, "Radius learns the name");
 	await names.rename({ name: null }, BACKGROUND_CONTEXT);

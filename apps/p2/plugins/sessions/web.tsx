@@ -8,9 +8,11 @@ import {
 	contribute,
 	defineFacet,
 	grantMode,
-	type HeldIn,
-	keptIn,
-	liveIn,
+	kept,
+	keptWith,
+	live,
+	liveWith,
+	type Ref,
 	whenLive,
 } from "@p2/app/v1";
 import {
@@ -41,10 +43,16 @@ import {
 	useRoute,
 	useSheet,
 } from "@p2/app/v1/web";
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Envs } from "../envs/contract.ts";
 import { DirectoryPicker, directoryPickerLayer } from "../envs/contract.web.tsx";
-import { type ArchivedProject, type Project, type ProjectPlace, Projects } from "../projects/contract.ts";
+import {
+	type ArchivedProject,
+	type Project,
+	ProjectCoordinators,
+	type ProjectPlace,
+	Projects,
+} from "../projects/contract.ts";
 import { SidebarRollups } from "../rollups/contract.ts";
 import { Search, SessionReads } from "../search/contract.ts";
 import { SessionStatus } from "../status/contract.ts";
@@ -54,7 +62,14 @@ import { SessionTree } from "../tree/contract.ts";
 import { archiveSubagent, stopRuns } from "./agent-actions.ts";
 import { BRANCH_SHEET, BranchSheet } from "./BranchSheet.tsx";
 import { SESSION_COMMANDS, SESSION_PAGES, SESSION_SEARCH } from "./commands.tsx";
-import { type Operation, type Session, Sessions, SidebarSettings, type SidebarWindow } from "./contract.ts";
+import {
+	type Operation,
+	SESSIONS_OWNER,
+	type Session,
+	Sessions,
+	SidebarSettings,
+	type SidebarWindow,
+} from "./contract.ts";
 import { type DrawerRows, DrawerRowsContext } from "./contract.web.tsx";
 import {
 	locatingProject,
@@ -86,13 +101,15 @@ import { NEW_PROJECT, NewProjectSheet, newProjectLayer, PROJECT_FOLDER, placeOf 
 import { publishPage, usePageData } from "./sidebar/page-data.ts";
 import { type CodeSource, RollupSheet } from "./sidebar/RollupSheet.tsx";
 import { folderName } from "./sidebar/Row.tsx";
-import { SidebarView, useNow } from "./sidebar/Sidebar.tsx";
+import { type Coordinators, SidebarView, useNow } from "./sidebar/Sidebar.tsx";
 
 /** Closes the top layer only (a sheet), keeping those below it (a phone's drawer). */
 const closeTopLayer = () => void getNavigation().close((route) => ({ ...route, layers: route.layers.slice(0, -1) }));
 
 /** No archived projects (one value, so the page data keeps its identity across renders). */
 const NO_ARCHIVED: readonly ArchivedProject[] = [];
+const NO_OPENING: ReadonlySet<string> = new Set();
+const NO_COORDINATORS: Readonly<Record<string, string>> = {};
 
 /** The projects and the sessions' projects as the sidebar shows them: as known, with the owner's moves in flight. */
 type ProjectsShown = {
@@ -218,13 +235,13 @@ function useSidebarData() {
 	const host = useHost();
 	const nav = useNavigation();
 	const service = useObject(Sessions, {});
-	const catalog = liveIn(service, "owner");
+	const catalog = liveWith(service, ...SESSIONS_OWNER);
 	// As the server last said (kept across starts): unread marks and search hold without waiting for Access.
 	const owner = useOwner();
-	const status = keptIn(useObject(SessionStatus, {}), "reader");
-	const agents = keptIn(useObject(Subagents, {}), "reader");
+	const status = keptWith(useObject(SessionStatus, {}), "statuses");
+	const agents = keptWith(useObject(Subagents, {}), "children");
 	const { fail, focusWhenOpen } = useComposerState();
-	const [list, edit] = useOptimisticCall(useReadable(keptIn(service, "owner", "guest")?.sessions), applyRow, fail);
+	const [list, edit] = useOptimisticCall(useReadable(keptWith(service, "sessions")?.sessions), applyRow, fail);
 	const statuses = useReadable(status?.statuses);
 	// A subagent's Archive hides it at once; the worker's report follows (or the call fails and it shows again).
 	const [children, archiving] = useOptimisticCall(useReadable(agents?.children), applyArchived, fail);
@@ -234,7 +251,7 @@ function useSidebarData() {
 	const reads = useReadable(marks?.reads);
 	// Dismissing a failed operation removes its line at once.
 	const [operations, dismissing] = useOptimisticCall(
-		useReadable(keptIn(service, "owner")?.operations) ?? [],
+		useReadable(keptWith(service, ...SESSIONS_OWNER)?.operations) ?? [],
 		(list, operation: string) => list.filter((each) => each.id !== operation),
 		fail,
 	);
@@ -267,7 +284,7 @@ function useSidebarData() {
 	// The projects rollup reads the projects and the sessions' projects (`Projects`, from the projects plugin); moving a
 	// session or a project shows at once.
 	const projectsHeld = useObject(Projects, owner ? {} : undefined);
-	const projectsKept = keptIn(projectsHeld, "owner");
+	const projectsKept = kept(projectsHeld);
 	const knownProjects = useReadable(projectsKept?.projects);
 	const knownMemberships = useReadable(projectsKept?.sessions);
 	const archivedProjects = useReadable(projectsKept?.archived) ?? NO_ARCHIVED;
@@ -279,9 +296,9 @@ function useSidebarData() {
 	const { projects, memberships } = shownProjects;
 	/** Shows `guess` at once and calls `call` with the live projects; offline the call fails, rolling it back. */
 	const changeProjects = useCallback(
-		(guess: ProjectGuess, call: (live: HeldIn<typeof Projects, "owner">) => Promise<unknown>) =>
+		(guess: ProjectGuess, call: (live: Ref<typeof Projects>) => Promise<unknown>) =>
 			guessProjects(guess, async () => {
-				const live = liveIn(projectsHeld, "owner");
+				const live = liveWith(projectsHeld);
 				if (!live) throw new Error("Not connected");
 				await call(live);
 			}),
@@ -311,7 +328,7 @@ function useSidebarData() {
 		[projects, memberships, envs],
 	);
 	const settingsHeld = useObject(SidebarSettings, owner ? {} : undefined);
-	const settingsKept = keptIn(settingsHeld, "owner");
+	const settingsKept = kept(settingsHeld);
 	const order = useReadable(settingsKept?.order);
 	const windows = useReadable(settingsKept?.windows);
 	const collapsed = useReadable(settingsKept?.collapsed);
@@ -325,9 +342,9 @@ function useSidebarData() {
 	);
 	/** Shows `change` at once and calls `call` with the live settings; offline the call fails, rolling it back. */
 	const changeSettings = useCallback(
-		(change: Partial<Settings>, call: (live: HeldIn<typeof SidebarSettings, "owner">) => Promise<unknown>) =>
+		(change: Partial<Settings>, call: (live: Ref<typeof SidebarSettings>) => Promise<unknown>) =>
 			guessSettings(change, async () => {
-				const live = liveIn(settingsHeld, "owner");
+				const live = liveWith(settingsHeld);
 				if (!live) throw new Error("Not connected");
 				await call(live);
 			}),
@@ -335,7 +352,7 @@ function useSidebarData() {
 	);
 	// Rollups made from code (plugins/rollups), before the Archive until the owner moves them.
 	const rollupsHeld = useObject(SidebarRollups, owner ? {} : undefined);
-	const entries = useReadable(keptIn(rollupsHeld, "owner")?.rollups);
+	const entries = useReadable(keptWith(rollupsHeld, "rollups")?.rollups);
 	const rollups = useMemo(() => {
 		const custom = (entries ?? []).map(customRollup);
 		const archive = ROLLUPS.filter((rollup) => rollup.key === ARCHIVE);
@@ -384,7 +401,7 @@ function useSidebarData() {
 	);
 	// Who may act on a session's agents: the owner, and a guest with read/write access to it.
 	const access = useObject(Access, {});
-	const guest = useReadable(keptIn(access, "guest")?.grant);
+	const guest = useReadable(keptWith(access, "grant")?.grant);
 	const writable = useCallback((session: string) => owner || grantMode(guest, session) === "full", [owner, guest]);
 	// An item's Cancel: its runs stop; the inputs they had queued wait as drafts in their conversations.
 	const onCancel = useCallback(
@@ -407,13 +424,13 @@ function useSidebarData() {
 		[archiving, host],
 	);
 	const searchHeld = useObject(Search, owner ? {} : undefined);
-	const search = liveIn(searchHeld, "owner");
+	const search = live(searchHeld);
 	// The owner's lists keep their search field while offline; a search waits for the connection (the page skips it).
 	const onSearch = useMemo(
 		() =>
 			searchHeld &&
 			((query: string, archived: boolean, sessions: readonly string[]) => {
-				const live = liveIn(searchHeld, "owner");
+				const live = liveWith(searchHeld);
 				if (!live) return Promise.reject(new Error("Not connected"));
 				return live.search({ query, archived, sessions: [...sessions] }, BACKGROUND_CONTEXT);
 			}),
@@ -474,17 +491,63 @@ function Sidebar() {
 		[],
 	);
 	const drawerRows = useMemo<DrawerRows>(() => ({ sessions: rows, listApart }), [rows, listApart]);
-	const rolledUp = useMemo(() => {
-		const hidden = new Set(Object.values(apart).flat());
-		return hidden.size ? rows.filter((row) => !hidden.has(row.id)) : rows;
-	}, [rows, apart]);
+	// Each live project's coordinator: its project's row stands for it, so it is left out of the rollups too. One
+	// restored on its own while its project is archived has no row of its own: it shows as any member does then, in no
+	// project.
+	const coordinatorsHeld = useObject(ProjectCoordinators, owner ? {} : undefined);
+	const coordinatorSessions = useReadable(kept(coordinatorsHeld)?.sessions);
 	const { onSearch, projects } = data;
-	// The owner's sessions are grouped by project: until the projects are known, they would all show without one, then
-	// jump into their projects.
+	const rolledUp = useMemo(() => {
+		const standing = (projects ?? []).flatMap((project) => coordinatorSessions?.[project.name] ?? []);
+		const hidden = new Set([...Object.values(apart).flat(), ...standing]);
+		return hidden.size ? rows.filter((row) => !hidden.has(row.id)) : rows;
+	}, [rows, apart, coordinatorSessions, projects]);
+	// The owner's sessions are grouped by project: until the projects and their coordinators are known, they would all
+	// show without one (a coordinator among its project's sessions), then jump into their places.
+	const projectsUnknown = owner && (projects === undefined || coordinatorSessions === undefined);
 	const sections = useMemo(
-		() => (owner && projects === undefined ? [] : sectionsOf(rollups, rolledUp, context, view)),
-		[owner, projects, rollups, rolledUp, context, view],
+		() => (projectsUnknown ? [] : sectionsOf(rollups, rolledUp, context, view)),
+		[projectsUnknown, rollups, rolledUp, context, view],
 	);
+	// A project's name opens its coordinator; the server makes or restores it first when it has to (one open per project
+	// at a time, shown on its row). The page goes there only if the reader has not gone elsewhere meanwhile.
+	const [opening, setOpening] = useState<ReadonlySet<string>>(NO_OPENING);
+	const openingNow = useRef<ReadonlySet<string>>(NO_OPENING);
+	const markOpening = useCallback((project: string, on: boolean) => {
+		const next = new Set(openingNow.current);
+		if (on) next.add(project);
+		else next.delete(project);
+		openingNow.current = next;
+		setOpening(next);
+	}, []);
+	const coordinators = useMemo((): Coordinators | undefined => {
+		if (!owner) return undefined;
+		const byId = new Map(rows.map((row) => [row.id, row]));
+		const rowOf = (project: string) => {
+			const id = coordinatorSessions?.[project];
+			return id === undefined ? undefined : byId.get(id);
+		};
+		return {
+			rowOf,
+			opening,
+			onOpen: (project) => {
+				const row = rowOf(project);
+				if (row && row.archivedAt === null) return onOpen(row.id);
+				const live = liveWith(coordinatorsHeld);
+				if (!live) return fail(new Error("Not connected"));
+				if (openingNow.current.has(project)) return;
+				markOpening(project, true);
+				const from = getNavigation().route;
+				void live
+					.open({ name: project }, BACKGROUND_CONTEXT)
+					.then(({ id }) => {
+						if (getNavigation().route === from) onOpen(id);
+					})
+					.catch(fail)
+					.finally(() => markOpening(project, false));
+			},
+		};
+	}, [owner, coordinatorSessions, rows, opening, coordinatorsHeld, onOpen, fail, markOpening]);
 	useEffect(() => {
 		if (list) rememberMains(list);
 	}, [list]);
@@ -510,11 +573,11 @@ function Sidebar() {
 	// A branch's rename: a reference of its own (the change also reaches the session row).
 	const host = useHost();
 	const withTree = useCallback(
-		(session: string, action: (tree: HeldIn<typeof SessionTree, "owner">) => Promise<unknown>) => {
+		(session: string, action: (tree: Ref<typeof SessionTree>) => Promise<unknown>) => {
 			const held = host.hold(SessionTree, { session }, BACKGROUND_CONTEXT);
 			return whenLive(held)
 				.then(() => {
-					const tree = liveIn(held, "owner");
+					const tree = live(held);
 					if (!tree) throw new Error("Only the owner changes branches");
 					return action(tree);
 				})
@@ -590,9 +653,11 @@ function Sidebar() {
 				view,
 				// A project's list and the sessions without one wait for the projects too, a rollup made from code for the
 				// rollups: before them they would show the wrong sessions, or say the list is gone.
+				// Every owner's list waits for the coordinators too: until then a coordinator would show as a session.
 				loading: (page) =>
 					!list ||
-					((page === OTHER || page.startsWith("project:")) && owner && projects === undefined) ||
+					(owner && coordinatorSessions === undefined) ||
+					((page === OTHER || page.startsWith("project:")) && projectsUnknown) ||
 					(page.startsWith("rollup:") && entries === undefined),
 				connected,
 				onOpen,
@@ -604,6 +669,7 @@ function Sidebar() {
 				...(onSearch ? { onSearch } : {}),
 				...(ownerNewIn ? { onNewIn: ownerNewIn } : {}),
 				archivedProjects,
+				coordinators: coordinatorSessions ?? NO_COORDINATORS,
 				...(owner ? { onAssign, onMoveProject } : {}),
 			}),
 		[
@@ -613,7 +679,8 @@ function Sidebar() {
 			view,
 			list,
 			owner,
-			projects,
+			coordinatorSessions,
+			projectsUnknown,
 			entries,
 			connected,
 			onOpen,
@@ -636,7 +703,7 @@ function Sidebar() {
 	const codeOf = (key: string): CodeSource | undefined => {
 		const entry = entries?.find((each) => customKey(each.definition.key) === key);
 		if (!entry) return undefined;
-		const live = liveIn(rollupsHeld, "owner");
+		const live = liveWith(rollupsHeld, "rollups");
 		const refresh = () => {
 			if (!live) return;
 			setRefreshing(key);
@@ -657,8 +724,8 @@ function Sidebar() {
 	// A project's Change default location… (project-commands.tsx): the picker, then the project's new default place.
 	const projectLocation = useSheet(PROJECT_LOCATION);
 	const locating = projectLocation && context.projects.find((project) => project.name === locatingProject());
-	const withProjects = (action: (live: HeldIn<typeof Projects, "owner">) => Promise<unknown>) => {
-		const live = projectsHeld && liveIn(projectsHeld, "owner");
+	const withProjects = (action: (live: Ref<typeof Projects>) => Promise<unknown>) => {
+		const live = liveWith(projectsHeld);
 		return live ? action(live).catch(fail) : fail(new Error("Not connected"));
 	};
 	const newProject = useSheet(NEW_PROJECT);
@@ -669,7 +736,7 @@ function Sidebar() {
 		void nav.push({ ...nav.route, layers: [...nav.route.layers, layer] });
 	};
 	const createProject = async (name: string, place: ProjectPlace) => {
-		const live = projectsHeld && liveIn(projectsHeld, "owner");
+		const live = liveWith(projectsHeld);
 		if (!live) throw new Error("Not connected");
 		await live.create({ name, place }, BACKGROUND_CONTEXT);
 	};
@@ -719,6 +786,7 @@ function Sidebar() {
 				onPage={openPage}
 				onCollapseSidebar={toggleSidebar}
 				{...(drop ? { drop } : {})}
+				{...(coordinators ? { coordinators } : {})}
 				headerActions={headerActions}
 				footerActions={actions}
 			/>
@@ -869,7 +937,7 @@ function MenuBadge() {
 /** The top bar's button that opens the Session sheet (the drawer renders the sheet, where the rows are). */
 function SessionOptions() {
 	const route = useRoute();
-	const rows = useReadable(useObject(Sessions, {}, { variant: "owner" })?.sessions);
+	const rows = useReadable(liveWith(useObject(Sessions, {}), ...SESSIONS_OWNER)?.sessions);
 	const session = rows?.find((row) => row.id === route.session);
 	if (!session || route.conversation !== session.main) return null;
 	return (

@@ -77,7 +77,7 @@ export type KnownApi =
 
 export type Api = KnownApi | (string & {});
 
-export type KnownImageApi = "openrouter-images";
+export type KnownImageApi = "openrouter-images" | "pi-image";
 
 export type ImageApi = KnownImageApi | (string & {});
 
@@ -391,6 +391,10 @@ export interface ClassifierOptions extends ProviderRequestOptions<ClassifierMode
 }
 
 export interface ImagesOptions extends ProviderRequestOptions<ImageModel<ImageApi>> {
+	/** Desired aspect ratio, e.g. `"1:1"`, `"16:9"`, `"4:3"`, `"9:16"`. Sent to the provider unchanged; supported values depend on the model. */
+	aspectRatio?: string;
+	/** Desired resolution, e.g. `"1K"`, `"2K"`, `"4K"`. Sent to the provider unchanged; supported values depend on the model. */
+	size?: string;
 	/**
 	 * Optional metadata to include in API requests.
 	 * Providers extract the fields they understand and ignore the rest.
@@ -496,6 +500,12 @@ export interface Usage {
 	 * providers that expose a reasoning breakdown; left undefined by providers that don't.
 	 */
 	reasoning?: number;
+	/**
+	 * Image output tokens, when the provider reports them. This is a subset of `output`,
+	 * like `reasoning`; the rest of `output` is text and reasoning. Left undefined by
+	 * providers that don't report the split.
+	 */
+	imageOutput?: number;
 	totalTokens: number;
 	cost: {
 		/** Catalog-derived input cost. */
