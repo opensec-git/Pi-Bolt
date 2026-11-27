@@ -17,13 +17,14 @@ OUT="$PIBOLT_WORK/tests/aot"
 mkdir -p "$OUT"
 
 tests=("$@")
-[ ${#tests[@]} -eq 0 ] && tests=(liveness.mjs mapset.mjs realms.mjs workers.mjs spread-loops.mjs number-encoding.mjs helper-calls.mjs callbacks.mjs methods.mjs dictionaries.mjs variables.mjs polymorphic.mjs strings.mjs unicode-regexps.mjs builtins.mjs declined.mjs deferred-builtins.mjs wide-constants.mjs intl-locales.mjs edge-cases.mjs sort-comparators.mjs json-stringify.mjs await-order.mjs string-or-array.mjs)
+[ ${#tests[@]} -eq 0 ] && tests=(liveness.mjs mapset.mjs realms.mjs workers.mjs workers-many.mjs spread-loops.mjs number-encoding.mjs helper-calls.mjs callbacks.mjs methods.mjs dictionaries.mjs variables.mjs polymorphic.mjs strings.mjs unicode-regexps.mjs builtins.mjs declined.mjs deferred-builtins.mjs wide-constants.mjs intl-locales.mjs edge-cases.mjs sort-comparators.mjs json-stringify.mjs await-order.mjs string-or-array.mjs)
 status=0
 for t in "${tests[@]}"; do
 	name=${t%.mjs}
 	extra=(); own=""
 	[ "$name" = realms ] && extra=(realms-mod.mjs)
 	[ "$name" = workers ] && extra=(workers-entry.mjs)
+	[ "$name" = workers-many ] && extra=(workers-many-entry.mjs)
 	"$STABLE" "$t" >"$OUT/$name.expected" 2>&1
 	# A plain bytecode build, run once, records the order functions are first called in: the AOT build lays code out by it.
 	"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" "$t" "${extra[@]}" --outfile "$OUT/$name-bytecode" >/dev/null 2>&1
@@ -72,6 +73,16 @@ for t in "${tests[@]}"; do
 			tail -8 "$OUT/$name-$mode.build" | cut -c1-300
 			tail -3 "$OUT/$name.$mode.err" | cut -c1-300
 			status=1
+		fi
+		# More workers than the static region has blocks for: those without one ran without the static heap (and the process did
+		# not abort, as it once did at the 14th).
+		if [ "$name" = workers-many ] && [ "$mode" != jit-on ]; then
+			if grep -q "no room for another realm's block" "$OUT/$name.$mode.err"; then
+				echo "PASS $name ($mode, workers without a block)"
+			else
+				echo "FAIL $name ($mode): no worker ran without a block"
+				status=1
+			fi
 		fi
 		if [ "$name" = workers ] && [ "$mode" = jit-off ]; then
 			if BUN_AOT=0 BUN_STATIC_HEAP_VERBOSE=1 "$OUT/$name-$mode" >"$OUT/$name.fallback" 2>"$OUT/$name.fallback.err" &&
