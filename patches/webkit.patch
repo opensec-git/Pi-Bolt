@@ -17576,3 +17576,458 @@ index d6df2e6501..38c2a82037 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Fri, 27 Nov 2026 13:09:26 -0600
+Subject: [PATCH] Static heap: a worker that finds no room for its realm's
+ block runs without it
+
+Each realm that runs the program (the main one, and one for each worker) takes a block of the
+static region for its compiled code's data (StaticHeap::allocateBlock()). The blocks had room
+for 14 realms at once on Linux and macOS and 15 on Windows, and the next worker's realm stopped
+the process with "The static region is too small for the program".
+
+- A VM other than the first takes its block when it is made (StaticHeap::install()). A VM that
+  finds none left does not use the static heap: it runs as a worker of a JIT-on build does, with
+  cells of its own and its code from the bytecode or the source. The first VM takes its block
+  there too.
+- On Linux and macOS, once the first blocks are taken, the scratch arena holds 15 more: only a
+  build of a heap uses it, and a process that runs a program with a static heap builds none. It
+  is reserved then, as addresses only, and a block is made writable when it is taken. On Windows
+  the blocks' reservation is 8 GB instead of 4.
+- RELEASE_ASSERT_WITH_MESSAGE prints its message in a release build, before the crash.
+- A process that runs compiled code keeps no declared names or function assignments for the
+  compiler: what its VMs generate as they run would be kept by code blocks that other threads
+  free and make again.
+---
+ Source/JavaScriptCore/aot/AOTProgram.cpp  |  12 ++-
+ Source/JavaScriptCore/aot/AOTRuntime.cpp  |  33 +++++--
+ Source/JavaScriptCore/aot/AOTRuntime.h    |   3 +
+ Source/JavaScriptCore/heap/StaticHeap.cpp | 111 +++++++++++++++++++---
+ Source/WTF/wtf/Assertions.h               |  14 ++-
+ Source/bmalloc/bmalloc/StaticRegion.cpp   |  45 +++++++++
+ Source/bmalloc/bmalloc/StaticRegion.h     |  13 ++-
+ 7 files changed, 207 insertions(+), 24 deletions(-)
+
+diff --git a/Source/JavaScriptCore/aot/AOTProgram.cpp b/Source/JavaScriptCore/aot/AOTProgram.cpp
+index f39918a262..f63db90a94 100644
+--- a/Source/JavaScriptCore/aot/AOTProgram.cpp
++++ b/Source/JavaScriptCore/aot/AOTProgram.cpp
+@@ -38,9 +38,17 @@ static UncheckedKeyHashMap<UnlinkedCodeBlock*, RefPtr<DeclaredNamesLink>>& decla
+     return map;
+ }
+ 
++// What the compiler is told of code it is going to compile. A process that runs compiled code (an image is registered) compiles
++// none, and what its VMs generate as they run (a worker without the static heap, code loaded at run time) is not kept: it would
++// only pile up here, by code blocks that other threads free and make again, the names of one thread's freed on another's.
++static bool isForCompiler()
++{
++    return !Image::hasAny();
++}
++
+ void noteDeclaredNames(UnlinkedCodeBlock* codeBlock, RefPtr<DeclaredNamesLink>&& names)
+ {
+-    if (!names)
++    if (!names || !isForCompiler())
+         return;
+     Locker locker { s_declaredNamesLock };
+     declaredNames().set(codeBlock, WTF::move(names));
+@@ -61,6 +69,8 @@ static UncheckedKeyHashMap<UnlinkedCodeBlock*, Vector<FunctionAssignment>>& func
+ 
+ void recordFunctionAssignments(UnlinkedCodeBlock* codeBlock, Vector<FunctionAssignment>&& functions)
+ {
++    if (!isForCompiler())
++        return;
+     Locker locker { s_declaredNamesLock };
+     functionAssignments().set(codeBlock, WTF::move(functions));
+ }
+diff --git a/Source/JavaScriptCore/aot/AOTRuntime.cpp b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+index 54e75eb396..851d7ca579 100644
+--- a/Source/JavaScriptCore/aot/AOTRuntime.cpp
++++ b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+@@ -233,6 +233,26 @@ Data* SharedData::get()
+     return std::bit_cast<Data*>(s_sharedData.data());
+ }
+ 
++// (Addresses. It is memory once it is touched.)
++static constexpr size_t roomForDatas = 256 * MB;
++
++static size_t startOfDatasFor(size_t numberOfFunctions)
++{
++    return std::max<size_t>(roundUpToMultipleOf(WTF::pageSize(), sizeof(Instance) + numberOfFunctions * sizeof(uint32_t)), static_cast<size_t>(Instance::leastStateWithData) << Instance::shiftOfStateWithData);
++}
++
++static size_t sizeFromInstanceFor(size_t numberOfFunctions)
++{
++    return startOfDatasFor(numberOfFunctions) + roomForDatas;
++}
++
++size_t Instance::sizeOfBlockOfProgram()
++{
++    if (!Image::environmentsSize())
++        return 0;
++    return roundUpToMultipleOf(WTF::pageSize(), Image::environmentsSize()) + sizeFromInstanceFor(Image::numberOfFunctionsOfImageWithEnvironments());
++}
++
+ Instance& Instance::ensure(JSGlobalObject* globalObject)
+ {
+     if (Instance* instance = globalObject->aotInstance())
+@@ -245,17 +265,14 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+     size_t environmentsSize = 0;
+     size_t size;
+     size_t numberOfFunctions;
+-    // (Addresses. It is memory once it is touched.)
+-    constexpr size_t roomForDatas = 256 * MB;
+-    auto startOfDatasFor = [](size_t numberOfFunctions) {
+-        return std::max<size_t>(roundUpToMultipleOf(WTF::pageSize(), sizeof(Instance) + numberOfFunctions * sizeof(uint32_t)), static_cast<size_t>(leastStateWithData) << shiftOfStateWithData);
+-    };
+-    auto sizeFor = [&](size_t numberOfFunctions) { return startOfDatasFor(numberOfFunctions) + roomForDatas; };
++    // (A VM that uses the static heap has its block: StaticHeap::install() took it for it, and one that found no room for it does not
++    // use the heap, and goes on below.)
+     if (Image::environmentsSize() && !vm.m_aotInstanceOfProgram && StaticHeap::canPlaceCellsOf(vm)) {
+         // Where cells can be that the collector did not allocate.
+         environmentsSize = roundUpToMultipleOf(WTF::pageSize(), Image::environmentsSize());
+         numberOfFunctions = Image::numberOfFunctionsOfImageWithEnvironments();
+-        size = sizeFor(numberOfFunctions);
++        size = sizeFromInstanceFor(numberOfFunctions);
++        ASSERT(environmentsSize + size == sizeOfBlockOfProgram());
+ #if OS(WINDOWS)
+         // (Writable up to the room for datas, which is made so as it is used: the region is committed page by page, and 256 MB
+         // of it at once would count against the commit limit, as reserving it does not elsewhere.)
+@@ -271,7 +288,7 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+         // against an address space limit or strict overcommit.
+         Image* image = Image::withCode();
+         numberOfFunctions = image ? image->header().numberOfFunctions : maxFunctions;
+-        size = sizeFor(numberOfFunctions);
++        size = sizeFromInstanceFor(numberOfFunctions);
+         size_t committed = startOfDatasFor(numberOfFunctions);
+ #if OS(WINDOWS)
+         void* reserved = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
+diff --git a/Source/JavaScriptCore/aot/AOTRuntime.h b/Source/JavaScriptCore/aot/AOTRuntime.h
+index c17acc2a26..b1cd634b16 100644
+--- a/Source/JavaScriptCore/aot/AOTRuntime.h
++++ b/Source/JavaScriptCore/aot/AOTRuntime.h
+@@ -422,6 +422,9 @@ static_assert(sizeof(FunctionInfo) == 32);
+ // One per realm that runs ahead-of-time compiled code.
+ struct Instance {
+     static Instance& ensure(JSGlobalObject*);
++    // The size of the block of the realm that runs the program (StaticHeap::allocateBlock()): the environments of its modules, below
++    // the Instance, then the Instance and its room for datas. Zero if the program has no environments to place (no static heap).
++    static size_t sizeOfBlockOfProgram();
+     static bool convertToTypedLayout(VM&, JSObject*, uint16_t layoutID); // TypedLayoutTable::ConvertFunction
+     Structure* emptyStructureForLayout(uint16_t layoutID);
+     Structure* emptyStructureForLayout(uint16_t layoutID, JSObject* prototype); // Creates a new Structure. The caller must keep it alive.
+diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
+index aa49ed28a7..e0e96c78fe 100644
+--- a/Source/JavaScriptCore/heap/StaticHeap.cpp
++++ b/Source/JavaScriptCore/heap/StaticHeap.cpp
+@@ -181,6 +181,9 @@ struct StaticHeapOfVM {
+ 
+     uint64_t number { 0 }; // No other VM of the process has it, or has had it. (Another may well come to be where this one was.)
+     PreciseAllocation* container { nullptr };
++    // The block of its program's realm, taken for it by install() until the realm asks for it (allocateBlock()). Null once it has.
++    void* block { nullptr };
++    size_t sizeOfBlock { 0 };
+     Vector<ScriptExecutable*> topLevelExecutables; // By module.
+     UncheckedKeyHashMap<Decoder*, Ref<Decoder>> decoders;
+     UncheckedKeyHashMap<const UnlinkedFunctionExecutable*, std::array<Strong<UnlinkedFunctionCodeBlock>, 2>> code;
+@@ -207,10 +210,20 @@ static constexpr unsigned maxBlocks = 256;
+ static OwnerOfBlock s_ownersOfBlocks[maxBlocks];
+ static std::atomic<unsigned> s_numberOfOwnersEverUsed { 0 }; // The first so many.
+ 
++// Whether the address is in StaticHeap::allocateBlock()'s blocks.
++static bool isInBlocks(uintptr_t address)
++{
++#if !OS(WINDOWS)
++    if (address - Region::startOfMoreBlocks() < Region::sizeOfMoreBlocks())
++        return true;
++#endif
++    return address - Region::startOfBlocks() < Region::sizeOfBlocks();
++}
++
+ PreciseAllocation* StaticHeap::containerOfSlow(const void* cell)
+ {
+     uintptr_t address = std::bit_cast<uintptr_t>(cell);
+-    if (address - Region::startOfBlocks() < Region::sizeOfBlocks()) {
++    if (isInBlocks(address)) {
+         for (unsigned i = 0, count = s_numberOfOwnersEverUsed.load(std::memory_order_acquire); i < count; ++i) {
+             auto& owner = s_ownersOfBlocks[i];
+             if (address - owner.start.load(std::memory_order_relaxed) < owner.size.load(std::memory_order_acquire))
+@@ -295,30 +308,76 @@ bool StaticHeap::canPlaceCellsOf(VM& vm)
+ 
+ static Lock s_blocksLock;
+ static size_t s_blocksUsed WTF_GUARDED_BY_LOCK(s_blocksLock) = 0;
++#if !OS(WINDOWS)
++static size_t s_moreBlocksUsed WTF_GUARDED_BY_LOCK(s_blocksLock) = 0; // Of Region::startOfMoreBlocks().
++#endif
+ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocksLock)
+ {
+     static NeverDestroyed<Vector<std::pair<void*, size_t>>> blocks;
+     return blocks;
+ }
++// The first VM's block, taken for it as for the others (StaticHeapOfVM::block).
++static void* s_blockOfFirstVM WTF_GUARDED_BY_LOCK(s_blocksLock) = nullptr;
++static size_t s_sizeOfBlockOfFirstVM WTF_GUARDED_BY_LOCK(s_blocksLock) = 0;
+ 
+-void* StaticHeap::allocateBlock(VM& vm, size_t size, size_t sizeToMakeWritable)
++// Room for a block that nobody has: one that was given back, or the next of the blocks, or of the blocks after them once those are
++// taken. Zeroed. Null if there is none (the blocks are an arena's room, enough for some thirty realms at once).
++static void* takeRoomForBlock(size_t size) WTF_REQUIRES_LOCK(s_blocksLock)
+ {
+-    RELEASE_ASSERT(!(size % WTF::pageSize()));
+-    Locker locker { s_blocksLock };
+-    void* result = nullptr;
+     auto& free = freeBlocks();
+     for (unsigned i = 0; i < free.size(); ++i) {
+         if (free[i].second == size) {
+-            result = free[i].first;
++            void* result = free[i].first;
+             free.removeAt(i);
+-            break;
++            return result;
+         }
+     }
+-    if (!result) {
+-        RELEASE_ASSERT_WITH_MESSAGE(s_blocksUsed <= Region::sizeOfBlocks() && size <= Region::sizeOfBlocks() - s_blocksUsed, "The static region is too small for the program (an address space limit?): run with BUN_AOT=0");
+-        result = reinterpret_cast<void*>(Region::startOfBlocks() + s_blocksUsed);
++    if (s_blocksUsed <= Region::sizeOfBlocks() && size <= Region::sizeOfBlocks() - s_blocksUsed) {
++        void* result = reinterpret_cast<void*>(Region::startOfBlocks() + s_blocksUsed);
+         s_blocksUsed += size;
++        return result;
+     }
++#if !OS(WINDOWS)
++    if (Region::reserveMoreBlocks() && s_moreBlocksUsed <= Region::sizeOfMoreBlocks() && size <= Region::sizeOfMoreBlocks() - s_moreBlocksUsed) {
++        void* result = reinterpret_cast<void*>(Region::startOfMoreBlocks() + s_moreBlocksUsed);
++        if (!Region::makeWritableInMoreBlocks(result, size))
++            return nullptr;
++        s_moreBlocksUsed += size;
++        return result;
++    }
++#endif
++    return nullptr;
++}
++
++static void giveBackRoomForBlock(void* block, size_t size) WTF_REQUIRES_LOCK(s_blocksLock)
++{
++    freeBlocks().append({ block, size });
++}
++
++// The block that install() took for the VM, if it is of this size.
++static void* takeBlockOf(VM& vm, size_t size) WTF_REQUIRES_LOCK(s_blocksLock)
++{
++    void** block = &s_blockOfFirstVM;
++    size_t* sizeOfBlock = &s_sizeOfBlockOfFirstVM;
++    if (auto* ofVM = JSC::ofVM(vm)) {
++        block = &ofVM->block;
++        sizeOfBlock = &ofVM->sizeOfBlock;
++    } else if (!StaticHeap::isFirst(vm))
++        return nullptr;
++    if (!*block || *sizeOfBlock != size)
++        return nullptr;
++    *sizeOfBlock = 0;
++    return std::exchange(*block, nullptr);
++}
++
++void* StaticHeap::allocateBlock(VM& vm, size_t size, size_t sizeToMakeWritable)
++{
++    RELEASE_ASSERT(!(size % WTF::pageSize()));
++    Locker locker { s_blocksLock };
++    void* result = takeBlockOf(vm, size);
++    if (!result)
++        result = takeRoomForBlock(size);
++    RELEASE_ASSERT_WITH_MESSAGE(result, "The static region is too small for the program (an address space limit?): run with BUN_AOT=0");
+     RELEASE_ASSERT_WITH_MESSAGE(Region::makeWritable(result, std::min(size, sizeToMakeWritable)), "The static region could not be made writable (the commit limit?)");
+     for (unsigned i = 0; i < maxBlocks; ++i) {
+         auto& owner = s_ownersOfBlocks[i];
+@@ -343,7 +402,7 @@ void StaticHeap::freeBlock(void* block, size_t size)
+ #if OS(WINDOWS)
+     // Zeroed again, and nobody's memory until it is written to: decommitted (the blocks are a reservation of their own,
+     // bmalloc::StaticRegion::startOfBlocks()), and committed again when it is used (allocateBlock()).
+-    RELEASE_ASSERT(std::bit_cast<uintptr_t>(block) - Region::startOfBlocks() < Region::sizeOfBlocks());
++    RELEASE_ASSERT(isInBlocks(std::bit_cast<uintptr_t>(block)));
+     RELEASE_ASSERT(VirtualFree(block, size, MEM_DECOMMIT));
+ #else
+     // Zeroed again, and nobody's memory until it is written to.
+@@ -355,7 +414,7 @@ void StaticHeap::freeBlock(void* block, size_t size)
+ #endif
+ #endif
+     Locker locker { s_blocksLock };
+-    freeBlocks().append({ block, size });
++    giveBackRoomForBlock(block, size);
+ }
+ 
+ void StaticHeap::didPlaceCell(VM& vm, JSCell* cell)
+@@ -2090,6 +2149,11 @@ void StaticHeap::willDestroy(VM& vm)
+     auto* ofVM = JSC::ofVM(vm);
+     if (!ofVM)
+         return;
++    if (ofVM->block) {
++        // (Never written to: its realm did not ask for it.)
++        Locker locker { s_blocksLock };
++        giveBackRoomForBlock(std::exchange(ofVM->block, nullptr), ofVM->sizeOfBlock);
++    }
+     if (t_ofVMOfThread == ofVM)
+         t_ofVMOfThread = nullptr;
+     vm.m_staticHeapOfVM = nullptr;
+@@ -2103,9 +2167,26 @@ void StaticHeap::install(VM& vm)
+         // What has locks that are not taken (needsNoLocking()) is not for the compiler's threads to look at, whoever's they are.
+         if (!t_threadIsPrepared || !s_hasNoCompilerThreads || t_ofVMOfThread)
+             return;
++        // The block of its program's realm (Instance::ensure()), taken now, before anything of the heap is the VM's: a VM for which
++        // there is no room left (some thirty realms have theirs) does not use the heap, and runs as it would with the JIT on, its
++        // own cells and its code from the bytecode or the source; rather than find out when the realm is made, too late to do so.
++        void* block = nullptr;
++        size_t sizeOfBlock = AOT::Instance::sizeOfBlockOfProgram();
++        if (sizeOfBlock) {
++            Locker locker { s_blocksLock };
++            block = takeRoomForBlock(sizeOfBlock);
++        }
++        if (sizeOfBlock && !block) {
++            static const bool verbose = !!getenv("BUN_STATIC_HEAP_VERBOSE");
++            if (verbose)
++                fprintf(stderr, "[static heap] no room for another realm's block: this VM runs without the static heap\n");
++            return;
++        }
+         static std::atomic<uint64_t> lastNumber { 1 };
+         auto* ofVM = new StaticHeapOfVM;
+         ofVM->number = ++lastNumber;
++        ofVM->block = block;
++        ofVM->sizeOfBlock = sizeOfBlock;
+         ofVM->container = PreciseAllocation::createForStaticCells(vm.heap, &vm.heap.cellSpace);
+         ofVM->topLevelExecutables.fill(nullptr, s_header->numberOfModules);
+         vm.symbolRegistry().setStaticRegistry(std::bit_cast<const SymbolRegistry*>(s_header->symbolRegistries[0]));
+@@ -2130,6 +2211,12 @@ void StaticHeap::install(VM& vm)
+     vm.privateSymbolRegistry().setStaticRegistry(std::bit_cast<const SymbolRegistry*>(s_header->symbolRegistries[1]));
+     makeContainer(vm);
+     s_vm = &vm;
++    // Its block first, as for the others (install() of a VM other than the first takes one before it uses the heap).
++    if (size_t size = AOT::Instance::sizeOfBlockOfProgram()) {
++        Locker locker { s_blocksLock };
++        s_blockOfFirstVM = takeRoomForBlock(size);
++        s_sizeOfBlockOfFirstVM = s_blockOfFirstVM ? size : 0;
++    }
+ }
+ 
+ std::unique_ptr<DecoderStringTable> StaticHeap::tryCreateStringTable(VM& vm, std::span<const uint8_t> strings)
+diff --git a/Source/WTF/wtf/Assertions.h b/Source/WTF/wtf/Assertions.h
+index c37b4df8aa..a905693056 100644
+--- a/Source/WTF/wtf/Assertions.h
++++ b/Source/WTF/wtf/Assertions.h
+@@ -910,7 +910,19 @@ inline const char* wtfLogPriorityName(int priority)
+     if (UNLIKELY_FOR_C_ASSERTIONS(!(assertion))) \
+         CRASH_WITH_INFO(__VA_ARGS__); \
+ } while (0)
+-#define RELEASE_ASSERT_WITH_MESSAGE(assertion, ...) RELEASE_ASSERT(assertion)
++// The message is printed (to stderr) before the crash: it is meant for whoever runs the program ("run with BUN_AOT=0"), and a crash
++// report says only where it crashed.
++#if defined(__FILE_NAME__)
++#define WTF_RELEASE_ASSERT_FILE_NAME __FILE_NAME__
++#else
++#define WTF_RELEASE_ASSERT_FILE_NAME __FILE__
++#endif
++#define RELEASE_ASSERT_WITH_MESSAGE(assertion, ...) do { \
++    if (UNLIKELY_FOR_C_ASSERTIONS(!(assertion))) { \
++        WTFReportAssertionFailureWithMessage(WTF_RELEASE_ASSERT_FILE_NAME, __LINE__, __func__, #assertion, __VA_ARGS__); \
++        CRASH_WITH_INFO(); \
++    } \
++} while (0)
+ #define RELEASE_ASSERT_WITH_SECURITY_IMPLICATION(assertion) RELEASE_ASSERT(assertion)
+ #define RELEASE_ASSERT_NOT_REACHED(...) CRASH_WITH_INFO(__VA_ARGS__)
+ #define RELEASE_ASSERT_NOT_REACHED_UNDER_CONSTEXPR_CONTEXT() CRASH_UNDER_CONSTEXPR_CONTEXT();
+diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
+index f34fc8e5d8..56c7ee5ced 100644
+--- a/Source/bmalloc/bmalloc/StaticRegion.cpp
++++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
+@@ -355,6 +355,9 @@ bool StaticRegion::beginBuilding()
+     return true;
+ #else
+     RELEASE_BASSERT(!s_isBuilding);
++    // Arena::Scratch holds blocks of a running program's realms (reserveMoreBlocks()).
++    if (sizeOfMoreBlocks())
++        return false;
+     constexpr size_t size = numberOfArenasInFile * arenaReservation;
+     // MAP_NORESERVE: the reservation is far larger than what is used of it, and Linux's default overcommit heuristic refuses a
+     // mapping much larger than the machine's memory when it counts it (building on a machine with 16 GB failed).
+@@ -504,6 +507,48 @@ size_t StaticRegion::sizeOfBlocks()
+ {
+     return s_bssMapped > offsetOfBlocksInBss ? s_bssMapped - offsetOfBlocksInBss : 0;
+ }
++
++static std::atomic<size_t> s_sizeOfMoreBlocks { 0 };
++static bool s_moreBlocksWereRefused = false;
++
++size_t StaticRegion::sizeOfMoreBlocks()
++{
++    return s_sizeOfMoreBlocks.load(std::memory_order_acquire);
++}
++
++bool StaticRegion::reserveMoreBlocks()
++{
++    // (Called with JSC::StaticHeap's lock of the blocks held: one thread at a time.)
++    if (s_sizeOfMoreBlocks.load(std::memory_order_relaxed))
++        return true;
++    if (s_isBuilding || s_moreBlocksWereRefused)
++        return false;
++    // Addresses only: nothing is charged for them, not even under vm.overcommit_memory=2, until a block is made writable. Only when
++    // the first blocks are taken, so that a program with fewer realms reserves no more than before (RLIMIT_AS counts addresses).
++    void* wanted = reinterpret_cast<void*>(startOfMoreBlocks());
++    void* result = mmap(wanted, arenaReservation, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
++    if (result != wanted) {
++        if (result != MAP_FAILED)
++            munmap(result, arenaReservation);
++        s_moreBlocksWereRefused = true;
++        return false;
++    }
++    s_sizeOfMoreBlocks.store(arenaReservation, std::memory_order_release);
++    return true;
++}
++
++bool StaticRegion::makeWritableInMoreBlocks(void* start, size_t size)
++{
++    RELEASE_BASSERT(reinterpret_cast<uintptr_t>(start) - startOfMoreBlocks() < sizeOfMoreBlocks() && size <= sizeOfMoreBlocks() - (reinterpret_cast<uintptr_t>(start) - startOfMoreBlocks()));
++    // (mprotect() rather than a new mapping: if it is refused, the addresses stay reserved.)
++    if (mprotect(start, size, PROT_READ | PROT_WRITE))
++        return false;
++#if BOS(LINUX)
++    // Small pages, as the other blocks (mapBss()).
++    madvise(start, size, MADV_NOHUGEPAGE);
++#endif
++    return true;
++}
+ #endif
+ 
+ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size_t size, size_t offsetInArena, bool isCode)
+diff --git a/Source/bmalloc/bmalloc/StaticRegion.h b/Source/bmalloc/bmalloc/StaticRegion.h
+index 860441b75b..c574d23ca5 100644
+--- a/Source/bmalloc/bmalloc/StaticRegion.h
++++ b/Source/bmalloc/bmalloc/StaticRegion.h
+@@ -112,6 +112,14 @@ public:
+     // StaticHeap::allocateBlock()'s blocks: the end of Arena::Bss.
+     static uintptr_t startOfBlocks() { return startOf(Arena::Bss) + offsetOfBlocksInBss; }
+     BEXPORT static size_t sizeOfBlocks();
++    // More of them, once those are taken: Arena::Scratch, which only a build uses (a process that runs a program with a static heap
++    // builds none, and one that has reserved these builds none). Addresses only, reserved the first time they are asked for
++    // (reserveMoreBlocks(): false if the addresses cannot be had, an address space limit, or a build is going on); a block of them is
++    // made writable when it is taken (makeWritableInMoreBlocks(): false at the commit limit, vm.overcommit_memory=2).
++    static uintptr_t startOfMoreBlocks() { return startOf(Arena::Scratch); }
++    BEXPORT static size_t sizeOfMoreBlocks(); // Zero until they are reserved.
++    BEXPORT static bool reserveMoreBlocks();
++    BEXPORT static bool makeWritableInMoreBlocks(void*, size_t);
+ #endif
+ 
+     // ---- When the program is built. One thread does it.
+@@ -167,8 +175,9 @@ public:
+     static constexpr size_t sizeOfBssInImage = 32 << 20;
+     static constexpr size_t offsetOfBlocksInBss = sizeOfBssInImage; // (Not where they are: for code that is the same everywhere.)
+     // Each program realm's block is its 256 MB of room for its compiled code's data and a little more, and every worker has one:
+-    // room for fifteen at once, as elsewhere. Addresses only (startOfBlocks()).
+-    static constexpr size_t defaultSizeOfBlocks = 4ULL << 30;
++    // room for some thirty at once, as elsewhere (a worker that finds none runs without the static heap: JSC::StaticHeap::install()).
++    // Addresses only (startOfBlocks()), committed as they are used.
++    static constexpr size_t defaultSizeOfBlocks = 8ULL << 30;
+     // What mapBss() makes writable at once: the strings, symbols, tables, the VM and the global object (2 MB for it). The rest is
+     // made writable as it is used.
+     static constexpr size_t sizeOfBssMadeWritableAtStart = offsetOfGlobalObjectInBss + (2 << 20);
+-- 
+2.53.0
+
