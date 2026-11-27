@@ -9,6 +9,9 @@
 #   builtins    in an executable built as Pi is (static heap, code compiled ahead of time), each built-in module is one object
 #               however it is reached, its functions' source text is the module's own, what they throw is unchanged, and a
 #               server's Date header is the time it answered; the same as from source
+#   crash       a crash of the engine (an assertion that fails) prints the assertion's message and Bun's crash report and ends
+#               the process with SIGABRT's status, also when signal-exit has a SIGABRT listener (Linux: the crash is made with an
+#               address space limit); kill and process.kill() still reach the listener
 # Usage: tests/runtime/run.sh        Environment: PIBOLT_BUN (the runtime; default $PIBOLT_WORK/runtime/bun);
 #   PIBOLT_RUNTIME_OLDER=1 skips workdir (CI, while the released runtime is an older engine)
 source "$(dirname "$0")/../../scripts/lib/common.sh"
@@ -48,6 +51,30 @@ env BUN_JSC_useJIT=0 BUN_STATIC_HEAP=1 BUN_AOT=1 BUN_AOT_JIT=0 BUN_JSC_omitBytec
 check "builtins: compiled ahead of time, from the static heap" "$(cat builtins.expected)" "$("$builtins/aot" 2>&1)"
 check "builtins: from source" "$(cat builtins.expected)" "$("$BUN" builtins.mjs 2>&1)"
 rm -rf "$builtins"
+
+if runtime_is_older "$BUN"; then
+	echo "SKIP crash: the runtime is an older engine than this commit's"
+else
+	crash=$(mktemp -d)
+	"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" crash-report.mjs crash-report-mod.mjs --outfile "$crash/bc" >/dev/null
+	BUN_BYTECODE_ORDER_OUT="$crash/order" "$crash/bc" warm >/dev/null 2>&1
+	env BUN_JSC_useJIT=0 BUN_STATIC_HEAP=1 BUN_AOT=1 BUN_AOT_JIT=0 BUN_JSC_omitBytecodeFromStaticHeap=1 BUN_JSC_useImmutableIntrinsics=1 \
+		"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" --bytecode-order="$crash/order" \
+		crash-report.mjs crash-report-mod.mjs --outfile "$crash/aot" >/dev/null 2>&1
+	if [ "$PIBOLT_OS" = linux ]; then
+		# A gigabyte more than it uses once it runs: room for three realms more, of the 64 it makes.
+		limit=$(($("$crash/aot" measure) + 1024 * 1024))
+		for mode in crash crash-unlistened; do
+			# (No core file, and not the shell's word on it.)
+			(ulimit -c 0 && ulimit -v "$limit" && BUN_ENABLE_CRASH_REPORTING=0 "$crash/aot" "$mode" >"$crash/$mode.out" 2>"$crash/$mode.err") 2>/dev/null
+			code=$?
+			reported=$(grep -c "ASSERTION FAILED: Out of address space for a realm's ahead-of-time code\\|^panic.*: abort() called" "$crash/$mode.err")
+			check "crash: $mode, the message and the report" "134 2" "$code $reported"
+		done
+	fi
+	check "crash: kill and process.kill() reach the listener" "listener heard 2" "$("$crash/aot" kill 2>&1)"
+	rm -rf "$crash"
+fi
 
 port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 servers=()

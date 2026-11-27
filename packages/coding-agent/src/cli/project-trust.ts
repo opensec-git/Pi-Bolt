@@ -15,7 +15,7 @@ export function createProjectTrustContext(options: {
 		mode: options.mode === "interactive" ? "tui" : options.mode,
 		hasUI: options.hasUI,
 		ui: {
-			select: async (title, selectOptions) => {
+			select: async (title, selectOptions, opts) => {
 				if (!options.hasUI) {
 					return undefined;
 				}
@@ -27,9 +27,10 @@ export function createProjectTrustContext(options: {
 					options.settingsManager,
 					title,
 					selectOptions.map((option) => ({ label: option, value: option })),
+					opts?.blockedKind,
 				);
 			},
-			confirm: async (title, message) => {
+			confirm: async (title, message, opts) => {
 				if (!options.hasUI) {
 					return false;
 				}
@@ -38,13 +39,18 @@ export function createProjectTrustContext(options: {
 				}
 				const { showStartupSelector } = await loadStartupUi();
 				return (
-					(await showStartupSelector(options.settingsManager, `${title}\n${message}`, [
-						{ label: "Yes", value: true },
-						{ label: "No", value: false },
-					])) ?? false
+					(await showStartupSelector(
+						options.settingsManager,
+						`${title}\n${message}`,
+						[
+							{ label: "Yes", value: true },
+							{ label: "No", value: false },
+						],
+						opts?.blockedKind ?? "permission",
+					)) ?? false
 				);
 			},
-			input: async (title, placeholder) => {
+			input: async (title, placeholder, opts) => {
 				if (!options.hasUI) {
 					return undefined;
 				}
@@ -52,7 +58,7 @@ export function createProjectTrustContext(options: {
 					return undefined;
 				}
 				const { showStartupInput } = await loadStartupUi();
-				return showStartupInput(options.settingsManager, title, placeholder);
+				return showStartupInput(options.settingsManager, title, placeholder, opts?.blockedKind);
 			},
 			notify: (message, type = "info") => {
 				if (options.mode !== "interactive") {

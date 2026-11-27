@@ -3,9 +3,9 @@ import { convertMessages } from "../src/api/openai-completions.ts";
 import type { AssistantMessage, Model, OpenAICompletionsCompat, Usage } from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
-// Signatures are parsed as JSON only when their first character after JSON whitespace can begin the value that is taken
-// (an array of reasoning details, or a legacy encrypted detail object). What reaches the request must be what parsing every
-// signature gives.
+// Signatures are parsed as JSON only when their first character can begin the value that is taken (an array of reasoning
+// details, or a legacy encrypted detail object). Pi 1.7.0 stores and reads them this way (openai-completions-reasoning.ts):
+// a signature with whitespace before its JSON is not taken.
 
 const emptyUsage: Usage = {
 	input: 0,
@@ -107,7 +107,7 @@ function assistantParam(thinkingSignature: string | undefined, thoughtSignature:
 }
 
 describe("openai-completions reasoning signatures that are not JSON", () => {
-	it("thinking signatures: field names, JSON with JSON whitespace before it, and values that are not taken", () => {
+	it("thinking signatures: field names, JSON, and values that are not taken", () => {
 		const cases: Array<[string | undefined, Record<string, unknown>]> = [
 			[undefined, {}],
 			["", {}],
@@ -116,8 +116,8 @@ describe("openai-completions reasoning signatures that are not JSON", () => {
 			["reasoning_text", { reasoning_text: "some thinking" }],
 			["not json", {}],
 			[JSON.stringify([text]), { reasoning_details: [text] }],
-			[` \t\r\n${JSON.stringify([text, encrypted])}`, { reasoning_details: [text, encrypted] }],
-			// (Not JSON whitespace: JSON.parse() throws.)
+			[JSON.stringify([text, encrypted]), { reasoning_details: [text, encrypted] }],
+			[` \t\r\n${JSON.stringify([text, encrypted])}`, {}],
 			[` ${JSON.stringify([text])}`, {}],
 			[`﻿${JSON.stringify([text])}`, {}],
 			["[]", {}],
@@ -138,12 +138,12 @@ describe("openai-completions reasoning signatures that are not JSON", () => {
 		}
 	});
 
-	it("tool call signatures: legacy encrypted details, with JSON whitespace before them, and values that are not taken", () => {
+	it("tool call signatures: legacy encrypted details, and values that are not taken", () => {
 		const cases: Array<[string | undefined, unknown]> = [
 			[undefined, undefined],
 			["reasoning_content", undefined],
 			[JSON.stringify(encrypted), [encrypted]],
-			[`\n  ${JSON.stringify(encrypted)}`, [encrypted]],
+			[`\n  ${JSON.stringify(encrypted)}`, undefined],
 			[` ${JSON.stringify(encrypted)}`, undefined],
 			[JSON.stringify([encrypted]), undefined],
 			[JSON.stringify(text), undefined],

@@ -6,7 +6,21 @@ import {
 	chordErrorFromJson,
 	invalid,
 	PROTOCOL_VERSION,
+	stackless,
 } from "../../src/data/internal.ts";
+
+describe("stackless", () => {
+	it("makes a ChordError with its code, reason and message, and no frame in its stack", () => {
+		const limit = Error.stackTraceLimit;
+		const error = stackless({ code: "released", reason: "ended", message: "a thing: ended" });
+		expect(isChordError(error, "released")).toBe(true);
+		expect([error.code, error.reason, error.message]).toEqual(["released", "ended", "a thing: ended"]);
+		expect(error.stack).toBe("ChordError: a thing: ended");
+		// The limit is the caller's again: an error made right after has its frames.
+		expect(Error.stackTraceLimit).toBe(limit);
+		expect(new ChordError({ code: "gone", message: "m" }).stack).toContain("errors.test.ts");
+	});
+});
 
 describe("ChordError", () => {
 	it("is a tagged union: a wrong pairing is a type error", () => {
@@ -82,9 +96,9 @@ describe("ChordError", () => {
 
 describe("protocol table", () => {
 	it("is pinned together with PROTOCOL_VERSION", () => {
-		// PROTOCOL_VERSION stays 1 until p3 ships (design §22): the table changes with it unbumped until then.
+		// PROTOCOL_VERSION 2 since slice 15 (design §22): every change of the table bumps it from now on.
 		const pinned = {
-			version: 1,
+			version: 2,
 			reasons: {
 				invalid: ["args", "params", "member", "host_address", "reentrant", "read_after_bulk", "cycle"],
 				contract_mismatch: ["updating"],

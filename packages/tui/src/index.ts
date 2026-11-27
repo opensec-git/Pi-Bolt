@@ -114,6 +114,14 @@ export { Marked } from "./marked-module.ts";
 // Native platform integration
 export { getNativeClipboard, type NativeClipboard } from "./native-platform.ts";
 export { oklabToOkhslLightness } from "./oklab.ts";
+// Program resume reporting (OSC 7577)
+export {
+	formatProgramResume,
+	formatProgramResumeClear,
+	type ProgramResumeCommand,
+	type ProgramResumeSender,
+	takeProgramResumeToken,
+} from "./program-resume.ts";
 // Program status reporting (OSC 7501)
 export { formatProgramStatus, type ProgramStatus } from "./program-status.ts";
 export { invalidateRenderedMarkdown } from "./rendered-markdown.ts";

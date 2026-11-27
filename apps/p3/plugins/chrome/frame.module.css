@@ -1,0 +1,239 @@
+/*
+ * The page's frame: the bar, and below it the navigator beside the main area (on a phone one of them at a time), or
+ * a whole-page view with the corner button. The main area scrolls inside itself, so the bar stays. The bar is
+ * Inkling's app header: Elanor's top navigation with a border below; the connection's light green, amber while
+ * connecting, red while offline.
+ */
+
+.frame {
+	display: flex;
+	block-size: 100%;
+	flex-direction: column;
+	background: var(--semantic-color-background-canvas);
+}
+
+.masthead {
+	position: relative;
+	z-index: var(--semantic-number-layer-sticky);
+	flex: none;
+	flex-wrap: nowrap;
+	padding-inline: var(--semantic-dimension-space-padding-small);
+	border-block-end: var(--semantic-dimension-border-width-small) solid var(--semantic-color-border-secondary);
+	background: var(--semantic-color-background-canvas);
+}
+
+.identity {
+	flex: 1 1 auto;
+	flex-wrap: nowrap;
+	overflow: hidden;
+}
+
+.actions {
+	flex: none;
+	flex-wrap: nowrap;
+}
+
+.wordmark {
+	flex: none;
+	color: var(--semantic-color-text-primary);
+	font: var(--semantic-typography-heading-app-6);
+}
+
+.body {
+	display: flex;
+	min-block-size: 0;
+	flex: 1 1 auto;
+}
+
+.navigator {
+	min-block-size: 0;
+	flex: 1 1 auto;
+	overflow-y: auto;
+	background: var(--semantic-color-background-surface);
+}
+
+.main {
+	position: relative;
+	display: flex;
+	min-inline-size: 0;
+	min-block-size: 0;
+	flex: 1 1 auto;
+	flex-direction: column;
+	overflow-y: auto;
+}
+
+/*
+ * A whole-page view draws in a stacking context of its own (decision 64): whatever it layers inside (a fixed overlay,
+ * a high z-index) stays below the corner button, which no view can cover.
+ */
+.frame[data-area="page"] .main {
+	z-index: 0;
+	isolation: isolate;
+}
+
+.frame[data-screen="navigator"] .main,
+.frame[data-screen="main"] .navigator {
+	display: none;
+}
+
+.mainHead {
+	display: flex;
+	flex: none;
+	align-items: center;
+	padding-inline: var(--semantic-dimension-space-padding-small);
+}
+
+.grow {
+	flex: 1 1 auto;
+}
+
+.crumbs {
+	display: flex;
+	min-inline-size: 0;
+	align-items: center;
+	gap: var(--semantic-dimension-space-gap-x-small);
+	overflow: hidden;
+	color: var(--semantic-color-text-secondary);
+	white-space: nowrap;
+}
+
+.crumb {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.drawer {
+	padding: var(--semantic-dimension-space-padding-medium);
+	overflow-y: auto;
+}
+
+.me {
+	display: flex;
+	flex-direction: column;
+	gap: var(--semantic-dimension-space-flow-large);
+	padding: var(--semantic-dimension-space-padding-large);
+}
+
+.person {
+	max-inline-size: 8.5rem;
+}
+
+.personName {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.status {
+	display: flex;
+	align-items: center;
+	gap: var(--semantic-dimension-space-gap-small);
+	color: var(--semantic-color-text-secondary);
+	font: var(--semantic-typography-ui-secondary);
+	white-space: nowrap;
+}
+
+.statusLight {
+	inline-size: var(--semantic-dimension-size-xx-small);
+	block-size: var(--semantic-dimension-size-xx-small);
+	border-radius: var(--semantic-dimension-radius-full);
+	background: var(--semantic-color-icon-negative);
+}
+
+.statusLight[data-state="connected"] {
+	background: var(--semantic-color-icon-positive);
+}
+
+.statusLight[data-state="connecting"] {
+	background: var(--semantic-color-icon-warning);
+	animation: pulse var(--semantic-transition-pulse-duration) infinite alternate;
+}
+
+/* On a phone the light alone says it; the label is still read out. */
+.statusLabel {
+	position: absolute;
+	inline-size: 1px;
+	block-size: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+.corner {
+	position: fixed;
+	z-index: var(--semantic-number-layer-sticky);
+	/* Above the whole-page view's own stacking context (z-index 0). */
+	inset-block-start: var(--semantic-dimension-space-padding-small);
+	inset-inline-end: var(--semantic-dimension-space-padding-small);
+	background: var(--semantic-color-background-surface);
+	box-shadow: var(--semantic-shadow-sticky);
+}
+
+.empty {
+	margin: 0;
+	padding: var(--semantic-dimension-space-padding-large);
+	color: var(--semantic-color-text-secondary);
+}
+
+.failure {
+	display: flex;
+	flex-direction: column;
+	gap: var(--semantic-dimension-space-flow-small);
+	padding: var(--semantic-dimension-space-padding-large);
+	overflow: auto;
+}
+
+.failureTitle {
+	margin: 0;
+	color: var(--semantic-color-text-negative);
+	font: var(--semantic-typography-heading-app-5);
+}
+
+.failureMessage {
+	margin: 0;
+	overflow-wrap: anywhere;
+	white-space: pre-wrap;
+	color: var(--semantic-color-text-secondary);
+	font: var(--semantic-typography-code-secondary);
+}
+
+@keyframes pulse {
+	to {
+		opacity: var(--semantic-number-opacity-pulse);
+	}
+}
+
+@media (min-width: 48rem) {
+	.navigator {
+		flex: none;
+		inline-size: 18rem;
+		border-inline-end: var(--semantic-dimension-border-width-small) solid var(--semantic-color-border-secondary);
+	}
+
+	.frame[data-screen] .main,
+	.frame[data-screen] .navigator {
+		display: flex;
+	}
+
+	.back {
+		display: none;
+	}
+}
+
+@media (min-width: 40rem) {
+	.masthead {
+		padding-inline: var(--semantic-dimension-space-padding-large);
+	}
+
+	.statusLabel {
+		position: static;
+		inline-size: auto;
+		block-size: auto;
+		overflow: visible;
+		clip-path: none;
+	}
+
+	.person {
+		max-inline-size: 18rem;
+	}
+}

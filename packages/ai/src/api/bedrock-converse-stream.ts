@@ -23,6 +23,7 @@ import {
 	type ToolResultContentBlock,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
+import { type DefaultProviderInit, defaultProvider } from "@aws-sdk/credential-provider-node";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { BuildMiddleware, DeserializeMiddleware, DocumentType, HttpResponse, MetadataBearer } from "@smithy/types";
 import { HttpProxyAgent } from "http-proxy-agent";
@@ -238,10 +239,18 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
 				// on `http2` module and has no support for http agent.
 				// Use NodeHttpHandler to support HTTP(S) proxy agents.
-				config.requestHandler = new NodeHttpHandler({
+				const requestHandler = new NodeHttpHandler({
 					httpAgent: new HttpProxyAgent(proxyUrl),
 					httpsAgent: new HttpsProxyAgent(proxyUrl) as unknown as HttpsAgent,
 				});
+				config.requestHandler = requestHandler;
+				// The default credential chain builds its own SSO and SSO OIDC clients, which do
+				// not inherit the Bedrock client's request handler (#12353). The SDK uses this
+				// chain only when `credentials` is unset, so explicit keys keep their precedence.
+				// Those are static (env keys, skip-auth dummies) and make no requests, so they
+				// need no proxy.
+				config.credentialDefaultProvider = (init: DefaultProviderInit) =>
+					defaultProvider({ ...init, clientConfig: { ...init.clientConfig, requestHandler } });
 			} else if (getProviderEnvValue("AWS_BEDROCK_FORCE_HTTP1", options.env) === "1") {
 				// Some custom endpoints require HTTP/1.1 instead of HTTP/2
 				config.requestHandler = new NodeHttpHandler();
@@ -1080,6 +1089,7 @@ function convertMessages(
 							});
 							break;
 						case "thinking": {
+							if (model.compat?.supportsReasoningReplay === false) continue;
 							// Encrypted reasoning is opaque: replay the stored payload as the
 							// `redactedContent` member instead of lowering it to reasoning text.
 							if (c.redacted) {
@@ -1312,7 +1322,26 @@ function buildAdditionalModelRequestFields(
 	model: Model<"bedrock-converse-stream">,
 	options: BedrockOptions,
 ): Record<string, any> | undefined {
-	if (!options.reasoning || !model.reasoning) {
+	if (!model.reasoning) {
+		return undefined;
+	}
+
+	const candidates = getModelMatchCandidates(model.id, model.name);
+
+	const isOpenAiGpt = candidates.some((s) => s.includes("gpt-"));
+
+	if (!isAnthropicClaudeModel(model) && !isOpenAiGpt) {
+		// Other families (Kimi K3, GLM 5.3) take a flat reasoning_effort. Converse forwards it without
+		// validating it, so send only values the model's thinkingLevelMap lists. Off is sent too:
+		// without a value, models such as Kimi K3.1 reason at max.
+		// Nova and Grok also land here but have no thinkingLevelMap in the catalog, so they send
+		// nothing: Nova 2 takes effort as reasoningConfig.maxReasoningEffort, and Grok documents
+		// no effort field for Converse.
+		const effort = model.thinkingLevelMap?.[options.reasoning ?? "off"];
+		return typeof effort === "string" ? { reasoning_effort: effort } : undefined;
+	}
+
+	if (!options.reasoning) {
 		return undefined;
 	}
 
@@ -1365,20 +1394,14 @@ function buildAdditionalModelRequestFields(
 		return result;
 	}
 
-	const candidates = getModelMatchCandidates(model.id, model.name);
-
 	if (candidates.some((s) => s.includes("gpt-oss"))) {
 		return { reasoning_effort: OPENAI_GPT_OSS_EFFORT[options.reasoning] };
 	}
 
-	if (candidates.some((s) => s.includes("gpt-"))) {
-		const mapped = model.thinkingLevelMap?.[options.reasoning];
-		return {
-			reasoning: { effort: typeof mapped === "string" ? mapped : OPENAI_GPT_EFFORT[options.reasoning] },
-		};
-	}
-
-	return undefined;
+	const mapped = model.thinkingLevelMap?.[options.reasoning];
+	return {
+		reasoning: { effort: typeof mapped === "string" ? mapped : OPENAI_GPT_EFFORT[options.reasoning] },
+	};
 }
 
 type OpenAIGptEffort = "low" | "medium" | "high" | "xhigh" | "max";

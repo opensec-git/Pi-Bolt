@@ -345,13 +345,14 @@ export function stripImageSequences(line: string): string {
 }
 
 /**
- * Generate a random image ID for Kitty graphics protocol.
+ * Generate a random image ID in [1, 0x7fffffff] for Kitty graphics protocol.
  * Uses random IDs to avoid collisions between different module instances
  * (e.g., main app vs extensions).
  */
 export function allocateImageId(): number {
-	// Use random ID in range [1, 0xffffffff] to avoid collisions
-	return Math.floor(Math.random() * 0xfffffffe) + 1;
+	// Konsole parses Kitty graphics keys as signed 32-bit integers. Larger IDs read as 0, so the image
+	// is never stored and `d=I` deletes every such placement (#12548).
+	return Math.floor(Math.random() * 0x7fffffff) + 1;
 }
 
 export function encodeKitty(
@@ -881,6 +882,9 @@ export function renderImage(
 	return null;
 }
 
+/** Longest URL that {@link hyperlink} wraps in an OSC 8 sequence. Real links are far shorter. */
+const MAX_HYPERLINK_URL_LENGTH = 8192;
+
 /**
  * Wrap text in an OSC 8 hyperlink sequence.
  * The text is rendered as a clickable hyperlink in terminals that support OSC 8
@@ -888,10 +892,16 @@ export function renderImage(
  * In terminals that do not support OSC 8, the escape sequences are ignored
  * and only the plain text is displayed.
  *
+ * URLs longer than {@link MAX_HYPERLINK_URL_LENGTH} are not linked: wrapping re-opens the link on
+ * every line with the full URL, so a multi-megabyte URL would grow memory quadratically.
+ *
  * @param text - The visible text to display
  * @param url - The URL to link to
  */
 export function hyperlink(text: string, url: string): string {
+	if (url.length > MAX_HYPERLINK_URL_LENGTH) {
+		return text;
+	}
 	return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`;
 }
 

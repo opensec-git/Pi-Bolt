@@ -97,6 +97,8 @@ See [Sessions and Context](sessions.md) for resuming, forking, naming, and stori
   Forks a session, chosen by file path or full/partial ID, into a new session in the current directory.
 - `--session-dir <dir>`<br>
   Overrides storage and lookup. It takes precedence over `PI_CODING_AGENT_SESSION_DIR` and the `sessionDir` setting.
+- `--agent-dir <dir>`<br>
+  Uses `<dir>` as the config directory (settings, auth, models, resources, and the default session storage) instead of `~/.pi/agent`. It takes precedence over `PI_CODING_AGENT_DIR` and is passed on to processes Pi starts. Works with subcommands too, such as `pi --agent-dir <dir> install <source>`.
 - `--no-session`<br>
   Uses an in-memory session that is not persisted.
 - `-n`, `--name <name>`<br>
@@ -173,7 +175,7 @@ This keeps `read`, `bash`, `edit`, and `write` and adds `codemode`. For one invo
 pi --tools +codemode
 ```
 
-Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, call classifier models such as TypeSafe's Jev through `models.classify()` (see [Classifier models](models.md#use-classifier-models)), and generate images through `models.generateImages()` (see [Image models](models.md#use-image-models)).
+Codemode is useful without MCP: scripts can run several tool calls in parallel, filter large output before it reaches the model, call decision models such as TypeSafe's Jev through `models.classify()` (see [Use decision models](models.md#use-decision-models)), and generate images through `models.generateImages()` (see [Use image models](models.md#use-image-models)).
 
 ### How codemode works
 

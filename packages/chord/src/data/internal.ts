@@ -7,8 +7,10 @@ export {
 	chordErrorFromJson,
 	invalid,
 	PROTOCOL_VERSION,
+	stackless,
 } from "./errors.ts";
 export { openFailure, sameCause, waitingFor } from "./failure.ts";
 export { checkAddress, checkParams, identityKey } from "./params.ts";
-export { canonicalJson, principalJson, principalKey, samePrincipal } from "./principal.ts";
+export { sameJson } from "./plain-json.ts";
+export { canonicalJson, canonicalJsonOnly, principalJson, principalKey, samePrincipal } from "./principal.ts";
 export { check, validatorFor } from "./validator.ts";

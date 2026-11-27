@@ -388,6 +388,17 @@ export const CHORD_TELEMETRY_SCHEMA = defineTelemetrySchema({
 			attributes: {},
 		},
 		"chord.links.open": { kind: "upDownCounter", description: "Open links of this host.", attributes: {} },
+		"chord.links.closed": {
+			kind: "counter",
+			description: "Links of this host that closed.",
+			attributes: {
+				reason: {
+					type: "string",
+					required: true,
+					description: "`local` (this host), `heartbeat`, `protocol` or `peer` (the other end or the transport).",
+				},
+			},
+		},
 		"chord.park.duration": {
 			kind: "histogram",
 			unit: "ms",
@@ -399,6 +410,19 @@ export const CHORD_TELEMETRY_SCHEMA = defineTelemetrySchema({
 			unit: "ms",
 			description: "How long a link origin's state waited for a slot of its window.",
 			attributes: {},
+		},
+		"chord.follow.attaches": {
+			kind: "counter",
+			description:
+				"Attachments a follow over a changing source made (`self.follow(over, attach)`): for a new value of its source (`value`, the first one too), or a retry after a failure (`retry`).",
+			attributes: {
+				reason: {
+					type: "string",
+					required: true,
+					values: ["value", "retry"],
+					description: "Why it attached.",
+				},
+			},
 		},
 		"chord.events.emitted": {
 			kind: "counter",

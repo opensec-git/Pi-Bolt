@@ -3,6 +3,7 @@
 // the activation's loads and the residency of keyed documents; a commit's telemetry (its event, its duration, slice 9).
 
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
+import { abortOrigin } from "../context/abort-origin.ts";
 import type { Context } from "../context/index.ts";
 import { ChordError } from "../data/index.ts";
 import type { Batch } from "../state/internal.ts";
@@ -20,9 +21,9 @@ import { Transaction } from "./transaction.ts";
 
 /**
  * A transaction (a document change or retirement, `self.tx`, a job start) that did not commit because the context it
- * was started with ended first: a root whose `fn` settled, a handler or routine whose object ended, a caller that
- * cancelled. `error` is that context's abort reason, naming the scope that ended (decision "Mistakes that wait are
- * reported at once" (e)).
+ * was started with ended first: a root whose `fn` settled, a caller that cancelled (also a caller object's end). Not
+ * when its own object's end cancelled it (ERNDL-1190). `error` is that context's abort reason, naming the scope that
+ * ended (decision "Mistakes that wait are reported at once" (e)).
  */
 export type TransactionCancelled = {
 	readonly kind: "transaction_cancelled";
@@ -50,6 +51,12 @@ export type DocumentsOwner = {
 	readonly telemetry: TelemetryContext;
 };
 
+/** No pins held: the shared empty list. */
+const NO_PINS: readonly (() => void)[] = [];
+
+/** No slots (most objects declare no document): the shared empty map; never written (it has no entry to drop). */
+const NO_SLOTS = new Map<string, SingletonSlot | KeyedSlot>();
+
 /**
  * The documents of one object, from its first activation to its end: one slot per declared name, kept across
  * attempts, and the line. Each attempt declares its handles under its own seal token; the object's own transactions
@@ -62,27 +69,40 @@ export class Documents {
 	/** The object's context. */
 	readonly context: Context;
 	readonly line = new Line();
-	/**
-	 * The idle persisted keyed documents and their eviction. A sweep's only rejection is `onLine`'s `released` once
-	 * the object ended (a sweep itself drops trackers in memory and does not throw): nothing to report.
-	 */
-	readonly residency = new Residency((sweep) => void this.onLine(async () => sweep()).catch(() => {}));
+	/** Its residency, made by the first keyed slot that asks (most objects have no keyed document). */
+	#residency: Residency | undefined;
 	readonly #owner: DocumentsOwner;
 	/** The token of the object's own transactions: sealed with the object (`seal`). */
 	readonly own = new SealToken();
-	readonly #slots = new Map<string, SingletonSlot | KeyedSlot>();
+	/** Its slots by name, made by the first declaration (most objects declare no document). */
+	#slots: Map<string, SingletonSlot | KeyedSlot> | undefined;
 	/** The transaction holding the line, until it settles or its token is sealed. */
 	#holder: Transaction | undefined;
 	/** `sealed`: the object is ending; its documents stay readable, its transactions throw `released`. */
 	#state: "open" | "sealed" | "ended" = "open";
 	/** The pins the last factory that returned declared (`at(key)`): held until the next one returns (rule 6). */
-	#pins: readonly (() => void)[] = [];
+	#pins: readonly (() => void)[] = NO_PINS;
 
 	constructor(owner: DocumentsOwner) {
 		this.label = owner.label;
 		this.batch = owner.batch;
 		this.context = owner.context;
 		this.#owner = owner;
+	}
+
+	/**
+	 * The idle persisted keyed documents and their eviction. A sweep's only rejection is `onLine`'s `released` once
+	 * the object ended (a sweep itself drops trackers in memory and does not throw): nothing to report. One made after
+	 * the object ended (a slot dropped at its end) evicts nothing.
+	 */
+	get residency(): Residency {
+		let residency = this.#residency;
+		if (residency === undefined) {
+			residency = new Residency((sweep) => void this.onLine(async () => sweep()).catch(() => {}));
+			if (this.#state === "ended") residency.end();
+			this.#residency = residency;
+		}
+		return residency;
 	}
 
 	/**
@@ -95,7 +115,7 @@ export class Documents {
 		token: SealToken,
 		declarer: KeyDeclarer,
 	): HandleOf<D> {
-		const slot = this.#slots.get(definition.name);
+		const slot = this.#slots?.get(definition.name);
 		if (slot !== undefined) slot.definition.check(definition);
 		const persistence = slot === undefined && definition.persist ? this.#persistence(definition) : undefined;
 		// The definition's `keyed` decides the slot's class and the handle's; its documents are the definition's `T`.
@@ -112,7 +132,7 @@ export class Documents {
 	 * declares against the documents the object has).
 	 */
 	check(definition: AnyDefinition): void {
-		this.#slots.get(definition.name)?.definition.check(definition);
+		this.#slots?.get(definition.name)?.definition.check(definition);
 	}
 
 	/**
@@ -124,14 +144,15 @@ export class Documents {
 		const previous = this.#pins;
 		this.#pins = pins;
 		for (const release of previous) release();
+		const slots = this.#slots ?? NO_SLOTS;
 		// A dropped persisted slot goes whole, its loaded documents too: observably the same as keeping them, since
 		// every committed write is in the store and a later declaration reloads from there.
-		for (const [name, slot] of this.#slots) {
+		for (const [name, slot] of slots) {
 			if (declared.has(name)) continue;
-			this.#slots.delete(name);
+			slots.delete(name);
 			slot.drop();
 		}
-		for (const [name, definition] of declared) this.#slots.get(name)!.hydrate(definition, context);
+		for (const [name, definition] of declared) slots.get(name)!.hydrate(definition, context);
 	}
 
 	/**
@@ -140,7 +161,9 @@ export class Documents {
 	 * fails the activation.
 	 */
 	load(context: Context): Promise<void> | undefined {
-		const persisted = [...this.#slots.values()].filter((slot) => slot.persisted !== undefined);
+		const slots = this.#slots;
+		if (slots === undefined) return undefined;
+		const persisted = [...slots.values()].filter((slot) => slot.persisted !== undefined);
 		// In memory only: nothing to wait for (an activation without persisted documents takes no extra turn).
 		if (persisted.length === 0) return undefined;
 		return this.onLine(async () => {
@@ -168,6 +191,7 @@ export class Documents {
 	 * Runs `fn` as one transaction on the line under `token` and commits what it drafted (§9): a throw, an abort of
 	 * `context`, the token's seal or the object's end discards everything; one that did not commit while `context` was
 	 * aborted is also reported (`transaction_cancelled`): an empty `catch` cannot hide a change that never happened.
+	 * Not when its own object's end cancelled it (`#ownEnd`, ERNDL-1190).
 	 * `persistence` defers storing a run state's change (D8).
 	 */
 	async tx<R>(
@@ -180,8 +204,10 @@ export class Documents {
 		this.assertAdmitted(token);
 		const release = await this.line.acquire();
 		const tx = new Transaction(this, token, release, context, persistence);
+		let admitted = false;
 		try {
 			this.assertAdmitted(token);
+			admitted = true;
 			this.#holder = tx;
 			const result = await fn(tx);
 			// Timed only when something records: the commit's duration metric, its event on the enclosing span.
@@ -196,7 +222,7 @@ export class Documents {
 			tx.discard();
 			// Only a transaction that did not commit reads this; Chord's own run under contexts that never abort.
 			const signal = context.abortSignal;
-			if (signal?.aborted)
+			if (signal?.aborted && !this.#ownEnd(error, tx, admitted, token, signal))
 				this.#owner.report({ kind: "transaction_cancelled", object: this.label, error: signal.reason });
 			throw error;
 		} finally {
@@ -204,6 +230,17 @@ export class Documents {
 			release();
 			tx.settle();
 		}
+	}
+
+	/**
+	 * Whether `tx`, failed with `error` under the aborted `signal`, was cancelled by its own object's end (ERNDL-1190):
+	 * the abort came from a signal the token's owner aborted to end its work (followed back through linked signals: a
+	 * caller's cancel or a caller object's end is not it), and the failure is that cancellation (refused at the seal,
+	 * cut at it, or the abort's reason itself), not an exception of its own.
+	 */
+	#ownEnd(error: unknown, tx: Transaction, admitted: boolean, token: SealToken, signal: AbortSignal): boolean {
+		if (!token.endedBy(abortOrigin(signal))) return false;
+		return !admitted || tx.cutWith(error) || error === signal.reason;
 	}
 
 	/**
@@ -262,7 +299,7 @@ export class Documents {
 	/** The persisted slots keyed by addresses of host kind `kind`: the documents of this object belonging to such hosts. */
 	hostSlots(kind: string): KeyedSlot[] {
 		const slots: KeyedSlot[] = [];
-		for (const slot of this.#slots.values()) {
+		for (const slot of (this.#slots ?? NO_SLOTS).values()) {
 			if (slot instanceof KeyedSlot && slot.persisted !== undefined && slot.definition.current.host?.kind === kind) {
 				slots.push(slot);
 			}
@@ -273,10 +310,10 @@ export class Documents {
 	/** Drops every document and pin; watches end `ended`, and every later use throws `released`. */
 	end(): void {
 		this.#state = "ended";
-		this.residency.end();
-		for (const slot of this.#slots.values()) slot.drop();
-		this.#slots.clear();
-		this.#pins = [];
+		this.#residency?.end();
+		for (const slot of (this.#slots ?? NO_SLOTS).values()) slot.drop();
+		this.#slots = undefined;
+		this.#pins = NO_PINS;
 	}
 
 	/** The `released` error of this object's documents. */
@@ -292,6 +329,7 @@ export class Documents {
 	}
 
 	#add<S extends SingletonSlot | KeyedSlot>(slot: S): S {
+		this.#slots ??= new Map();
 		this.#slots.set(slot.definition.current.name, slot);
 		return slot;
 	}

@@ -1,41 +1,65 @@
 // Where p3's own files are. p3 runs from a source checkout (TypeScript, with the condition `source`: development,
-// the tests) or from its built package (`dist/`, JavaScript: the release). Base code asks here for the plugins root,
-// the entries of its processes and the version, and never builds such a path itself. In both layouts this module's
-// directory (`src/`, or `dist/` once bundled into `dist/main.js`) lies directly under p3's root; from source the
-// processes' entries are in `src/bootstrap/`.
+// the tests) or from its built package (JavaScript: the release). This module lies in one of three places: `src/` of
+// a checkout, `dist/main.js` (the command's bundle), or `dist/src/` (compiled one by one with the API, which
+// `/v1/testing` imports); `filesOf` finds p3's root from each.
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import type { WorkerOptions } from "./kit/session-workers.ts";
+import { basename, dirname, join } from "node:path";
 
-/** Whether this is a source checkout: its files are TypeScript. */
-const SOURCE = import.meta.filename.endsWith(".ts");
+/** p3's files. */
+export type Files = {
+	/** p3's root: `apps/p3` of a checkout, or the installed package. */
+	readonly root: string;
+	/** The built-in plugins root: plugins are source in both layouts (the server builds them when it starts). */
+	readonly plugins: string;
+	/** How a session's worker starts: the source entry, or the built one; with the V8 flags for its memory. */
+	readonly worker: { readonly entry: string; readonly execArgv: readonly string[] };
+	/** The page's entry: the web surface builds the page's base bundle from it (source in both layouts). */
+	readonly web: string;
+	/** Node's arguments that run the `p3` command. */
+	readonly command: readonly string[];
+	/** Node's arguments that run the background server's supervisor (`supervisor.ts`). */
+	readonly supervisor: readonly string[];
+};
 
-/** p3's root: `apps/p3` of a checkout, or the installed package. */
-const ROOT = join(import.meta.dirname, "..");
-
-/** The process entries of a source checkout. */
-const BOOTSTRAP = join(ROOT, "src", "bootstrap");
-
-/** The built-in plugins root: plugins are source in both layouts (the server builds them when it starts). */
-export const PLUGINS = join(ROOT, "plugins");
+/** p3's files as this module finds them from `file`, its own path: a TypeScript file is a source checkout's. */
+export function filesOf(file: string): Files {
+	const dir = dirname(file);
+	const root = basename(dir) === "src" && basename(dirname(dir)) === "dist" ? dirname(dirname(dir)) : dirname(dir);
+	if (file.endsWith(".ts")) {
+		return {
+			root,
+			plugins: join(root, "plugins"),
+			worker: { entry: join(root, "src", "worker.ts"), execArgv: [...SOURCE_FLAGS, ...WORKER_V8_FLAGS] },
+			web: join(root, "src", "web", "page.tsx"),
+			command: [...SOURCE_FLAGS, join(root, "src", "bin.ts")],
+			supervisor: [...SOURCE_FLAGS, join(root, "src", "supervisor.ts")],
+		};
+	}
+	const dist = join(root, "dist");
+	return {
+		root,
+		plugins: join(root, "plugins"),
+		worker: { entry: join(dist, "worker.js"), execArgv: [BUILT_FLAG, ...WORKER_V8_FLAGS] },
+		web: join(root, "src", "web", "page.tsx"),
+		command: [join(dist, "p3.js")],
+		supervisor: [join(dist, "supervisor.js")],
+	};
+}
 
 /** The flags a source checkout's processes need: workspace sources resolve, and no experimental warning prints. */
 const SOURCE_FLAGS = ["--conditions=source", "--disable-warning=ExperimentalWarning"];
 
+/** The flag a built worker needs: no experimental warning prints (`node:sqlite`). */
+const BUILT_FLAG = "--disable-warning=ExperimentalWarning";
+
 /**
- * What a session worker's V8 runs with, for its memory (owner, 2026-11-16, measured in `p3-memory.md`):
- * - `--liftoff-only`: WebAssembly (undici's HTTP parser) is never compiled a second time, optimized; that compile's
- *   freed memory stayed with the process, 8 to 10 MiB with several streams at once;
- * - `--optimize-for-size`: a smaller heap and young generation in a burst of turns, for a few percent of CPU;
+ * What a session worker's V8 runs with, for its memory (owner, 2026-11-16 and 2026-11-18, measured):
+ * - `--liftoff-only`: WebAssembly (undici's HTTP parser) is never compiled a second time, optimized;
+ * - `--optimize-for-size`: a smaller heap and young generation in a burst of turns;
  * - `--max-semi-space-size=4`: a young generation of at most 4 MiB a semi-space;
- * - `--gc-memory-reducer-start-delay-ms=8000` (owner, 2026-11-18, mem-audit): V8 starts shrinking the heap 8 s after
- *   work, not 30 s as Node 26's V8 does by default (after a burst of turns 37.2 instead of 43.0 MiB);
- * - `--managed-zone-memory` (owner, 2026-11-18, mem-audit): V8 pools the zone memory of its compilers itself instead of
- *   taking it from malloc, so glibc keeps less freed memory (after five subagents 37.3 instead of 44.8 MiB). An
- *   ordinary V8 flag staged for shipping (v8 commit 277d16f12e01, bug issues.chromium.org/409953791), off by default.
- * Every Node p3 runs on (`minimum-node.ts`: 26.3.1 and newer) knows each of them: `test/install.test.ts` checks that
- * the Node it runs on lists and accepts them.
+ * - `--gc-memory-reducer-start-delay-ms=8000`: V8 starts shrinking the heap 8 s after work, not 30 s;
+ * - `--managed-zone-memory`: V8 pools its compilers' zone memory itself, so glibc keeps less freed memory.
  */
 export const WORKER_V8_FLAGS: readonly string[] = [
 	"--liftoff-only",
@@ -45,28 +69,25 @@ export const WORKER_V8_FLAGS: readonly string[] = [
 	"--managed-zone-memory",
 ];
 
-/**
- * How a session's worker starts: the source entry with the flag that resolves workspace sources, or the built one,
- * with the V8 flags for its memory. Neither prints Node's experimental warnings (type stripping, `node:sqlite`).
- */
-export const WORKER: WorkerOptions = SOURCE
-	? { entry: join(BOOTSTRAP, "worker.ts"), execArgv: [...SOURCE_FLAGS, ...WORKER_V8_FLAGS] }
-	: {
-			entry: join(import.meta.dirname, "worker.js"),
-			execArgv: ["--disable-warning=ExperimentalWarning", ...WORKER_V8_FLAGS],
-		};
+/** This install's files. */
+const FILES = filesOf(import.meta.filename);
 
-/** Node's arguments that run the `p3` command of this install (the release's launcher filters the warnings). */
-export const COMMAND: readonly string[] = SOURCE
-	? [...SOURCE_FLAGS, join(BOOTSTRAP, "bin.ts")]
-	: [join(import.meta.dirname, "p3.js")];
+/** The built-in plugins root. */
+export const PLUGINS = FILES.plugins;
 
-/** Node's arguments that run the background server's supervisor (`supervisor.ts`). */
-export const SUPERVISOR: readonly string[] = SOURCE
-	? [...SOURCE_FLAGS, join(BOOTSTRAP, "supervisor.ts")]
-	: [join(import.meta.dirname, "supervisor.js")];
+/** How a session's worker starts. */
+export const WORKER = FILES.worker;
+
+/** The page's entry of this install. */
+export const WEB_ENTRY = FILES.web;
+
+/** Node's arguments that run the `p3` command of this install. */
+export const COMMAND = FILES.command;
+
+/** Node's arguments that run the background server's supervisor. */
+export const SUPERVISOR = FILES.supervisor;
 
 /** p3's version: its `package.json`'s. */
 export function version(): string {
-	return (JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { version: string }).version;
+	return (JSON.parse(readFileSync(join(FILES.root, "package.json"), "utf8")) as { version: string }).version;
 }

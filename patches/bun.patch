@@ -19527,3 +19527,260 @@ diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionC
          let next = dues.clone().find(|&due| quiet < due);
          if full && next.is_none() && !vm.jsc_vm().shrink_footprint_now() {
              self.idle_quiet_ms.set(before);
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Fri, 27 Nov 2026 13:09:26 -0600
+Subject: [PATCH] process: a crash signal the process raises itself goes to the
+ crash handler
+
+A JS listener for SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE or SIGTRAP (signal-exit listens to
+SIGABRT and SIGTRAP) replaced the crash handler, so that abort() of a failed assertion, a fault
+or a trap ended the process with the signal and nothing on stderr.
+
+- Such a signal goes to the listeners when it is sent: kill from another process, and
+  process.kill() of this one, as in Node. What the process raises itself (abort(), raise()) and
+  what the CPU raises go to the handler the listener replaced: the crash handler prints its
+  report and ends the process with the signal.
+- When the last listener is removed, the handler it replaced is put back, not the default action.
+---
+ src/jsc/bindings/BunProcess.cpp | 125 ++++++++++++++++++++++++++++----
+ 1 file changed, 112 insertions(+), 13 deletions(-)
+
+diff --git a/src/jsc/bindings/BunProcess.cpp b/src/jsc/bindings/BunProcess.cpp
+index bbf484f0..332961e3 100644
+--- a/src/jsc/bindings/BunProcess.cpp
++++ b/src/jsc/bindings/BunProcess.cpp
+@@ -1574,6 +1574,71 @@ static void forwardSignalUnlessFilteredCall(int signalNumber, siginfo_t* info, v
+ #endif
+ 
+ #if !OS(WINDOWS)
++extern "C" bool CrashHandler__isCrashSignal(int signalNumber);
++
++// A JS listener for one of the signals Bun's crash handler handles (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP: signal-exit,
++// which many packages load, listens to all of them) gets the signal when it is sent: kill(1), kill() from another process,
++// process.kill() of this one. As in Node. What the process does to itself, a fault, a trap or abort() (a failed assertion of the
++// engine, a panic), goes to the handler that was there before the listener, the crash handler, which prints its report and ends the
++// process with the signal. A listener would otherwise return into the fault again, or let abort() end the process without a word.
++static struct sigaction actionsBeforeListeners[NSIG];
++#if !OS(LINUX)
++// process.kill() of this process with such a signal, sent and not yet handled: on Darwin it looks like abort() (forwardSignalUnlessCrash()).
++static std::atomic<unsigned> processKillsInFlight[NSIG];
++#endif
++
++static bool isSentToListeners(int signalNumber, const siginfo_t* info)
++{
++#if OS(LINUX)
++    // kill() and sigqueue(), from any process. abort() and raise() send with tgkill() (SI_TKILL); a fault or a trap is the kernel's
++    // (si_code above 0).
++    UNUSED_PARAM(signalNumber);
++    return info->si_code == SI_USER || info->si_code == SI_QUEUE;
++#else
++    // Darwin: kill(), raise() and abort() alike come with si_code 0 and the sender's pid, a fault or a trap with none.
++    if (!info->si_pid)
++        return false;
++    if (info->si_pid != getpid())
++        return true;
++    auto& inFlight = processKillsInFlight[signalNumber];
++    for (unsigned count = inFlight.load(std::memory_order_acquire); count;) {
++        if (inFlight.compare_exchange_weak(count, count - 1, std::memory_order_acq_rel))
++            return true;
++    }
++    return false;
++#endif
++}
++
++static void forwardSignalUnlessCrash(int signalNumber, siginfo_t* info, void* context)
++{
++    if (isSentToListeners(signalNumber, info)) {
++        forwardSignal(signalNumber);
++        return;
++    }
++    const struct sigaction& before = actionsBeforeListeners[signalNumber];
++    if (before.sa_flags & SA_SIGINFO) {
++        before.sa_sigaction(signalNumber, info, context);
++        return;
++    }
++    if (before.sa_handler == SIG_IGN)
++        return;
++    if (before.sa_handler != SIG_DFL) {
++        before.sa_handler(signalNumber);
++        return;
++    }
++    // The default action, once this handler returns (the signal is blocked until then).
++    sigaction(signalNumber, &before, nullptr);
++    raise(signalNumber);
++}
++
++// Whether the disposition is a JS listener's (installForwardSignalHandler()).
++static bool isListenersAction(const struct sigaction& action)
++{
++    if (action.sa_flags & SA_SIGINFO)
++        return action.sa_sigaction == forwardSignalUnlessCrash;
++    return action.sa_handler == forwardSignal;
++}
++
+ static void installForwardSignalHandler(int signalNumber)
+ {
+     struct sigaction action;
+@@ -1588,9 +1653,31 @@ static void installForwardSignalHandler(int signalNumber)
+         action.sa_flags |= SA_SIGINFO;
+     }
+ #endif
++    if (CrashHandler__isCrashSignal(signalNumber)) {
++        struct sigaction current;
++        if (!sigaction(signalNumber, nullptr, &current) && !isListenersAction(current))
++            actionsBeforeListeners[signalNumber] = current;
++        action.sa_sigaction = forwardSignalUnlessCrash;
++        // (On the crash handler's alternate stack, where it has one: a stack overflow is such a fault.)
++        action.sa_flags |= SA_SIGINFO | SA_ONSTACK;
++    }
+     sigaction(signalNumber, &action, nullptr);
+ }
+ 
++// When the last listener is gone: the disposition it replaced (the crash handler's, for the signals that one handles), if it is still
++// the listener's.
++static void uninstallForwardSignalHandler(int signalNumber)
++{
++    struct sigaction current;
++    if (sigaction(signalNumber, nullptr, &current) || !isListenersAction(current))
++        return;
++    if (CrashHandler__isCrashSignal(signalNumber)) {
++        sigaction(signalNumber, &actionsBeforeListeners[signalNumber], nullptr);
++        return;
++    }
++    signal(signalNumber, SIG_DFL);
++}
++
+ extern "C" void Bun__installWatchModeSignalHandler(int signalNumber)
+ {
+     Bun__ensureSignalHandler();
+@@ -1702,10 +1789,8 @@ static void onDidChangeListeners(EventEmitter& eventEmitter, const Identifier& e
+                             else
+ #endif
+ #if !OS(WINDOWS)
+-                            if (void (*oldHandler)(int) = signal(signalNumber, SIG_DFL); oldHandler != forwardSignal) {
+-                                // Don't uninstall the old handler if it's not the one we installed.
+-                                signal(signalNumber, oldHandler);
+-                            }
++                            // (Not a handler that is not the one installed here.)
++                            uninstallForwardSignalHandler(signalNumber);
+ #else
+                             SignalHandleValue signal_handle = signalToContextIdsMap->get(signalNumber);
+                             Bun__UVSignalHandle__close(signal_handle.handle);
+@@ -4782,23 +4867,25 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionCwd, (JSC::JSGlobalObject * globalObjec
+ }
+ 
+ #if !OS(WINDOWS)
+-extern "C" bool CrashHandler__isCrashSignal(int signalNumber);
+-
+ // kill(-1) never reaches the caller, not even when the caller's process group is 1, hence pid < -1.
+ static bool killReachesThisProcess(int pid, int ownPid)
+ {
+     return pid == ownPid || pid == 0 || (pid < -1 && pid == -getpgrp());
+ }
+ 
+-// Same as process.abort(). forwardSignal as the disposition means a JS listener owns the signal.
+-static void bypassCrashHandlerForSelfSentSignal(int pid, int ownPid, int signalNumber)
++// Same as process.abort(), unless a JS listener owns the signal: then it is the listener's (forwardSignalUnlessCrash()). Returns
++// whether it is.
++static bool prepareSelfSentCrashSignal(int pid, int ownPid, int signalNumber)
+ {
+     if (!CrashHandler__isCrashSignal(signalNumber) || !killReachesThisProcess(pid, ownPid))
+-        return;
++        return false;
+     struct sigaction current;
+-    if (sigaction(signalNumber, nullptr, &current) != 0 || current.sa_handler == forwardSignal)
+-        return;
++    if (sigaction(signalNumber, nullptr, &current) != 0)
++        return false;
++    if (isListenersAction(current))
++        return true;
+     restoreDefaultSignalDisposition(signalNumber);
++    return false;
+ }
+ #endif
+ 
+@@ -4859,10 +4946,22 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionReallyKill, (JSC::JSGlobalObject * glob
+     }
+ 
+ #if !OS(WINDOWS)
+-    bypassCrashHandlerForSelfSentSignal(pid, ownPid, signal);
++    bool isListenersSignal = prepareSelfSentCrashSignal(pid, ownPid, signal);
++#if !OS(LINUX)
++    if (isListenersSignal)
++        processKillsInFlight[signal].fetch_add(1, std::memory_order_acq_rel);
++#endif
+     int result = kill(pid, signal);
+-    if (result < 0)
++    if (result < 0) {
+         result = errno;
++#if !OS(LINUX)
++        if (isListenersSignal)
++            processKillsInFlight[signal].fetch_sub(1, std::memory_order_acq_rel);
++#endif
++    }
++#if OS(LINUX)
++    UNUSED_VARIABLE(isListenersSignal);
++#endif
+ #else
+     int result = uv_kill(pid, signal);
+ #endif
+-- 
+2.53.0
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Fri, 27 Nov 2026 13:57:39 -0600
+Subject: [PATCH] process: the sender of a crash signal, as each system says it
+
+- Darwin: a signal is sent (kill, raise, pthread_kill) only when si_code is 0. After a child
+  process has exited, a trap (brk) comes with that exit's si_code and the child's pid, and went
+  to the JS listeners once before the crash handler.
+- Linux: tgkill() from another process (a debugger, a supervisor) goes to the listeners, as
+  kill() does; this process's own abort() and raise() still go to the crash handler.
+- signal-exit listens to SIGABRT and SIGTRAP, as the comment now says.
+---
+ src/jsc/bindings/BunProcess.cpp | 17 +++++++++++------
+ 1 file changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/src/jsc/bindings/BunProcess.cpp b/src/jsc/bindings/BunProcess.cpp
+index 332961e3..6ea1308d 100644
+--- a/src/jsc/bindings/BunProcess.cpp
++++ b/src/jsc/bindings/BunProcess.cpp
+@@ -1576,8 +1576,8 @@ static void forwardSignalUnlessFilteredCall(int signalNumber, siginfo_t* info, v
+ #if !OS(WINDOWS)
+ extern "C" bool CrashHandler__isCrashSignal(int signalNumber);
+ 
+-// A JS listener for one of the signals Bun's crash handler handles (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP: signal-exit,
+-// which many packages load, listens to all of them) gets the signal when it is sent: kill(1), kill() from another process,
++// A JS listener for one of the signals Bun's crash handler handles (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP; signal-exit,
++// which many packages load, listens to SIGABRT and SIGTRAP) gets the signal when it is sent: kill(1), kill() from another process,
+ // process.kill() of this one. As in Node. What the process does to itself, a fault, a trap or abort() (a failed assertion of the
+ // engine, a panic), goes to the handler that was there before the listener, the crash handler, which prints its report and ends the
+ // process with the signal. A listener would otherwise return into the fault again, or let abort() end the process without a word.
+@@ -1590,13 +1590,18 @@ static std::atomic<unsigned> processKillsInFlight[NSIG];
+ static bool isSentToListeners(int signalNumber, const siginfo_t* info)
+ {
+ #if OS(LINUX)
+-    // kill() and sigqueue(), from any process. abort() and raise() send with tgkill() (SI_TKILL); a fault or a trap is the kernel's
+-    // (si_code above 0).
++    // kill() and sigqueue() (SI_USER, SI_QUEUE) from any process, and tgkill() (SI_TKILL) from another one, a debugger or a
++    // supervisor. This process's abort() and raise() send with tgkill(); a fault or a trap is the kernel's: si_code above 0, and
++    // si_pid is not a sender then (it shares its place with the fault's address).
+     UNUSED_PARAM(signalNumber);
++    if (info->si_code == SI_TKILL)
++        return info->si_pid != getpid();
+     return info->si_code == SI_USER || info->si_code == SI_QUEUE;
+ #else
+-    // Darwin: kill(), raise() and abort() alike come with si_code 0 and the sender's pid, a fault or a trap with none.
+-    if (!info->si_pid)
++    // Darwin: kill(), raise(), pthread_kill() and abort() alike come with si_code 0 and the sender's pid. A fault comes with
++    // si_code above 0; a trap (brk, the engine's CRASH()) with si_code 0 and no pid, or, once a child process has exited, with
++    // that exit's si_code (CLD_EXITED and the like) and the child's pid, which the system leaves in the process's signal state.
++    if (info->si_code || !info->si_pid)
+         return false;
+     if (info->si_pid != getpid())
+         return true;
+-- 
+2.53.0
+

@@ -1,121 +1,22 @@
-// The release build (`scripts/build-release.ts`) into a temporary directory: what `dist/` holds, the launcher, the API
-// modules' declarations, and the build's guards, each seen to refuse. No install and no network: the installed release
-// is tested by `test/release/`.
+// The release build's guards (`scripts/build-release.ts`), each seen to refuse, and its bundle options keeping what an
+// entry imports lazily out of the entry. The whole build into `dist/`, installed, is tested by `test/release/`.
 
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, before, describe, it } from "node:test";
+import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { build } from "esbuild";
-import {
-	type Built,
-	buildRelease,
-	bundleOptions,
-	checkExternals,
-	checkLean,
-	checkPlacement,
-	checkVersions,
-} from "../scripts/build-release.ts";
-
-describe("the release build", () => {
-	let dir: string;
-	let built: Built;
-	before(async () => {
-		dir = await mkdtemp(join(tmpdir(), "p3-build-"));
-		built = await buildRelease(join(dir, "dist"));
-	});
-	after(async () => {
-		await rm(dir, { recursive: true, force: true });
-	});
-
-	it("holds one bundle per process, the launcher, and the API modules compiled with their declarations, and nothing else", () => {
-		const compiled = (module: string) => [`${module}.d.ts`, `${module}.d.ts.map`, `${module}.js`];
-		// No chunk: a bundle shares none with another.
-		assert.deepEqual(built.files, [
-			...["api/v1/index", "api/v1/server", "api/v1/worker"].flatMap(compiled),
-			...["kit/contribute", "kit/forward", "kit/info"].flatMap(compiled),
-			"main.js",
-			"minimum-node.js",
-			"p3.js",
-			...compiled("principals"),
-			"supervisor.js",
-			"worker.js",
-		]);
-	});
-
-	it("writes an executable launcher that enables the compile cache before it loads the bundle", async () => {
-		const path = join(built.dist, "p3.js");
-		assert.equal((await stat(path)).mode & 0o111, 0o111);
-		const launcher = await readFile(path, "utf8");
-		assert.ok(launcher.startsWith("#!/usr/bin/env node\n"));
-		const enabled = launcher.indexOf("\nenableCompileCache();");
-		assert.ok(enabled > 0 && enabled < launcher.indexOf('import("./main.js")'));
-	});
-
-	// Opus, review round 5: on Node 22.12 `p3.js` failed with "No such built-in module: node:sqlite", on Node 20 with
-	// `enableCompileCache` missing: a static import is linked before the check could run.
-	it("writes a launcher with no static import, which checks the Node before it loads anything else", async () => {
-		const launcher = await readFile(join(built.dist, "p3.js"), "utf8");
-		assert.doesNotMatch(launcher, /^\s*import[\s{*"']/m);
-		assert.doesNotMatch(launcher, /^\s*export\b/m);
-		const order = ['import("./minimum-node.js")', 'import("node:module")', 'import("./main.js")'].map((text) =>
-			launcher.indexOf(text),
-		);
-		assert.ok(order[0]! > 0 && order[0]! < order[1]! && order[1]! < order[2]!, launcher);
-		// The check's own bundle imports nothing either.
-		const check = await readFile(join(built.dist, "minimum-node.js"), "utf8");
-		assert.doesNotMatch(check, /\bimport\s*[\s{*"'(]|\bfrom\s*"/);
-		assert.ok(check.includes('MINIMUM_NODE="26.3.1"') && check.includes("process.exit(1)"), check);
-	});
-
-	it("leaves no workspace package and no TypeScript for the bundles to resolve at run time", async () => {
-		// An import of a workspace package or of a TypeScript file, as the bundles would still have it.
-		const left = /(?:\bfrom|\bimport)\s*\(?\s*"(@earendil-works\/[^"]*|[^"]*\.ts)"/;
-		for (const file of ["main.js", "worker.js", "supervisor.js", "p3.js"]) {
-			const code = await readFile(join(built.dist, file), "utf8");
-			assert.equal(left.exec(code)?.[1], undefined, file);
-		}
-	});
-
-	// The owner, 2026-11-16 (decision "The release gets a worker-only entry"): a worker loaded the chunk it shared with
-	// the server, with esbuild's JS API, `ws`, Node's HTTP and the server side of Chord's workers.
-	it("gives a worker and the supervisor bundles that import and hold none of the server's code", async () => {
-		// An import of the server's packages or of Node's HTTP, as a bundle would have it (minified: `from"esbuild"`).
-		const server = /(?:\bfrom|\bimport\(|\brequire\()\s*"((?:node:)?https?|esbuild|ws)"/;
-		for (const file of ["worker.js", "supervisor.js"]) {
-			const code = await readFile(join(built.dist, file), "utf8");
-			assert.equal(server.exec(code)?.[1], undefined, file);
-			// `ws`'s own text, and the HTTP component's: neither is inlined.
-			assert.doesNotMatch(code, /Sec-WebSocket-Accept|createHttp\b/, file);
-		}
-		// The server's bundle has both, so the patterns find them where they are.
-		const main = await readFile(join(built.dist, "main.js"), "utf8");
-		assert.ok(server.test(main) && /Sec-WebSocket-Accept/.test(main));
-		const sizes = await Promise.all(
-			["main.js", "worker.js"].map(async (file) => (await stat(join(built.dist, file))).size),
-		);
-		assert.ok(sizes[1]! < sizes[0]!, `worker.js ${sizes[1]}, main.js ${sizes[0]}`);
-	});
-
-	it("compiles the API modules for a plugin's type check: Chord imported from the dependency, relative files as JavaScript", async () => {
-		const code = await readFile(join(built.dist, "api", "v1", "index.js"), "utf8");
-		assert.match(code, /export \* from "@earendil-works\/chord";/);
-		assert.match(code, /from "\.\.\/\.\.\/kit\/forward\.js";/);
-		const declaration = await readFile(join(built.dist, "api", "v1", "server.d.ts"), "utf8");
-		assert.match(declaration, /export declare const SessionRoute: import\("@earendil-works\/chord"\)\.Contract</);
-		// No type is named by a path into another package's files.
-		for (const file of built.files.filter((name) => name.endsWith(".d.ts"))) {
-			assert.doesNotMatch(await readFile(join(built.dist, file), "utf8"), /node_modules|packages\/chord/, file);
-		}
-	});
-});
+import { bundleOptions, checkExternals, checkLean, checkPlacement, checkVersions } from "../scripts/build-release.ts";
 
 describe("the build's guards", () => {
 	/** An input importing `paths`, all left external. */
 	const importing = (...paths: string[]) => ({
 		inputs: {
-			"src/bootstrap/bin.ts": {
+			"src/bin.ts": {
 				bytes: 1,
 				imports: paths.map((path) => ({ path, kind: "import-statement" as const, external: true })),
 			},
@@ -123,7 +24,7 @@ describe("the build's guards", () => {
 	});
 
 	it("refuse an import left to node_modules that the package does not ship, naming it", () => {
-		checkExternals(importing("node:fs", "fs", "esbuild", "bufferutil", "utf-8-validate"));
+		checkExternals(importing("node:fs", "fs", "esbuild", "bufferutil", "utf-8-validate", "kerberos"));
 		assert.throws(
 			() => checkExternals(importing("node:fs", "left-pad", "ws", "left-pad")),
 			/the bundle left unexpected external imports: left-pad, ws$/,
@@ -138,12 +39,12 @@ describe("the build's guards", () => {
 			inputs: Object.fromEntries(inputs.map((input) => [input, { bytesInOutput: 1 }])),
 		});
 		checkPlacement(
-			{ outputs: { "dist/main.js": output("src/bootstrap/bin.ts", "src/install.ts") } },
+			{ outputs: { "dist/main.js": output("src/bin.ts", "src/install.ts") } },
 			"src/install.ts",
 			"main.js",
 		);
 		const inChunk = {
-			"dist/main.js": output("src/bootstrap/bin.ts"),
+			"dist/main.js": output("src/bin.ts"),
 			"dist/chunks/chunk-A.js": output("src/install.ts"),
 		};
 		assert.throws(
@@ -163,6 +64,37 @@ describe("the build's guards", () => {
 
 	// The owner, 2026-11-16 (the worker-only entry with splitting kept): one build per process, and inside it what an
 	// entry imports lazily stays a chunk of its own, not loaded at the process's start.
+	// Astra, review of the provider logins (round 1): pi-ai imports its OAuth flows and Bedrock through a variable
+	// specifier unless the API registers them, and a bundle cannot follow it: the first sign-in or refresh failed with
+	// ERR_MODULE_NOT_FOUND.
+	it("bundle pi-ai's providers so their OAuth flows and Bedrock's SDK load on first use", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "p3-providers-"));
+		try {
+			const api = (module: string) => fileURLToPath(new URL(`../src/api/v1/${module}.ts`, import.meta.url));
+			const entry = [
+				`import { builtinProviders } from ${JSON.stringify(api("server"))};`,
+				`import { loadProvider } from ${JSON.stringify(api("worker"))};`,
+				'const oauth = builtinProviders().find(({ id }) => id === "anthropic").auth.oauth;',
+				'const auth = await oauth.toAuth({ type: "oauth", access: "a-token", refresh: "r", expires: 0 });',
+				'const bedrock = await loadProvider("amazon-bedrock");',
+				// Bedrock's SDK calls onPayload before it sends anything: offline, its request code ran.
+				"const message = { role: 'user', content: 'x', timestamp: 0 };",
+				"const sent = await bedrock.streamSimple(bedrock.getModels()[0], { messages: [message] },",
+				"\t{ apiKey: 'synthetic', onPayload: () => { throw new Error('offline: nothing sent'); } }).result();",
+				"console.log(JSON.stringify({ auth, bedrock: sent.errorMessage }));",
+			];
+			await writeFile(join(dir, "entry.ts"), entry.join("\n"));
+			const dist = join(dir, "dist");
+			await build({ ...bundleOptions(dist), entryPoints: { entry: join(dir, "entry.ts") } });
+			const { stdout } = await promisify(execFile)(process.execPath, [join(dist, "entry.js")]);
+			const shown = JSON.parse(stdout.trim().split("\n").at(-1)!) as { auth: object; bedrock: string };
+			assert.match(shown.bedrock, /offline: nothing sent/);
+			assert.ok(JSON.stringify(shown.auth).includes("a-token"), stdout);
+		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keep what an entry imports lazily in a chunk of its own, out of the entry", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "p3-split-"));
 		try {
@@ -217,26 +149,46 @@ describe("the build's guards", () => {
 			);
 		}
 		assert.throws(() => checkLean(bundle([], []), "supervisor.js"), /no output supervisor\.js/);
-		// A chunk the worker loads lazily counts as much as its entry.
-		const lazily = bundle([], []);
-		const chunk = {
-			bytes: 1,
-			exports: [],
-			imports: [],
-			inputs: { "../../node_modules/ws/lib/websocket.js": { bytesInOutput: 1 } },
-		};
+		// A chunk the worker loads lazily may hold Node's HTTP and `ws` (a provider SDK's, loaded on its first request);
+		// imported statically it counts as much as its entry; the server's own code counts in any chunk.
+		const withChunk = (kind: "import-statement" | "dynamic-import", inputs: string[]) => ({
+			outputs: {
+				"dist/worker.js": {
+					bytes: 1,
+					exports: [],
+					imports: [{ path: "dist/chunks/sdk-X.js", kind }],
+					inputs: {},
+				},
+				"dist/chunks/sdk-X.js": {
+					bytes: 1,
+					exports: [],
+					imports: [{ path: "node:https", kind: "import-statement" as const, external: true }],
+					inputs: Object.fromEntries(inputs.map((input) => [input, { bytesInOutput: 1 }])),
+				},
+			},
+		});
+		checkLean(withChunk("dynamic-import", ["../../node_modules/ws/lib/websocket.js"]), "worker.js");
 		assert.throws(
-			() => checkLean({ outputs: { ...lazily.outputs, "dist/chunks/lazy-X.js": chunk } }, "worker.js"),
-			/worker\.js holds the server's .*ws\/lib\/websocket\.js/,
+			() => checkLean(withChunk("import-statement", ["../../node_modules/ws/lib/websocket.js"]), "worker.js"),
+			/worker\.js holds the server's .*ws\/lib\/websocket\.js, node:https/,
+		);
+		assert.throws(
+			() => checkLean(withChunk("dynamic-import", [`${chord}/node/http/http.ts`]), "worker.js"),
+			/worker\.js holds the server's .*http\/http\.ts/,
 		);
 	});
 
 	it("refuse a dependency pinned to another version than the workspace's, which the bundle inlines", () => {
 		const manifest = { version: "0.0.1", dependencies: { "@earendil-works/chord": "1.5.2", esbuild: "0.28.2" } };
-		checkVersions(manifest, { "@earendil-works/chord": "1.5.2", esbuild: "0.28.2" });
+		checkVersions(manifest, { "@earendil-works/chord": "1.5.2" });
 		assert.throws(
-			() => checkVersions(manifest, { "@earendil-works/chord": "1.5.3", esbuild: "0.28.2" }),
+			() => checkVersions(manifest, { "@earendil-works/chord": "1.5.3" }),
 			/@earendil-works\/chord is pinned to 1\.5\.2, the workspace has 1\.5\.3$/,
 		);
+	});
+
+	it("check only workspace packages: a registry dependency is installed as pinned, whatever the root holds", () => {
+		const manifest = { version: "0.0.1", dependencies: { "@earendil-works/chord": "1.5.2", react: "19.3.0" } };
+		checkVersions(manifest, { "@earendil-works/chord": "1.5.2" });
 	});
 });

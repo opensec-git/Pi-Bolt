@@ -4,7 +4,8 @@
 #
 # Usage: tests\aot\run.ps1 [test.mjs...]      (default: every test)
 # Environment: PIBOLT_BUN (the Pi-Bolt runtime; default .work\runtime\bun.exe), PIBOLT_STABLE_BUN (the reference; default `bun`),
-#              AOT_BUILD_ENV (extra variables for the compile step, e.g. "BUN_JSC_useAOTLoopSplitting=0")
+#              AOT_BUILD_ENV (extra variables for the compile step, e.g. "BUN_JSC_useAOTLoopSplitting=0"),
+#              PIBOLT_RUNTIME_OLDER (the runtime is an older engine: tests of what this tree's engine does are skipped)
 param([Parameter(ValueFromRemainingArguments)][string[]]$Tests)
 $ErrorActionPreference = 'Continue'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -16,7 +17,7 @@ $Out = Join-Path $Work 'tests\aot'
 New-Item -ItemType Directory -Force $Out | Out-Null
 Set-Location $PSScriptRoot
 if (-not $Tests) {
-	$Tests = 'liveness.mjs', 'mapset.mjs', 'realms.mjs', 'workers.mjs', 'spread-loops.mjs', 'number-encoding.mjs', 'helper-calls.mjs', 'callbacks.mjs', 'methods.mjs', 'dictionaries.mjs', 'variables.mjs', 'polymorphic.mjs', 'strings.mjs', 'unicode-regexps.mjs', 'builtins.mjs', 'declined.mjs', 'deferred-builtins.mjs', 'wide-constants.mjs', 'intl-locales.mjs', 'edge-cases.mjs', 'sort-comparators.mjs', 'json-stringify.mjs', 'await-order.mjs', 'string-or-array.mjs'
+	$Tests = 'liveness.mjs', 'mapset.mjs', 'realms.mjs', 'workers.mjs', 'workers-many.mjs', 'spread-loops.mjs', 'number-encoding.mjs', 'helper-calls.mjs', 'callbacks.mjs', 'methods.mjs', 'dictionaries.mjs', 'variables.mjs', 'polymorphic.mjs', 'strings.mjs', 'unicode-regexps.mjs', 'builtins.mjs', 'declined.mjs', 'deferred-builtins.mjs', 'wide-constants.mjs', 'intl-locales.mjs', 'edge-cases.mjs', 'sort-comparators.mjs', 'json-stringify.mjs', 'await-order.mjs', 'string-or-array.mjs'
 }
 $Target = '--target=bun-windows-x64'
 
@@ -48,9 +49,12 @@ $common = @{ BUN_JSC_useAOTLoopSplitting = '1'; BUN_JSC_aotLoopSplittingPolicy =
 $status = 0
 foreach ($t in $Tests) {
 	$name = [IO.Path]::GetFileNameWithoutExtension($t)
+	# Of this tree's engine: the 15th worker of an older one ends the process.
+	if ($name -eq 'workers-many' -and $env:PIBOLT_RUNTIME_OLDER) { Write-Host "SKIP ${name}: the runtime is an older engine than this tree's"; continue }
 	$extra = @(); $own = @{}
 	if ($name -eq 'realms') { $extra = @('realms-mod.mjs') }
 	if ($name -eq 'workers') { $extra = @('workers-entry.mjs') }
+	if ($name -eq 'workers-many') { $extra = @('workers-many-entry.mjs') }
 	& $Stable $t *> "$Out\$name.expected"
 	# A plain bytecode build, run once, records the order functions are first called in: the AOT build lays code out by it.
 	Invoke-With @{} $Bun (@('build', '--compile', '--bytecode', '--format=esm', $Target, $t) + $extra + @('--outfile', "$Out\$name-bytecode.exe")) "$Out\$name.build.out" "$Out\$name.build.err" | Out-Null
@@ -100,6 +104,15 @@ foreach ($t in $Tests) {
 			Write-Host ("FAIL $name ($mode): exit 0x{0:X8}, compiled code used: {1}" -f ($code -band 0xffffffffL), $(if ($used -eq 1) { 'yes' } else { 'no' }))
 			Compare-Object ($expected -split "`n") ($actual -split "`n") | Select-Object -First 5 | ForEach-Object { "  $($_.SideIndicator) $($_.InputObject)" }
 			$status = 1
+		}
+		# More workers than the static region has blocks for: those without one ran without the static heap.
+		if ($name -eq 'workers-many' -and $mode -ne 'jit-on') {
+			if ((Read-Text "$Out\$name.$mode.err") -match "no room for another realm's block") {
+				Write-Host "PASS $name ($mode, workers without a block)"
+			} else {
+				Write-Host "FAIL ${name} (${mode}): no worker ran without a block"
+				$status = 1
+			}
 		}
 		if ($name -eq 'workers' -and $mode -eq 'jit-off') {
 			$code = Invoke-With @{ BUN_AOT = '0'; BUN_STATIC_HEAP_VERBOSE = '1' } "$Out\$name-$mode.exe" @() "$Out\$name.fallback" "$Out\$name.fallback.err"

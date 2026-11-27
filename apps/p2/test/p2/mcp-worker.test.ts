@@ -1,7 +1,7 @@
 // MCP tools in a session worker, end to end with the fake provider: the worker leases the owner's servers at the
 // session's location with the project `.pi/mcp.json` it read there, the `codemode` section lists each server's namespace
-// with its summary, `describeNamespace()` describes it, a code mode script's call returns the server's answer (the
-// model is not offered the tools, as in pi), a relocation moves the lease, a subagent's own location is leased while it
+// with its summary, `describeNamespace()` describes it, a code mode script's call returns the server's whole
+// `CallToolResult`, uncut past the harness's output bound (the model is not offered the tools, as in pi), a relocation moves the lease, a subagent's own location is leased while it
 // is not archived (its project's servers stay out of the main conversation), and with code mode off `tool_search` loads
 // the tools for the model and the `mcp_servers` section lists the servers.
 import assert from "node:assert/strict";
@@ -13,10 +13,10 @@ import { fileURLToPath } from "node:url";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@p2/app/v1";
-import { Chat } from "../../plugins/chat/contract.ts";
-import { Mcp } from "../../plugins/mcp/contract.ts";
-import { Sessions } from "../../plugins/sessions/contract.ts";
-import { holdIn, startFixture, until } from "./helpers.ts";
+import { CHAT_PARTICIPANT, Chat } from "../../plugins/chat/contract.ts";
+import { MCP_OWNER, Mcp } from "../../plugins/mcp/contract.ts";
+import { SESSIONS_OWNER, Sessions } from "../../plugins/sessions/contract.ts";
+import { holdWith, startFixture, until } from "./helpers.ts";
 
 const FIXTURE = fileURLToPath(new URL("../fixtures/mcp-server.mjs", import.meta.url));
 
@@ -70,10 +70,10 @@ test(
 			}),
 		);
 		const owner = fixture.browser();
-		const mcp = await holdIn(owner, Mcp, {}, "owner");
-		const sessions = await holdIn(owner, Sessions, {}, "owner");
+		const mcp = await holdWith(owner, Mcp, {}, ...MCP_OWNER);
+		const sessions = await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER);
 		const session = await sessions.create({ cwd: fixture.workspace, title: "MCP" }, BACKGROUND_CONTEXT);
-		const chat = await holdIn(owner, Chat, { session: session.id, conversation: 1 }, "participant");
+		const chat = await holdWith(owner, Chat, { session: session.id, conversation: 1 }, ...CHAT_PARTICIPANT);
 		// The worker leases the session's location; the owner's and the project's servers connect there.
 		const started = await until(
 			mcp.instances,
@@ -104,11 +104,19 @@ test(
 		};
 		// As in pi, the tools are for code mode scripts: the model is not offered them, and `tool_search` is not installed.
 		const echo = async (said: string) => {
-			const result = await call(`codemode return await tools.mcp__files__echo({ text: ${JSON.stringify(said)} });`);
+			const result = await call(
+				`codemode return (await tools.mcp__files__echo({ text: ${JSON.stringify(said)} })).content[0].text;`,
+			);
 			assert.equal(result.isError, false, text(result));
 			return scriptOutput(result);
 		};
 		assert.equal(await echo("hello"), "echo: hello");
+		// Past Durable's 50KB output bound and pi's 20KB MCP limit, the script still gets every character.
+		const large = await call(
+			'codemode const r = await tools.mcp__files__echo({ text: "x".repeat(100000) }); return r.content[0].text.length;',
+		);
+		assert.equal(large.isError, false, text(large));
+		assert.equal(scriptOutput(large), String("echo: ".length + 100000));
 		const listing = sections(await until(chat.view, Boolean));
 		assert.equal(listing.mcp_servers, undefined);
 		assert.match(

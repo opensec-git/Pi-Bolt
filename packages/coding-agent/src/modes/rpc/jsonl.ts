@@ -36,8 +36,10 @@ export function attachJsonlLineReader(stream: Readable, onLine: (line: string) =
 			const piece = text.slice(start, newlineIndex);
 			if (pending.length > 0) {
 				pending.push(piece);
-				emitLine(pending.join(""));
+				const line = pending.join("");
+				// Cleared first: a handler that throws must not leave this line to be joined with the next one.
 				pending = [];
+				emitLine(line);
 			} else {
 				emitLine(piece);
 			}

@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.7.0] - 2026-11-27
+
+### Added
+
+- Added `formatProgramResume()`, `formatProgramResumeClear()`, and `takeProgramResumeToken()` for the [Program Resume Protocol (OSC 7577)](https://www.superlogical.com/rex/docs/build/program-resume), which tells the terminal how to resume a program after the terminal restarts
+- Added protected `Editor.confirmAutocomplete()` so subclasses can apply the selected autocomplete suggestion the way `tui.select.confirm` does
+
+### Fixed
+
+- Fixed `SettingsList` hint hardcoding Enter and Esc instead of naming the configured `tui.select.confirm` and `tui.select.cancel` keys
+- Fixed Kitty images disappearing in Konsole in both regular and fullscreen mode: `allocateImageId()` now returns IDs that fit a signed 32-bit integer, which Konsole requires ([#12548](https://github.com/earendil-works/pi/issues/12548))
+- Fixed regular mode clearing the screen and scrollback whenever an appended Kitty image reached past the bottom of the screen ([#12548](https://github.com/earendil-works/pi/issues/12548))
+
+## [1.6.1] - 2026-11-25
+
+### Fixed
+
+- Fixed `Editor.addToHistory()` storing a prompt again when it was already in history; it now moves the existing entry to the most recent position ([#12279](https://github.com/earendil-works/pi/issues/12279))
+- Fixed a failed crash-log write replacing the rendered-line-width error and leaving the terminal in raw mode ([#10585](https://github.com/earendil-works/pi/issues/10585))
+- Fixed Markdown after an unclosed `$` before a number, such as `+$50`, rendering as raw text for the rest of the paragraph ([#12389](https://github.com/earendil-works/pi/issues/12389) by [@wuhaoyujerry](https://github.com/wuhaoyujerry))
+- Fixed right-click paste inserting the clipboard twice in Tabby on Windows, which pastes on right-click itself ([#12406](https://github.com/earendil-works/pi/issues/12406))
+- Fixed rendering a bare URL that runs into a multi-megabyte line exhausting the heap in terminals with OSC 8 hyperlinks: `hyperlink()` no longer links URLs longer than 8192 characters ([#12416](https://github.com/earendil-works/pi/issues/12416))
+- Fixed `StdinBuffer` rescanning the whole bracketed paste for its end marker on every chunk, which made large pastes take time quadratic in their size ([#12224](https://github.com/earendil-works/pi/issues/12224))
+
 ## [1.6.0] - 2026-11-20
 
 ### Breaking Changes

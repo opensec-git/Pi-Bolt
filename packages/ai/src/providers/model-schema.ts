@@ -37,7 +37,7 @@ export const ThinkingLevelMapSchema = object(
 	},
 	{
 		description:
-			"Provider value sent for each thinking level. null marks a level unsupported. Levels the model does not map use the provider's default value through high; xhigh and max are unsupported.",
+			"Provider value sent for each thinking level. A string is sent to the provider; null hides the level. Levels left out use the provider's default value for off through high; xhigh and max are opt-in and only offered when mapped to a string.",
 	},
 );
 
@@ -66,6 +66,12 @@ export const ModelCostTierSchema = object({
 });
 export const ModelCostSchema = object({
 	...ModelCostRatesProperties,
+	imageOutput: opt(
+		num({
+			description:
+				"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
+		}),
+	),
 	tiers: opt(
 		arr(ModelCostTierSchema, {
 			description: "Request-wide pricing tiers. The highest matching input threshold applies to the full request.",

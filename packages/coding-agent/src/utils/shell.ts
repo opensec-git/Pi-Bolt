@@ -103,11 +103,33 @@ function findExecutableOnPath(executable: string, accept?: (file: string) => boo
 	return null;
 }
 
+// Keep in sync with packages/durable/src/env/node.ts.
+// Git for Windows reports its POSIX shell as `<root>/usr/bin/sh.exe`.
+const GIT_FOR_WINDOWS_SHELL_SUFFIX = win32.join("usr", "bin", "sh.exe");
+
+/**
+ * Find Git Bash of the Git for Windows installation whose git.exe is on PATH. Git itself reports
+ * where it is installed (`git var GIT_SHELL_PATH`, Git 2.47+), so this works for any install
+ * directory and any PATH layout (`cmd`, `bin`, `mingw64\bin`, `ucrt64\bin`, package-manager shims).
+ * It returns `<root>\bin\bash.exe`, not the shell Git reports: that launcher sets up MSYSTEM and
+ * PATH, without which `usr\bin\bash.exe` cannot find tools like `ls`.
+ */
+function findGitBashOfGitOnPath(): string | null {
+	const git = findExecutableOnPath("git.exe");
+	if (!git) return null;
+	const result = spawnSync(git, ["var", "GIT_SHELL_PATH"], { encoding: "utf-8", timeout: 5000, windowsHide: true });
+	if (result.status !== 0) return null;
+	const gitShell = win32.normalize(result.stdout.trim());
+	if (!gitShell.toLowerCase().endsWith(`\\${GIT_FOR_WINDOWS_SHELL_SUFFIX}`)) return null;
+	const bash = win32.join(gitShell.slice(0, -GIT_FOR_WINDOWS_SHELL_SUFFIX.length), "bin", "bash.exe");
+	return shellPathExists(bash) ? bash : null;
+}
+
 /**
  * Resolve shell configuration based on platform and an optional explicit shell path.
  * Resolution order:
  * 1. User-specified shellPath
- * 2. On Windows: Git Bash in known locations, then bash on PATH
+ * 2. On Windows: Git Bash in known locations, then Git Bash of git on PATH, then bash on PATH
  * 3. On Unix: /bin/bash, then bash on PATH, then fallback to sh
  */
 export function getShellConfig(customShellPath?: string): ShellConfig {
@@ -147,7 +169,14 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 			}
 		}
 
-		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, then WSL's launchers last)
+		// 3. Git Bash installed elsewhere, found through git on PATH. This must precede the generic
+		// bash.exe lookup, which usually finds the WSL launcher in System32 first.
+		const gitBash = findGitBashOfGitOnPath();
+		if (gitBash) {
+			return getBashShellConfig(gitBash);
+		}
+
+		// 4. Fallback: search bash.exe on PATH (Cygwin, MSYS2, then WSL's launchers last)
 		const bashOnPath = findExecutableOnPath("bash.exe", (file) => !isLegacyWslBashPath(file));
 		if (bashOnPath) {
 			return getBashShellConfig(bashOnPath);
@@ -162,7 +191,8 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 				`  1. Install Git for Windows: https://git-scm.com/download/win\n` +
 				`  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
 				"  3. Set shellPath in settings.json\n\n" +
-				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}`,
+				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}\n` +
+				"  the Git for Windows installation of git.exe on PATH",
 		);
 	}
 
@@ -463,53 +493,46 @@ export function untrackDetachedChildPid(pid: number): void {
 	}
 }
 
+/** Kill every tracked shell process tree. On Windows this blocks until taskkill finishes. */
 export function killTrackedDetachedChildren(): void {
-	for (const pid of trackedDetachedChildPids) {
-		killProcessTree(pid, { sync: true });
+	if (trackedDetachedChildPids.size === 0) return;
+	if (process.platform === "win32") {
+		// Callers exit right after this. Exiting kills the shell (libuv's job object), and taskkill /T
+		// then no longer finds the shell's descendants, so wait for taskkill. windowsHide gives it its own
+		// console, so a console close (SIGHUP) does not end it too. One taskkill for all trees, then what
+		// it does not reach (see killProcessTree).
+		const pids = [...trackedDetachedChildPids];
+		const cleanups = pids.map(takeWindowsTreeCleanup);
+		try {
+			spawnSync(getTaskkillPath(), ["/F", "/T", ...pids.flatMap((pid) => ["/PID", String(pid)])], {
+				stdio: "ignore",
+				timeout: 2000,
+				windowsHide: true,
+			});
+		} catch {}
+		for (const cleanup of cleanups) cleanup();
+	} else {
+		for (const pid of trackedDetachedChildPids) {
+			killProcessTree(pid);
+		}
 	}
 	trackedDetachedChildPids.clear();
+}
+
+// Use the trusted System32 executable so cleanup does not depend on PATH.
+function getTaskkillPath(): string {
+	return join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
 }
 
 /**
  * Kill a process and all its children (cross-platform)
  */
-export function killProcessTree(pid: number, options?: { sync?: boolean }): void {
+export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
-		// taskkill first, while the shell is there to walk the tree from; then, once it is done, what it does not reach:
-		// - the job of the tool's shell (see getWindowsJobs): everything started in it, whatever its parent. (Ended first, it
-		//   would end the shell, and a process the shell started before it was in the job, outside it, would then be reached
-		//   by neither: under load, Git Bash's launcher can have started bash, and bash a program, by then.)
-		// - a Cygwin-family shell's processes, by its group's variable (see killMsysGroup), whatever their parents. (Before
-		//   taskkill, it would end the processes that stand for a native program bash started, the parents of that program's
-		//   own tree, which taskkill would then no longer reach.)
-		// (The job is this kill's from here: the shell's exit, which taskkill brings, does not close it.)
-		const job = windowsJobOfPid.get(pid);
-		windowsJobOfPid.delete(pid);
-		const msys = msysGroupOfPid.get(pid);
-		let after = false;
-		const killRest = () => {
-			if (after) return;
-			after = true;
-			if (job !== undefined) {
-				try {
-					getWindowsJobs()?.terminate(job);
-					getWindowsJobs()?.close(job);
-				} catch {}
-			}
-			if (msys) killMsysGroup(msys.bash, msys.group);
-		};
-		// Use the trusted System32 executable so cleanup does not depend on PATH.
-		// (`||`: an empty SystemRoot is no Windows directory either, and would make the path relative, #6596.)
-		const taskkill = join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe");
+		const killRest = takeWindowsTreeCleanup(pid);
+		// The trusted System32 executable, so cleanup does not depend on PATH.
+		const taskkill = getTaskkillPath();
 		const taskkillArgs = ["/F", "/T", "/PID", String(pid)];
-		if (options?.sync) {
-			// Pi is exiting: there is no later to wait for.
-			try {
-				spawnSync(taskkill, taskkillArgs, { stdio: "ignore", windowsHide: true, timeout: 5000 });
-			} catch {}
-			killRest();
-			return;
-		}
 		try {
 			const child = spawn(taskkill, taskkillArgs, {
 				stdio: "ignore",
@@ -549,4 +572,33 @@ export function killProcessTree(pid: number, options?: { sync?: boolean }): void
 			}
 		}
 	}
+}
+
+/**
+ * What ends the rest of a tool shell's tree on Windows once taskkill is done, taken out of the tracking maps.
+ */
+function takeWindowsTreeCleanup(pid: number): () => void {
+	// taskkill first, while the shell is there to walk the tree from; then, once it is done, what it does not reach:
+	// - the job of the tool's shell (see getWindowsJobs): everything started in it, whatever its parent. (Ended first, it
+	//   would end the shell, and a process the shell started before it was in the job, outside it, would then be reached
+	//   by neither: under load, Git Bash's launcher can have started bash, and bash a program, by then.)
+	// - a Cygwin-family shell's processes, by its group's variable (see killMsysGroup), whatever their parents. (Before
+	//   taskkill, it would end the processes that stand for a native program bash started, the parents of that program's
+	//   own tree, which taskkill would then no longer reach.)
+	// (The job is this kill's from here: the shell's exit, which taskkill brings, does not close it.)
+	const job = windowsJobOfPid.get(pid);
+	windowsJobOfPid.delete(pid);
+	const msys = msysGroupOfPid.get(pid);
+	let after = false;
+	return () => {
+		if (after) return;
+		after = true;
+		if (job !== undefined) {
+			try {
+				getWindowsJobs()?.terminate(job);
+				getWindowsJobs()?.close(job);
+			} catch {}
+		}
+		if (msys) killMsysGroup(msys.bash, msys.group);
+	};
 }

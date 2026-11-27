@@ -863,6 +863,30 @@ describe("Coding Agent Tools", () => {
 			expect(output).toMatch(/\[Showing last 50\.0KB of line 2 /);
 		});
 
+		// #12350: an over-long line followed by a blank line returned "(no output)".
+		it.each([
+			[60_000, "\n"],
+			[219_000, "\n"],
+			[219_000, "\r\n"],
+		])("should show the end of an over-long line followed by a blank line (%i bytes, %j)", async (length, eol) => {
+			const longLine = `${"y".repeat(length)}END`;
+			const operations: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					const data = Buffer.from(`first line${eol}${longLine}${eol}${eol}`, "utf-8");
+					for (let i = 0; i < data.length; i += 8192) onData(data.subarray(i, i + 8192));
+					return { exitCode: 0 };
+				},
+			};
+			const bash = createBashTool(testDir, { operations });
+
+			const result = await bash.execute("test-call-long-line-blank-line", { command: "long-line" });
+			const output = getTextOutput(result);
+
+			expect(result.details?.truncation?.lastLinePartial).toBe(true);
+			expect(output).toMatch(/^y+END\r?\n/);
+			expect(output).toMatch(/\[Showing last 50\.0KB of line 2 /);
+		});
+
 		it("should decode UTF-8 characters split across output chunks", async () => {
 			const euro = Buffer.from("€\n", "utf-8");
 			const operations: BashOperations = {
@@ -976,7 +1000,7 @@ describe("Coding Agent Tools", () => {
 				const result = await bash.execute("test-call-no-tmpdir", { command: "many" });
 				const output = getTextOutput(result);
 				expect(output).toContain("line 199999");
-				expect(output).toContain("The full output could not be saved");
+				expect(output).toContain("Could not save the full output: ");
 				expect(output).not.toContain("Full output: ");
 				expect(result.details?.fullOutputPath).toBeUndefined();
 				const structured = result.structuredContent as { truncated: boolean; output: string; exit_code: number };

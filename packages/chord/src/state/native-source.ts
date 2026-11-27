@@ -11,7 +11,8 @@ import {
 	type WatchEnd,
 } from "../watch.ts";
 import type { Batch } from "./batch.ts";
-import { type Dependent, handedOut } from "./watchable.ts";
+import { Dependents } from "./dependents.ts";
+import { handedOut } from "./watchable.ts";
 
 /**
  * A synchronous observer of a native source (Durable's observer shape): `advance` is called inside the batch that
@@ -43,7 +44,7 @@ export type NativeStart<T> =
  */
 export abstract class NativeSource<T = unknown> implements NativeWatchable<T> {
 	/** Derives and registry tables reading this source; each removes itself when it stops. */
-	readonly dependents = new Set<Dependent>();
+	readonly dependents = new Dependents();
 	/** The host's batch; dropped when the source ended, so an ended source keeps no host. */
 	#batch: Batch | undefined;
 
@@ -74,9 +75,17 @@ export abstract class NativeSource<T = unknown> implements NativeWatchable<T> {
 		return this.#batch;
 	}
 
+	/**
+	 * Lists `flush` for the end of the commit of its host running now (one that changed it: its dependents are told
+	 * inside it), after its deliveries; nothing once the source ended.
+	 */
+	flushing(flush: (context: Context) => void): void {
+		this.#batch?.flushing(flush);
+	}
+
 	/** Records a change inside the current batch: every dependent marked. */
 	protected changed(): void {
-		for (const dependent of this.dependents) dependent.invalidate();
+		this.dependents.invalidate();
 	}
 
 	/** Ends the source for good: its dependents dropped, the batch let go. */

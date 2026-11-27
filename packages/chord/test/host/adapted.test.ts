@@ -2,24 +2,26 @@
 // state mapped (diffs per commit), call it with mapped arguments and results or its replacement of a removed method,
 // read keyed members mapped per key, and are refused a member the provider refuses.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { type Context, BACKGROUND_CONTEXT as context } from "../../src/context/index.ts";
 import {
 	arr,
 	type EventSource,
 	event,
 	evolve,
+	grantable,
 	int,
 	keyed,
 	local,
 	method,
 	obj,
+	remote,
 	str,
 } from "../../src/contracts/index.ts";
 import { defineState } from "../../src/documents/index.ts";
 import { AdaptedMembers } from "../../src/host/adapted.ts";
 import { EventNode } from "../../src/host/events.ts";
-import { createHost, defineFacet, type FacetHost, type Host, type HostError } from "../../src/host/index.ts";
+import { allow, createHost, defineFacet, type FacetHost, type Host, type HostError } from "../../src/host/index.ts";
 import { constant } from "../../src/state/index.ts";
 import {
 	changesOf,
@@ -29,7 +31,9 @@ import {
 	instancesOf,
 	metered,
 	rejection,
+	Server,
 	valuesOf,
+	waitLive,
 } from "../support.ts";
 
 /** v1: a list of texts, `add` taking a text and returning the count, `clear`, keyed notes of a title. */
@@ -1642,3 +1646,133 @@ describe('events of an older consumer (decision "Events: fire-and-forget members
 
 /** Every event node cleared in this file (a mapping dropped, an instance ended), weakly. */
 const clearedNodes = instancesOf(EventNode, "clear");
+
+describe("a removed member's mapping (review round 2, Sol 2)", () => {
+	it("gets the state its caller was granted: a grantable member is optional in its type and absent when not granted", async () => {
+		const V1 = remote("test.mapping", {
+			version: 1,
+			params: {},
+			hostAddress: () => Server(),
+			state: { plain: str(), legacy: str(), privateText: grantable(str()) },
+		});
+		const V2 = evolve(V1, (e) => e.removeState("legacy"));
+		const host = createHost({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+		const facet = defineFacet((h) =>
+			h.serve(V2, () => ({ plain: constant("plain"), privateText: () => constant("private") }), {
+				admit: () => constant(allow({})),
+				accepts: {
+					1: {
+						state: {
+							legacy: (current) => {
+								expectTypeOf(current).toEqualTypeOf<
+									{ readonly plain: string } & { readonly privateText?: string }
+								>();
+								return current.privateText?.toUpperCase() ?? `${current.plain} only`;
+							},
+						},
+					},
+				},
+			}),
+		);
+		await host.load([{ name: "test", facet }], context);
+		const older = host.hold(V1, {}, context);
+		await waitLive(older);
+		expect(older.legacy.value).toBe("plain only");
+		await host.close(context);
+	});
+});
+
+describe("an older consumer of grantable members not granted (review round 1, Astra 3)", () => {
+	/**
+	 * v1: a plain title, grantable `history`, `notes`, `add` and `clear`; v2 changes `history` and `add` and removes
+	 * `notes` and `clear` (round 2: a removal drops the mark from the current version, not from v1).
+	 */
+	const BoardV1 = remote("app.board", {
+		version: 1,
+		params: {},
+		hostAddress: () => Server(),
+		state: { title: str(), history: grantable(arr(str())), notes: grantable(arr(str())) },
+		methods: { add: grantable(method(str(), int())), clear: grantable(method()) },
+	});
+	const BoardV2 = evolve(BoardV1, (e) =>
+		e
+			.state("history", arr(obj({ text: str() })))
+			.args("add", obj({ text: str() }))
+			.removeState("notes")
+			.removeMethod("clear"),
+	);
+
+	/** A host serving v2 to v1 consumers, granting nothing; what the v1 mapping and replacement were asked. */
+	async function board() {
+		const asked: string[] = [];
+		const host = createHost({ address: Server(), principal: { kind: "server" }, onError: () => {} });
+		const facet = defineFacet((h) =>
+			h.serve(
+				BoardV2,
+				() => ({
+					title: constant("board"),
+					history: () => constant([{ text: "a" }]),
+					add: async () => 1,
+				}),
+				{
+					admit: () => constant(allow({})),
+					accepts: {
+						1: {
+							state: {
+								history: (current) => {
+									asked.push("history");
+									return current.map(({ text }) => text);
+								},
+								notes: () => {
+									asked.push("notes");
+									return [];
+								},
+							},
+							methods: {
+								add: {
+									call: async () => {
+										asked.push("add");
+										return 0;
+									},
+								},
+								clear: {
+									call: async () => {
+										asked.push("clear");
+										return null;
+									},
+								},
+							},
+						},
+					},
+				},
+			),
+		);
+		await host.load([{ name: "@test/board", facet }], context);
+		return { host, asked };
+	}
+
+	it("a call of a method not granted, changed or removed since, is refused before the provider's replacement runs", async () => {
+		const { host, asked } = await board();
+		// Taken before the reference was live: every grantable member is there until then.
+		const old = host.hold(BoardV1, {}, context);
+		const [add, clear] = [old.add!, old.clear!];
+		await waitLive(old);
+		expect(old.granted).toEqual(new Set());
+		expect(await rejection(add("x", context))).toMatchObject({ code: "forbidden" });
+		expect(await rejection(clear(context))).toMatchObject({ code: "forbidden" });
+		expect(asked).toEqual([]);
+		await host.close(context);
+	});
+
+	it("a state member not granted, changed or removed since, is refused, never mapped", async () => {
+		const { host, asked } = await board();
+		const old = host.hold(BoardV1, {}, context);
+		const [history, notes] = [old.history!, old.notes!];
+		await waitLive(old);
+		expect(() => history.value).toThrow(expect.objectContaining({ code: "forbidden" }));
+		expect(() => notes.value).toThrow(expect.objectContaining({ code: "forbidden" }));
+		expect(old.title.value).toBe("board");
+		expect(asked).toEqual([]);
+		await host.close(context);
+	});
+});

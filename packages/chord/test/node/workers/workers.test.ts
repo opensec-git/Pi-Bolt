@@ -31,7 +31,11 @@ import { context, ENTRY, fleet, Notes, Session, type TestPrincipal, until } from
 function listed(hosts: readonly RolloutHost[]) {
 	return hosts.map((entry) => [
 		entry.host,
-		"report" in entry ? entry.report.plugins : "stopped" in entry ? "stopped" : (entry.error as Error).message,
+		entry.kind === "reloaded"
+			? entry.report.plugins
+			: entry.kind === "stopped"
+				? "stopped"
+				: (entry.error as Error).message,
 	]);
 }
 
@@ -84,17 +88,14 @@ function reporting(
 		facet.serve(Reports, (_params, _principal, self) => {
 			const journal = self.get(Journal, {});
 			return {
-				variant: "main",
-				members: {
-					report: async (text, ctx) => {
-						log.received.push(options.seen === undefined ? text : `${text} ${options.seen(ctx.incarnation)}`);
-						await options.before;
-						await journal.append(text, ctx).then(
-							() => log.outcomes.push(`${text} committed`),
-							(error: unknown) => log.outcomes.push(`${text} ${isChordError(error) ? error.code : "threw"}`),
-						);
-						return null;
-					},
+				report: async (text, ctx) => {
+					log.received.push(options.seen === undefined ? text : `${text} ${options.seen(ctx.incarnation)}`);
+					await options.before;
+					await journal.append(text, ctx).then(
+						() => log.outcomes.push(`${text} committed`),
+						(error: unknown) => log.outcomes.push(`${text} ${isChordError(error) ? error.code : "threw"}`),
+					);
+					return null;
 				},
 			};
 		});
@@ -769,7 +770,9 @@ describe("fix round 1", () => {
 		const built = await plugins.build(plugins.state.value.dirty, context);
 		const failed = (result: { steps: readonly { hosts: readonly RolloutHost[] }[] }) => {
 			const [entry] = result.steps[0]!.hosts;
-			return entry !== undefined && "report" in entry ? entry.report.failed.map(({ plugin }) => plugin) : entry;
+			return entry !== undefined && entry.kind === "reloaded"
+				? entry.report.failed.map(({ plugin }) => plugin)
+				: entry;
 		};
 		expect(failed(await plugins.rollout([workers.step("one")], built, context))).toEqual(["@test/notes"]);
 		expect(failed(await plugins.rollout([workers.step("two")], built, context))).toEqual(["@test/notes"]);
@@ -817,7 +820,7 @@ describe("fix round 1", () => {
 			const built = await env.plugins.build(["@test/notes"], context);
 			const result = await env.plugins.rollout([env.workers.step("workers")], built, context);
 			const [entry] = result.steps[0]!.hosts;
-			if (entry === undefined || !("report" in entry)) throw new Error("no report");
+			if (entry === undefined || entry.kind !== "reloaded") throw new Error("no report");
 			return new WeakRef(entry.report);
 		})();
 		await expectCollected(report);

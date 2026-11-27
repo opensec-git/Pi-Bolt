@@ -241,6 +241,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 					maxRetries: options?.maxRetries,
 					maxRetryDelayMs: options?.maxRetryDelayMs,
 					signal: options?.signal,
+					onErrorResponse: (errorResponse) => options?.onResponse?.(errorResponse, model),
 				},
 			);
 			cache?.end();

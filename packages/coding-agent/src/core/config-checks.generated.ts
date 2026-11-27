@@ -128,6 +128,8 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 								(typeof var_1.compat.thinkingFormat === "string" &&
 									var_1.compat.thinkingFormat === "deepseek") ||
 								(typeof var_1.compat.thinkingFormat === "string" &&
+									var_1.compat.thinkingFormat === "ant-ling") ||
+								(typeof var_1.compat.thinkingFormat === "string" &&
 									var_1.compat.thinkingFormat === "together") ||
 								(typeof var_1.compat.thinkingFormat === "string" &&
 									var_1.compat.thinkingFormat === "baseten") ||
@@ -138,9 +140,7 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 								(typeof var_1.compat.thinkingFormat === "string" &&
 									var_1.compat.thinkingFormat === "qwen-chat-template") ||
 								(typeof var_1.compat.thinkingFormat === "string" &&
-									var_1.compat.thinkingFormat === "string-thinking") ||
-								(typeof var_1.compat.thinkingFormat === "string" &&
-									var_1.compat.thinkingFormat === "ant-ling")) &&
+									var_1.compat.thinkingFormat === "string-thinking")) &&
 							(var_1.compat.chatTemplateKwargs === undefined ||
 								!("chatTemplateKwargs" in var_1.compat) ||
 								(typeof var_1.compat.chatTemplateKwargs === "object" &&
@@ -445,6 +445,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 											Number.isFinite(element.cost.output) &&
 											Number.isFinite(element.cost.cacheRead) &&
 											Number.isFinite(element.cost.cacheWrite) &&
+											(element.cost.imageOutput === undefined ||
+												!("imageOutput" in element.cost) ||
+												Number.isFinite(element.cost.imageOutput)) &&
 											(element.cost.tiers === undefined ||
 												!("tiers" in element.cost) ||
 												(Array.isArray(element.cost.tiers) &&
@@ -466,6 +469,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 													))),
 									) &&
 									var_1.compat.allowedFallbackModels.length <= 3)) &&
+							(var_1.compat.supportsReasoningReplay === undefined ||
+								!("supportsReasoningReplay" in var_1.compat) ||
+								typeof var_1.compat.supportsReasoningReplay === "boolean") &&
 							(var_1.compat.imageInput === undefined ||
 								!("imageInput" in var_1.compat) ||
 								(typeof var_1.compat.imageInput === "string" && var_1.compat.imageInput === "assets") ||
@@ -621,6 +627,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 											Number.isFinite(element.cost.output) &&
 											Number.isFinite(element.cost.cacheRead) &&
 											Number.isFinite(element.cost.cacheWrite) &&
+											(element.cost.imageOutput === undefined ||
+												!("imageOutput" in element.cost) ||
+												Number.isFinite(element.cost.imageOutput)) &&
 											(element.cost.tiers === undefined ||
 												!("tiers" in element.cost) ||
 												(Array.isArray(element.cost.tiers) &&
@@ -788,6 +797,8 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 												(typeof element.compat.thinkingFormat === "string" &&
 													element.compat.thinkingFormat === "deepseek") ||
 												(typeof element.compat.thinkingFormat === "string" &&
+													element.compat.thinkingFormat === "ant-ling") ||
+												(typeof element.compat.thinkingFormat === "string" &&
 													element.compat.thinkingFormat === "together") ||
 												(typeof element.compat.thinkingFormat === "string" &&
 													element.compat.thinkingFormat === "baseten") ||
@@ -800,9 +811,7 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 												(typeof element.compat.thinkingFormat === "string" &&
 													element.compat.thinkingFormat === "qwen-chat-template") ||
 												(typeof element.compat.thinkingFormat === "string" &&
-													element.compat.thinkingFormat === "string-thinking") ||
-												(typeof element.compat.thinkingFormat === "string" &&
-													element.compat.thinkingFormat === "ant-ling")) &&
+													element.compat.thinkingFormat === "string-thinking")) &&
 											(element.compat.chatTemplateKwargs === undefined ||
 												!("chatTemplateKwargs" in element.compat) ||
 												(typeof element.compat.chatTemplateKwargs === "object" &&
@@ -1146,6 +1155,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 															Number.isFinite(element.cost.output) &&
 															Number.isFinite(element.cost.cacheRead) &&
 															Number.isFinite(element.cost.cacheWrite) &&
+															(element.cost.imageOutput === undefined ||
+																!("imageOutput" in element.cost) ||
+																Number.isFinite(element.cost.imageOutput)) &&
 															(element.cost.tiers === undefined ||
 																!("tiers" in element.cost) ||
 																(Array.isArray(element.cost.tiers) &&
@@ -1167,6 +1179,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 																	))),
 													) &&
 													element.compat.allowedFallbackModels.length <= 3)) &&
+											(element.compat.supportsReasoningReplay === undefined ||
+												!("supportsReasoningReplay" in element.compat) ||
+												typeof element.compat.supportsReasoningReplay === "boolean") &&
 											(element.compat.imageInput === undefined ||
 												!("imageInput" in element.compat) ||
 												(typeof element.compat.imageInput === "string" &&
@@ -1327,6 +1342,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 												(var_31.cost.cacheWrite === undefined ||
 													!("cacheWrite" in var_31.cost) ||
 													Number.isFinite(var_31.cost.cacheWrite)) &&
+												(var_31.cost.imageOutput === undefined ||
+													!("imageOutput" in var_31.cost) ||
+													Number.isFinite(var_31.cost.imageOutput)) &&
 												(var_31.cost.tiers === undefined ||
 													!("tiers" in var_31.cost) ||
 													(Array.isArray(var_31.cost.tiers) &&
@@ -1496,6 +1514,8 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 													(typeof var_31.compat.thinkingFormat === "string" &&
 														var_31.compat.thinkingFormat === "deepseek") ||
 													(typeof var_31.compat.thinkingFormat === "string" &&
+														var_31.compat.thinkingFormat === "ant-ling") ||
+													(typeof var_31.compat.thinkingFormat === "string" &&
 														var_31.compat.thinkingFormat === "together") ||
 													(typeof var_31.compat.thinkingFormat === "string" &&
 														var_31.compat.thinkingFormat === "baseten") ||
@@ -1508,9 +1528,7 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 													(typeof var_31.compat.thinkingFormat === "string" &&
 														var_31.compat.thinkingFormat === "qwen-chat-template") ||
 													(typeof var_31.compat.thinkingFormat === "string" &&
-														var_31.compat.thinkingFormat === "string-thinking") ||
-													(typeof var_31.compat.thinkingFormat === "string" &&
-														var_31.compat.thinkingFormat === "ant-ling")) &&
+														var_31.compat.thinkingFormat === "string-thinking")) &&
 												(var_31.compat.chatTemplateKwargs === undefined ||
 													!("chatTemplateKwargs" in var_31.compat) ||
 													(typeof var_31.compat.chatTemplateKwargs === "object" &&
@@ -1867,6 +1885,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 																Number.isFinite(element.cost.output) &&
 																Number.isFinite(element.cost.cacheRead) &&
 																Number.isFinite(element.cost.cacheWrite) &&
+																(element.cost.imageOutput === undefined ||
+																	!("imageOutput" in element.cost) ||
+																	Number.isFinite(element.cost.imageOutput)) &&
 																(element.cost.tiers === undefined ||
 																	!("tiers" in element.cost) ||
 																	(Array.isArray(element.cost.tiers) &&
@@ -1888,6 +1909,9 @@ export const checkModelsConfig: (value: unknown) => boolean = (() => {
 																		))),
 														) &&
 														var_31.compat.allowedFallbackModels.length <= 3)) &&
+												(var_31.compat.supportsReasoningReplay === undefined ||
+													!("supportsReasoningReplay" in var_31.compat) ||
+													typeof var_31.compat.supportsReasoningReplay === "boolean") &&
 												(var_31.compat.imageInput === undefined ||
 													!("imageInput" in var_31.compat) ||
 													(typeof var_31.compat.imageInput === "string" &&

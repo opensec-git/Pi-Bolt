@@ -7,7 +7,7 @@
 
 import { access } from "node:fs/promises";
 import { join } from "node:path";
-import type { Context } from "../../context/index.ts";
+import { awaitWithContext, type Context, withCancel, withoutAbortSignal } from "../../context/index.ts";
 import type { Principal } from "../../data/index.ts";
 import type { Host, LoadReport, PluginFacet, ReloadReport } from "../../host/index.ts";
 import { Batch, type BatchError } from "../../state/internal.ts";
@@ -69,14 +69,14 @@ export type Built = {
 };
 
 /**
- * What a rollout step did on one of its hosts (`host` named by the step): its reload's report; `stopped` when the host
- * stopped cleanly during the step (it gets the current set at its next start); `error` when it crashed or its reload
- * failed (every plugin of the step's kinds in the build counts as failed there).
+ * What a rollout step did on one of its hosts (`host` named by the step): `reloaded` with its reload's report;
+ * `stopped` when the host stopped cleanly during the step (it gets the current set at its next start); `failed` when
+ * it crashed or its reload failed (every plugin of the step's kinds in the build counts as failed there).
  */
 export type RolloutHost =
-	| { readonly host: string; readonly report: ReloadReport }
-	| { readonly host: string; readonly stopped: true }
-	| { readonly host: string; readonly error: unknown };
+	| { readonly kind: "reloaded"; readonly host: string; readonly report: ReloadReport }
+	| { readonly kind: "stopped"; readonly host: string }
+	| { readonly kind: "failed"; readonly host: string; readonly error: unknown };
 
 /** What a rollout step does: reloads its hosts with the facets of its kinds, one result per host (D12). */
 export type RolloutStep = {
@@ -104,8 +104,8 @@ export interface Plugins {
 	 */
 	build(names: readonly string[], context: Context): Promise<Built>;
 	/**
-	 * The complete current set of `kind`: every discovered plugin's facet of it (built on first use), as the last
-	 * rollout or reload shipping `kind` left it; what a worker starts with.
+	 * The complete current set of `kind`: every discovered plugin's facet of it (built on first use, once for every
+	 * first use at once), as the last rollout or reload shipping `kind` left it; what a worker starts with.
 	 */
 	scripts(kind: string, context: Context): Promise<readonly PluginScript[]>;
 	/**
@@ -139,6 +139,13 @@ export interface Plugins {
 	 * that did not change since the build.
 	 */
 	rollout(steps: readonly RolloutStep[], built: Built, context: Context): Promise<RolloutResult>;
+	/**
+	 * Builds the dirty plugins and rolls them out with `steps`, one apply at a time: a call starts once the previous
+	 * one ended (a later build rolled out before an earlier one would leave the older code deployed, nothing dirty). A
+	 * caller whose context aborts while it waits stops waiting and its build never starts; the next call still waits
+	 * for the one before.
+	 */
+	apply(steps: readonly RolloutStep[], context: Context): Promise<RolloutResult>;
 	/** Installs plugin `name`'s dependencies (`installDependencies`): its install mark clears, and it is dirty. */
 	installDependencies(name: string, context: Context): Promise<void>;
 	/**
@@ -152,13 +159,13 @@ export interface Plugins {
 	 * build discovers and builds them. Returns their names.
 	 */
 	installPlugin(source: PluginSource, root: string, context: Context): Promise<readonly string[]>;
-	/** Stops the watcher. */
+	/** Stops the watcher and aborts a first making of a kind's set still under way. */
 	close(): void;
 }
 
 /** Creates the plugins component (and its plugin runtime) and starts the watcher. Discovery runs at first use. */
-export function createPlugins(options: PluginsOptions, _context: Context): Plugins {
-	return new PluginsComponent(options);
+export function createPlugins(options: PluginsOptions, context: Context): Plugins {
+	return new PluginsComponent(options, context);
 }
 
 class PluginsComponent implements Plugins {
@@ -171,13 +178,20 @@ class PluginsComponent implements Plugins {
 	readonly #built = new Map<string, BuiltFacet>();
 	/** The current set of each kind used so far, by plugin name. */
 	readonly #current = new Map<string, Map<string, PluginScript>>();
+	/** Each kind's first set while it is made: every first use meanwhile waits for the same builds. */
+	readonly #making = new Map<string, Promise<Map<string, PluginScript>>>();
 	/** The kind each loaded host was loaded with, held as long as the host is. */
 	readonly #kinds = new WeakMap<object, string>();
 	/** The marks each build started from, held as long as its result is (a rollout given a copy clears none). */
 	readonly #snapshots = new WeakMap<Built, MarkSnapshot>();
+	/** The latest apply, settled to nothing: the next one starts after it. */
+	#applying: Promise<void> = Promise.resolve();
+	/** The component's own work (a first making), not any caller's: it ends at `close`. */
+	readonly #own: { readonly context: Context; readonly cancel: (reason?: unknown) => void };
 
-	constructor(options: PluginsOptions) {
+	constructor(options: PluginsOptions, context: Context) {
 		this.#options = options;
+		this.#own = withCancel(withoutAbortSignal(context));
 		this.#runtime = createPluginRuntime();
 		const batch = new Batch((error) => options.onError(error), undefined);
 		this.#watcher = new PluginWatcher(
@@ -267,7 +281,7 @@ class PluginsComponent implements Plugins {
 			name,
 			kinds: [kind],
 			reload: async (built, context) => ({
-				hosts: [{ host: name, report: await this.reload(host, built, context) }],
+				hosts: [{ kind: "reloaded", host: name, report: await this.reload(host, built, context) }],
 			}),
 		};
 	}
@@ -286,8 +300,8 @@ class PluginsComponent implements Plugins {
 			}
 			for (const kind of step.kinds) shipped.add(kind);
 			for (const entry of hosts) {
-				if ("report" in entry) for (const { plugin } of entry.report.failed) failed.add(plugin);
-				else if ("error" in entry) for (const plugin of builtOf(built, step.kinds)) failed.add(plugin);
+				if (entry.kind === "reloaded") for (const { plugin } of entry.report.failed) failed.add(plugin);
+				else if (entry.kind === "failed") for (const plugin of builtOf(built, step.kinds)) failed.add(plugin);
 			}
 			done.push({ name: step.name, hosts });
 		}
@@ -301,6 +315,17 @@ class PluginsComponent implements Plugins {
 			);
 		}
 		return { steps: done, stopped: undefined };
+	}
+
+	apply(steps: readonly RolloutStep[], context: Context): Promise<RolloutResult> {
+		const previous = this.#applying;
+		const applied = awaitWithContext(previous, context)
+			// Aborted as its turn came (the wait resolved first): rejected as a wait is, nothing built.
+			.then(() => awaitWithContext(Promise.resolve(), context))
+			.then(async () => this.rollout(steps, await this.build(this.state.value.dirty, context), context));
+		// A caller that stopped waiting ran nothing: the next one waits for the apply before it.
+		this.#applying = Promise.allSettled([previous, applied]).then(() => {});
+		return applied;
 	}
 
 	watchBase(inputs: BaseInputs): Promise<void> {
@@ -326,6 +351,7 @@ class PluginsComponent implements Plugins {
 
 	close(): void {
 		this.#watcher.close();
+		this.#own.cancel(new Error("plugins: the component closed"));
 	}
 
 	/** Discovers the plugins again; the changes of the plugin set and of `package.json`s seen until now clear. */
@@ -345,10 +371,31 @@ class PluginsComponent implements Plugins {
 		this.#watcher.know(this.#discovery, seen);
 	}
 
-	/** `kind`'s current set, made at its first use from every discovered plugin's facet of it (built if needed). */
+	/**
+	 * `kind`'s current set, made at its first use from every discovered plugin's facet of it (built if needed). First
+	 * uses at once (a server's start resuming many workers) share one making: each facet is built once, not once per
+	 * caller. It runs in the component's own context, each caller waiting in its own: a caller going away fails only its
+	 * own wait. A making that failed is forgotten: the next use tries again.
+	 */
 	async #set(kind: string, context: Context): Promise<Map<string, PluginScript>> {
-		let set = this.#current.get(kind);
+		const set = this.#current.get(kind);
 		if (set !== undefined) return set;
+		let making = this.#making.get(kind);
+		if (making === undefined) {
+			making = this.#makeSet(kind, this.#own.context);
+			this.#making.set(kind, making);
+			// The one writer adds only when none is there: the making settling is still the one in the map.
+			const forget = (): void => void this.#making.delete(kind);
+			making.then(forget, forget);
+		}
+		return awaitWithContext(making, context);
+	}
+
+	/**
+	 * Makes `kind`'s first set and keeps it as the current one, unless `context` (the component's) aborted meanwhile: a
+	 * close during the making publishes nothing, also when every build it needed was done already.
+	 */
+	async #makeSet(kind: string, context: Context): Promise<Map<string, PluginScript>> {
 		if (!this.#discovered) await this.#discover(context);
 		const plugins = this.#discovery.plugins.filter((plugin) => plugin.facets[kind] !== undefined);
 		const scripts = await Promise.all(
@@ -358,8 +405,8 @@ class PluginsComponent implements Plugins {
 				return { plugin, built };
 			}),
 		);
-		// Built concurrently: a set made meanwhile (by a concurrent first use) wins.
-		set = this.#current.get(kind) ?? new Map(scripts.map((script) => [script.plugin.name, script]));
+		context.abortSignal?.throwIfAborted();
+		const set = new Map(scripts.map((script) => [script.plugin.name, script]));
 		this.#current.set(kind, set);
 		return set;
 	}

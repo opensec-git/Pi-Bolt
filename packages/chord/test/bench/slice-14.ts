@@ -23,7 +23,7 @@ import {
 	str,
 	unknown,
 } from "../../src/contracts/index.ts";
-import type { Held } from "../../src/host/index.ts";
+import type { Reference } from "../../src/host/index.ts";
 import { createHost, defineFacet, type Host } from "../../src/host/index.ts";
 import { openNodeSqliteDatabase } from "../../src/sqlite/node.ts";
 import { constant } from "../../src/state/index.ts";
@@ -450,7 +450,7 @@ async function mixed(scale: number) {
 	const everyone = persons(scale);
 	// 20 workers per mix, each following a session: the touched one and others.
 	const workers = Array.from({ length: 20 * scale }, (_, index) => (index === 0 ? "club-3" : `family-${index}`));
-	const held: Held<typeof Screen>[] = [];
+	const held: Reference<typeof Screen>[] = [];
 	for (const [index, person] of everyone.entries()) {
 		const own = workers.filter((_, worker) => worker % everyone.length === index);
 		for (const params of screens(person, own)) held.push(await host.get(Screen, params, context));
@@ -563,8 +563,10 @@ console.log("\nslice 14, §9: a touch of a club session at the mix");
 	const touch = await touched(mix, 400);
 	console.log(`  ${mix.reads} reads open; a touch with no read open takes ${baseline.toFixed(3)} ms`);
 	expectExactly("runs a touch causes", touch.runs, 9);
-	expectExactly("keyed probes a touch causes", touch.probes, 101);
-	expectExactly("reads a touch skips", touch.skips, mix.reads - 9);
+	// The commit index (slice 15 §3) leaves out the 41 reads whose bucket the touched row is not in (another app's
+	// lists, other teams' pages): no candidates, so no skip test and none of their probes (101 and 185 before it).
+	expectExactly("keyed probes a touch causes", touch.probes, 79);
+	expectExactly("reads a touch skips", touch.skips, mix.reads - 9 - 41);
 	expectAtMost("an ordinary commit, every re-run included", touch.ms, 5, "ms");
 
 	// A probe: a touch of a session only probes ask about (archived elsewhere: shown by nobody).

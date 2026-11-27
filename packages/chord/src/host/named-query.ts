@@ -1,21 +1,22 @@
 // Named queries (slice 14 §3.1): what `self.queries(table, options, builders)` returns, one `OwnQuery` per name, and
-// what a reference shows for a `queries` member, one `ReferenceQuery` per name. A reader (`self.liveQuery`,
-// `self.count`, `self.list`, `page`) asks either for the provider's declaration, checks its arguments, builds the
-// query and reads it through the store.
+// what a reference shows for a `queries` member, one `ReferenceQuery` per name, each made by its first use (slice 15
+// §5). A reader (`self.liveQuery`, `self.count`, `self.list`, `page`) asks either for the provider's declaration,
+// checks its arguments, builds the query and reads it through the store.
 
 import type { Context } from "../context/index.ts";
 import type { QueryPage } from "../contracts/index.ts";
-import type { Snapshot } from "../contracts/internal.ts";
-import { check, validatorFor } from "../data/internal.ts";
+import type { QueriesData, Snapshot } from "../contracts/internal.ts";
+import { canonicalJsonOnly, check, validatorFor } from "../data/internal.ts";
 import type { JsonValue } from "../json.ts";
 import type { ColumnSet } from "../store/column-set.ts";
 import type { ScalarColumn } from "../store/columns.ts";
 import { partnerName } from "../store/expression.ts";
-import type { LiveTarget } from "../store/live-query.ts";
+import type { QuerySpec } from "../store/open-query.ts";
 import { readPage } from "../store/page.ts";
 import { Query } from "../store/query.ts";
-import { type Projection, ReadPlan, type StoredRead } from "../store/read-plan.ts";
+import { type Projection, ReadPlan, type ShapeSlot, type StoredRead } from "../store/read-plan.ts";
 import { decodeScalar, versionColumn } from "../store/rows.ts";
+import { type LiveTarget, SharedReads, type Sharing } from "../store/shared-read.ts";
 import type { TableHandle } from "../store/table-handle.ts";
 import type { Binding } from "./reference.ts";
 
@@ -66,6 +67,10 @@ export class OwnQuery extends NamedQueryHandle {
 	readonly #builder: (args: unknown) => unknown;
 	readonly #projection: Projection;
 	readonly #map: ((row: unknown, partner: PartnerRow) => unknown) | undefined;
+	/** Where its live reads share their plans' shape (a page, read once, takes none). */
+	readonly #shapes: ShapeSlot = { last: undefined };
+	/** Its open shared reads by shape and arguments: they go with it (with the provider's attempt). */
+	readonly #shared = new SharedReads();
 	/** The schema of its arguments: its own (a private query), or the contract's once its member was checked. */
 	#args: Snapshot | undefined;
 	#listed = false;
@@ -115,12 +120,15 @@ export class OwnQuery extends NamedQueryHandle {
 		this.#listed = true;
 	}
 
-	/** What reading this query for `args` reads: `args` checked (a trust boundary), the query built and checked. */
-	target(args: unknown, context: Context): LiveTarget {
+	/**
+	 * What reading this query for `args` reads: `args` checked (a trust boundary), the query built and checked, shared
+	 * with the other readers of these arguments by their canonical JSON.
+	 */
+	target(args: unknown, context: Context): NamedTarget {
 		const query = this.#build(args, context);
-		const { handle } = this;
-		const spec = { query, table: handle.sql.table, projection: this.#projection, owner: handle };
-		return { spec, decode: (stored, decoding) => this.#decode(query, stored, decoding) };
+		// A schema without a type checks nothing: what is no JSON is refused here, in the walk that makes the key.
+		const key = canonicalJsonOnly(args, context);
+		return new OwnTarget(this, query, this.#projection, this.#shapes, this.#shared, key);
 	}
 
 	/** One page, read once: not live. */
@@ -135,7 +143,7 @@ export class OwnQuery extends NamedQueryHandle {
 		const query = this.#build(args, context);
 		const plan = new ReadPlan(query, handle.sql.table, this.#projection, "rows", handle.store.reads);
 		const page = await readPage(handle.store, plan, limit, after, context);
-		const items = page.stored.map((row) => this.#decode(query, row, context));
+		const items = page.stored.map((row) => this.decodeRow(query, row, context));
 		return page.next === undefined ? { items } : { items, next: page.next };
 	}
 
@@ -157,7 +165,7 @@ export class OwnQuery extends NamedQueryHandle {
 	 * store needs (the key, the order and match columns): the mapping gets only the columns `reads` and
 	 * `partnerReads` list, so a column it does not declare is absent, at once and visibly.
 	 */
-	#decode(query: Query, stored: StoredRead, context: Context): JsonValue {
+	decodeRow(query: Query, stored: StoredRead, context: Context): JsonValue {
 		const { reads, partnerReads } = this.#projection;
 		const { definition } = this.handle;
 		const own = reads === undefined ? stored : projected(stored, reads);
@@ -167,6 +175,57 @@ export class OwnQuery extends NamedQueryHandle {
 		// A table's rows hold its columns' values (scalars and JSON); a mapping's result is the item (its contract's).
 		if (map === undefined) return row as JsonValue;
 		return map(row, joined === undefined ? NO_PARTNER : partnerRow(joined.set, partnerReads, stored)) as JsonValue;
+	}
+}
+
+/** What a named query's reader reads: a target shared by its arguments. */
+export type NamedTarget = LiveTarget & { readonly sharing: Sharing };
+
+/**
+ * What a live read of a named query reads: the query built for its arguments, kept open as its own spec and shared
+ * as its own sharing, decoding by its declaration. A class: a spec object and a decoding closure cost 208 B per read,
+ * this 72 B.
+ */
+class OwnTarget implements NamedTarget, QuerySpec, Sharing {
+	readonly query: Query;
+	readonly table: string;
+	readonly projection: Projection;
+	readonly owner: TableHandle;
+	readonly shapes: ShapeSlot;
+	readonly shared: SharedReads;
+	readonly args: string;
+	readonly #own: OwnQuery;
+
+	constructor(
+		own: OwnQuery,
+		query: Query,
+		projection: Projection,
+		shapes: ShapeSlot,
+		shared: SharedReads,
+		args: string,
+	) {
+		this.#own = own;
+		this.query = query;
+		this.table = own.handle.sql.table;
+		this.projection = projection;
+		this.owner = own.handle;
+		this.shapes = shapes;
+		this.shared = shared;
+		this.args = args;
+	}
+
+	/** It is its own spec. */
+	get spec(): QuerySpec {
+		return this;
+	}
+
+	/** It is its own sharing. */
+	get sharing(): Sharing {
+		return this;
+	}
+
+	decode(stored: StoredRead, context: Context): JsonValue {
+		return this.#own.decodeRow(this.query, stored, context);
 	}
 }
 
@@ -194,19 +253,65 @@ function partnerRow(set: ColumnSet, names: readonly string[] | undefined, stored
 	return row;
 }
 
+/**
+ * A reference's `queries` member (slice 15 §5): its named queries, each made by its first use and kept as an own
+ * property. A store offers many and a reader reads few, so a reference made pays for none it does not read.
+ */
+export function referenceQueries(binding: Binding, member: string, queries: QueriesData): object {
+	let Queries = QUERIES_CLASSES.get(queries);
+	if (Queries === undefined) {
+		Queries = class extends ReferenceQueries {};
+		for (const name of queries.args.keys()) {
+			const get = function (this: ReferenceQueries): ReferenceQuery {
+				return ReferenceQueries.make(this, name);
+			};
+			Object.defineProperty(Queries.prototype, name, { get, enumerable: true });
+		}
+		QUERIES_CLASSES.set(queries, Queries);
+	}
+	return new Queries(binding, member);
+}
+
+/**
+ * The class of a `queries` member's object per member of a contract version (its `QueriesData`): a getter per name
+ * on its prototype. Weak: a contract nobody holds takes its classes along.
+ */
+const QUERIES_CLASSES = new WeakMap<QueriesData, new (binding: Binding, member: string) => ReferenceQueries>();
+
+/** What a `queries` member's object knows: the reference and the member; its names are its class's getters. */
+class ReferenceQueries {
+	readonly #binding: Binding;
+	readonly #member: string;
+
+	constructor(binding: Binding, member: string) {
+		this.#binding = binding;
+		this.#member = member;
+	}
+
+	/** The query `name` of `queries`, made now and kept as its own property (a static: no name of a query shadows it). */
+	static make(queries: ReferenceQueries, name: string): ReferenceQuery {
+		const query = new ReferenceQuery(queries.#binding, queries.#member, name);
+		Object.defineProperty(queries, name, { value: query, enumerable: true });
+		return query;
+	}
+}
+
 /** A named query of a reference's `queries` member: the provider's declaration of that name, while it is live. */
 export class ReferenceQuery extends NamedQueryHandle {
-	readonly label: string;
 	readonly #binding: Binding;
 	readonly #member: string;
 	readonly #name: string;
 
 	constructor(binding: Binding, member: string, name: string) {
 		super();
-		this.label = `${binding.label}: query "${member}.${name}"`;
 		this.#binding = binding;
 		this.#member = member;
 		this.#name = name;
+	}
+
+	/** Built when asked: only error paths and reports read it (slice 15 §5). */
+	get label(): string {
+		return `${this.#binding.label}: query "${this.#member}.${this.#name}"`;
 	}
 
 	provided(): OwnQuery {

@@ -17,7 +17,9 @@
 - Read files in full before wide-ranging changes, before editing files you have not fully inspected, and when asked to investigate or audit. Do not rely on search snippets for broad changes.
 - Before recommending a fix design, check how sibling implementations (other adapters, providers, commands) handle the same concern, and follow that pattern. If you deviate, say why.
 - No `any` unless absolutely necessary.
+- Never tell the members of a typed union apart with `in` (`"report" in entry`): make it a tagged union (a `kind` field) and switch on the tag. `in` is only for values of unknown type at a trust boundary (wire input, files, Node errors), for feature detection, and for stored or frozen wire formats that a version bump would have to change (say so in a comment).
 - No runtime checks of values whose types TypeScript already guarantees (no `typeof`/`instanceof`/`Array.isArray`/shape guards on typed parameters, typed callback results or typed declarations). Validate only at decided trust boundaries (wire input, schema-checked arguments and params).
+- Never compare values by serializing them (`JSON.stringify`, canonical JSON, a joined text key): it allocates on every comparison, also when nothing changed. Compare by identity where the value is shared, else field by field (a set of names: same size and each name in the other). Where a text key is unavoidable (a `Map` key), build it once and keep it.
 - Inline single-line helpers that have only one call site.
 - Check node_modules for external API types; don't guess.
 - **No inline imports** (`await import()`, `import("pkg").Type`, dynamic type imports). Top-level imports only.
@@ -26,7 +28,7 @@
 - Use only erasable TypeScript syntax (Node strip-only mode) in code checked by the root config (`packages/*/src`, `packages/*/test`, `packages/coding-agent/examples`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JS emit. Use explicit fields with constructor assignments.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
-- Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
+- Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `TUI_KEYBINDINGS` (`packages/tui`) or `APP_KEYBINDINGS` (`packages/coding-agent`) so they stay configurable.
 - Never modify `packages/ai/src/models.generated.ts` directly; update the catalog definitions in `packages/ai/catalog/` instead (see its README), then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes. The generated model data in `packages/ai/src/providers/data/` is gitignored: never stage it, and don't look for it in git history.
 
 ## Chord v2 Code Style
@@ -42,6 +44,10 @@ Binding for Chord v2 (`packages/chord/src/`) and its tests, when writing and whe
 - Slices: Chord v2 is built in vertical slices (`packages/chord/docs/slices.md`). Implementers and reviewers read the slice spec, the feature map in `slices.md` and the whole of `packages/chord/docs/design.md` in full, and check the work against all three; slice specs cite design sections for orientation, not as a reading limit.
 - Deferred work: anything left to a later slice goes into the section "Carry-over" of `packages/chord/docs/slices.md` under that slice, in the same change; a slice's spec and build include every entry of its section.
 - Before reporting: re-read every changed file top to bottom as a stranger would; each file must be understandable without jumping around. Then `npm run check` and the layer's tests.
+
+## Reviews
+
+- When reviewers (subagents or other sessions) report while others are still reviewing, do not summarize or relay their findings piecemeal. Wait until every report is in, then give one report that covers all of them.
 
 ## Commands
 

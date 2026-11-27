@@ -1,32 +1,23 @@
 // Live queries (decision "Live queries over an object's own tables"; slice 14 §3): the rows of a query as a JSON
 // watchable, kept current by the store's reads. `self.query(table, q, limit)` is the owner's own unnamed window (its
 // value the rows); `self.liveQuery(namedQuery, args, { first })` reads a named query (its value `{ rows, more }`).
-// Both are this source over one open read; a commit's run is published in that commit's batch as the diff from the
-// previous rows (W1).
+// Both are this source over a shared read (`shared-read.ts`: identical reads of a named query are one); a commit's
+// run is published in that commit's batch as the diff from the previous rows (W1).
 
 import type { Context } from "../context/index.ts";
 import { invalid } from "../data/internal.ts";
-import type { JsonValue } from "../json.ts";
 import { type FramedOwner, FramedSource } from "../state/internal.ts";
-import { OpenQuery, type OpenRead, type QuerySpec, type ReadSite } from "./open-query.ts";
+import type { ReadSite } from "./open-query.ts";
 import type { Query } from "./query.ts";
-import { identity, type ReadKind, type ReadResult, type ReadRun } from "./read.ts";
-import type { Range, StoredRead } from "./read-plan.ts";
+import {
+	type LiveShape,
+	type LiveTarget,
+	type ReadOutcome,
+	type ReadSubscriber,
+	type SharedRead,
+	sharedRead,
+} from "./shared-read.ts";
 import type { TableDefinition } from "./table.ts";
-
-/**
- * What a live source reads: a query to keep open, and how a stored row of it becomes the value's row (decoded,
- * projected, mapped); a row the code cannot read throws.
- */
-export type LiveTarget = {
-	readonly spec: QuerySpec;
-	decode(stored: StoredRead, context: Context): JsonValue;
-};
-
-/** What a live query reads and shows: the rows of `range` (as they are, or as `{ rows, more }`), or a count. */
-export type LiveShape =
-	| { readonly kind: "rows"; readonly range: Range; present(rows: JsonValue[], more: boolean): JsonValue }
-	| { readonly kind: "count" };
 
 /**
  * Refuses what the types cannot (plugin code is bundled without type checks; declaration policy): a query of another
@@ -42,21 +33,18 @@ export function checkLiveQuery(table: TableDefinition, q: Query, limit: unknown,
 	}
 }
 
-/** One of a live query's reads, open, with the query it is of and what it reads. */
-type Reading = { readonly query: OpenQuery; readonly read: OpenRead; readonly target: LiveTarget };
-
 /**
  * A live query as a JSON source (a state member, a derive source, an `on` source): the rows of one range of a query,
- * or its count. `read` gives it the query; a later `read` (arguments that follow a value, a provider's successor)
- * shows the previous value until the new read's first run is adopted, then switches in one frame.
+ * or its count, as a shared read gives them (`shared-read.ts`). `read` gives it the query; a later `read` (arguments
+ * that follow a value, a provider's successor) shows the previous value until the new read has an outcome, then
+ * switches in one frame.
  */
-export class LiveQuery extends FramedSource {
+export class LiveQuery extends FramedSource implements ReadSubscriber {
 	readonly #site: ReadSite;
 	readonly #shape: LiveShape;
-	readonly #rows = new DecodedRows();
-	/** The read its value is of, and the one that replaces it once its first run is adopted. */
-	#current: Reading | undefined;
-	#next: Reading | undefined;
+	/** The shared read its value is of, and the one that replaces it once it has an outcome: never the same one. */
+	#current: SharedRead | undefined;
+	#next: SharedRead | undefined;
 
 	constructor(site: ReadSite, owner: FramedOwner, shape: LiveShape) {
 		super(site.batch, owner);
@@ -76,27 +64,23 @@ export class LiveQuery extends FramedSource {
 	}
 
 	/**
-	 * Reads `target` from now on (its shape's range of it, or its count). Resolves with its first run once adopted
-	 * (`undefined`: a commit's run came first, a table it reads is held, or the query was detached or given another
-	 * read meanwhile).
+	 * Reads `target` from now on (its shape's range of it, or its count), through the shared read of its key. Resolves
+	 * once that read has an outcome, or its first run ended without one (a table it reads is held).
 	 */
-	read(target: LiveTarget, context: Context): Promise<ReadRun | undefined> {
-		if (this.detached) return Promise.resolve(undefined);
-		this.#next?.query.close();
-		const shape = this.#shape;
-		// A binding changed: its one read runs again (a failure is a failed run handed to it; nothing awaits the run).
-		const rebound = (): void => void reading.read.load();
-		const query = new OpenQuery(this.#site, target.spec, shape.kind, rebound, context);
-		const what: ReadKind = shape.kind === "count" ? shape : { kind: "rows", range: shape.range };
-		const reading: Reading = { query, target, read: query.read(what, { adopt: (run) => this.#adopt(reading, run) }) };
-		this.#next = reading;
-		return reading.read.load();
+	read(target: LiveTarget, context: Context): Promise<void> {
+		if (this.detached) return Promise.resolve();
+		const read = sharedRead(this.#site, this.#shape, target, context);
+		const replaced = this.#next;
+		// The read its value is of (arguments that changed and changed back): nothing replaces it.
+		this.#next = read === this.#current ? undefined : read;
+		if (replaced !== read) replaced?.unsubscribe(this);
+		return read.subscribe(this, context);
 	}
 
 	/**
 	 * What it should read cannot be read (its arguments threw, its provider refused them): a failed member, as a
-	 * failed run makes it. Its reads close: neither the read of the previous arguments nor a pending one may publish
-	 * or heal the failure; the next `read` does.
+	 * failed run makes it. Its subscriptions end: neither the read of the previous arguments nor a pending one may
+	 * publish or heal the failure; the next `read` does.
 	 */
 	fail(error: unknown, context: Context): void {
 		if (this.detached) return;
@@ -104,86 +88,31 @@ export class LiveQuery extends FramedSource {
 		this.batch.within(() => this.failWith(error), context);
 	}
 
-	/** Its attempt ended: no commit runs it again, reads throw `error` (the object's), its watches end `ended`. */
+	/** Its attempt ended: its subscriptions end, reads throw `error` (the object's), its watches end `ended`. */
 	detach(error: Error): void {
 		this.#close();
 		this.end(error);
 	}
 
 	#close(): void {
-		this.#current?.query.close();
-		this.#next?.query.close();
+		this.#current?.unsubscribe(this);
+		this.#next?.unsubscribe(this);
 		this.#current = undefined;
 		this.#next = undefined;
 	}
 
 	/**
-	 * Takes a run of one of its reads, inside a batch. The first run of a new read makes it the current one. A failed
-	 * run, and a row the code cannot read, make the query a failed member.
+	 * Takes an outcome of one of its shared reads, inside a batch. The first outcome of the read that replaces the
+	 * current one makes it the current one. A failure makes the query a failed member.
 	 */
-	#adopt(reading: Reading, run: ReadRun): void {
+	adopted(read: SharedRead, outcome: ReadOutcome): void {
 		if (this.detached) return;
-		if (reading === this.#next) {
-			this.#current?.query.close();
-			this.#current = reading;
+		if (read === this.#next) {
+			this.#current?.unsubscribe(this);
+			this.#current = read;
 			this.#next = undefined;
-			this.#rows.reset();
-		} else if (reading !== this.#current) return;
-		if (run.kind === "failed") this.failWith(run.error);
-		else if (run.kind === "count") this.set(run.count);
-		else this.#present(reading, run.result);
+		} else if (read !== this.#current) return;
+		if (outcome.kind === "failed") this.failWith(outcome.error);
+		else this.set(outcome.value);
 	}
-
-	/** The value of a run's rows; a row the code cannot read fails the member. */
-	#present(reading: Reading, result: ReadResult): void {
-		const shape = this.#shape;
-		// A count's read returns counts.
-		if (shape.kind !== "rows") return;
-		try {
-			this.set(shape.present(this.#rows.decode(result.rows, reading.target, reading.query.context), result.more));
-		} catch (error) {
-			this.failWith(error);
-		}
-	}
-}
-
-/** A row as a run decoded it, with the stored row it came from. */
-type Decoded = { readonly stored: StoredRead; readonly row: JsonValue };
-
-/**
- * The decoded rows of a live source's last value, by key: a row whose stored columns are all the same in the next
- * run is that value's object (one comparison per selected column), any other is decoded. So a frame, the diff from
- * the value the watches had, compares unchanged rows by identity (a window shifted by one row: one insert and one
- * removal, not a comparison of every row with every other).
- */
-export class DecodedRows {
-	#byKey: ReadonlyMap<unknown, Decoded> = new Map();
-
-	/** The rows of `stored` as `target` decodes them, unchanged ones reused; a row the code cannot read throws. */
-	decode(stored: readonly StoredRead[], target: LiveTarget, context: Context): JsonValue[] {
-		const key = target.spec.query.table.key;
-		const rows: JsonValue[] = [];
-		const byKey = new Map<unknown, Decoded>();
-		for (const each of stored) {
-			const id = identity(key, each);
-			const before = this.#byKey.get(id);
-			const row =
-				before !== undefined && sameStored(before.stored, each) ? before.row : target.decode(each, context);
-			rows.push(row);
-			byKey.set(id, { stored: each, row });
-		}
-		this.#byKey = byKey;
-		return rows;
-	}
-
-	/** Forgets the last value's rows: another target decodes its own way, nothing of the previous one is reused. */
-	reset(): void {
-		this.#byKey = new Map();
-	}
-}
-
-/** Whether two stored rows of one statement have the same value in every column (SQLite values compare by `===`). */
-function sameStored(a: StoredRead, b: StoredRead): boolean {
-	for (const column in a) if (a[column] !== b[column]) return false;
-	return true;
 }

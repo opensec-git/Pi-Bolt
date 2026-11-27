@@ -6,7 +6,8 @@
  */
 
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
-import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
+import { setCapabilityOverrides, takeProgramResumeToken, ttiTrace } from "@earendil-works/pi-tui";
+import { applyAgentDirArg } from "./cli/agent-dir-arg.ts";
 import { type Args, type Mode, missingExtensionPaths, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import { loadAuthCommand, loadRpcMode, loadSessionPicker, loadStartupUi } from "./cli/command-modes.lazy.ts";
 import { loadDoctor } from "./cli/doctor.lazy.ts";
@@ -471,7 +472,15 @@ export interface MainOptions {
 	compiledExtensions?: CompiledExtension[];
 }
 
-export async function main(args: string[], options?: MainOptions) {
+export async function main(cliArgs: string[], options?: MainOptions) {
+	// First, before anything reads the agent dir, and before subcommands are recognized so the flag works with them.
+	// Modules have already loaded at this point: a value they cached from getAgentDir() at load ignores the flag.
+	const agentDirArg = applyAgentDirArg(cliArgs);
+	if (agentDirArg.kind === "error") {
+		console.error(chalk.red(`Error: ${agentDirArg.message}`));
+		process.exit(1);
+	}
+	const args = agentDirArg.args;
 	const packageFlagError = getPiBoltPackageFlagError(args);
 	if (packageFlagError) {
 		console.error(chalk.red(packageFlagError));
@@ -482,6 +491,10 @@ export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	// Pi-Bolt reports to Herdr itself (extensions/herdr); keep pi-herdr's report of the same pane out of its way.
 	if (PIBOLT) quietOtherHerdrReporters();
+	// Taken in every mode, before anything starts a child process: pi reports its own resume command, and
+	// shells, editors and extension processes it starts must not replace it or register commands that later
+	// run with the user's rights (OSC 7577).
+	const programResumeToken = takeProgramResumeToken();
 	// Commands and startup selectors can load user-authored themes before runtime creation.
 	setThemeJsonValidator(validateThemeJson);
 	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
@@ -669,7 +682,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
 	ttiTrace("settings.loaded");
 
-	// Experimental first-time setup: theme choice and analytics opt-in.
+	// Experimental first-time setup: analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
 		const { showFirstTimeSetup } = await loadStartupUi();
@@ -1057,6 +1070,8 @@ export async function main(args: string[], options?: MainOptions) {
 			verbose: parsed.verbose,
 			tuiMode: parsed.tuiMode,
 			initialThemeSetting: parsed.useTheme,
+			programResumeToken,
+			programResumeFlags: parsed.resumeFlags,
 		});
 		ttiTrace("interactive.created");
 		if (startupBenchmark) {

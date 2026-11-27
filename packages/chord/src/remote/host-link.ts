@@ -16,8 +16,10 @@ import {
 	inflateAsync,
 	type Limits,
 	type Link,
+	type LinkCloseReason,
 	type Message,
 	openPart,
+	originOf,
 	originPart,
 	type Part,
 } from "../link/internal.ts";
@@ -177,7 +179,7 @@ export class HostLink implements ChannelHandler {
 	 */
 	message(message: Message): void | Promise<void> {
 		// A child (a tab, a TUI) relays nothing: its origins would each get their own call window and record.
-		if (this.role === "child" && "origin" in message && message.origin !== undefined) {
+		if (this.role === "child" && originOf(message) !== undefined) {
 			throw new Error(`${message.kind}: an origin on a child link`);
 		}
 		switch (message.kind) {
@@ -227,13 +229,17 @@ export class HostLink implements ChannelHandler {
 		for (const provider of this.#providers.values()) provider.revokeUnbound(revoked, error);
 	}
 
-	closed(): void {
-		this.host.metrics.upDownCounter("chord.links.open").add(-1);
+	closed(reason: LinkCloseReason): void {
+		const { metrics } = this.host;
+		metrics.upDownCounter("chord.links.open").add(-1);
+		metrics.counter("chord.links.closed").add(1, { reason });
 		this.#closing.abort();
 		for (const provider of this.#providers.values()) provider.closed();
 		this.#providers.clear();
 		this.consumer.closed();
 		this.host.unlink(this);
+		// Often a stalled peer: holders here wait for another link, which nothing else would tell (slice 15 §4).
+		if (reason === "heartbeat") this.host.report({ kind: "link_closed", reason, role: this.role });
 	}
 
 	/** A `hold` goes to its origin's provider side, made for the origin's first. */
