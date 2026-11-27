@@ -1000,7 +1000,7 @@ describe("Coding Agent Tools", () => {
 				const result = await bash.execute("test-call-no-tmpdir", { command: "many" });
 				const output = getTextOutput(result);
 				expect(output).toContain("line 199999");
-				expect(output).toContain("The full output could not be saved");
+				expect(output).toContain("Could not save the full output: ");
 				expect(output).not.toContain("Full output: ");
 				expect(result.details?.fullOutputPath).toBeUndefined();
 				const structured = result.structuredContent as { truncated: boolean; output: string; exit_code: number };

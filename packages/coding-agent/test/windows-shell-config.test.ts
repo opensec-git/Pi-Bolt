@@ -3,14 +3,17 @@ import type * as Fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getShellConfig } from "../src/utils/shell.ts";
 
-const { accessSyncMock, spawnSyncMock } = vi.hoisted(() => ({
+const { accessSyncMock, spawnSyncMock, statSyncMock } = vi.hoisted(() => ({
 	accessSyncMock: vi.fn(),
 	spawnSyncMock: vi.fn(),
+	statSyncMock: vi.fn(),
 }));
 
 vi.mock("node:fs", async (importOriginal) => ({
 	...(await importOriginal<typeof Fs>()),
 	accessSync: accessSyncMock,
+	statSync: statSyncMock,
+	lstatSync: statSyncMock,
 }));
 
 vi.mock("child_process", async (importOriginal) => ({
@@ -23,6 +26,7 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!
 beforeEach(() => {
 	Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 	accessSyncMock.mockReset();
+	statSyncMock.mockReset().mockReturnValue(undefined);
 	spawnSyncMock.mockReset().mockReturnValue({ status: 1, stdout: "" });
 });
 
@@ -65,14 +69,15 @@ describe("Git Bash discovery through git on PATH", () => {
 		accessSyncMock.mockImplementation((path: string) => {
 			if (!paths.includes(path)) throw Object.assign(new Error("not found"), { code: "ENOENT" });
 		});
+		statSyncMock.mockImplementation((path: string) =>
+			paths.includes(path) ? { isFile: () => true, isDirectory: () => false } : undefined,
+		);
 	}
 
+	// Pi-Bolt looks programs up in PATH's directories itself, not with `where`.
 	function onPath(gitShellPath: string | null): void {
+		vi.stubEnv("PATH", "G:\\Programmi Aggiuntivi\\Git\\cmd;C:\\Windows\\System32");
 		spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-			if (command === "where") {
-				const found = { "git.exe": git, "bash.exe": wslBash }[args[0]];
-				return found ? { status: 0, stdout: `${found}\r\n` } : { status: 1, stdout: "" };
-			}
 			if (command === git && args.join(" ") === "var GIT_SHELL_PATH") {
 				return gitShellPath === null ? { status: 1, stdout: "" } : { status: 0, stdout: `${gitShellPath}\n` };
 			}

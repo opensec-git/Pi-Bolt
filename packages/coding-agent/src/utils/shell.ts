@@ -495,8 +495,26 @@ export function untrackDetachedChildPid(pid: number): void {
 
 /** Kill every tracked shell process tree. On Windows this blocks until taskkill finishes. */
 export function killTrackedDetachedChildren(): void {
-	for (const pid of trackedDetachedChildPids) {
-		killProcessTree(pid, { sync: true });
+	if (trackedDetachedChildPids.size === 0) return;
+	if (process.platform === "win32") {
+		// Callers exit right after this. Exiting kills the shell (libuv's job object), and taskkill /T
+		// then no longer finds the shell's descendants, so wait for taskkill. windowsHide gives it its own
+		// console, so a console close (SIGHUP) does not end it too. One taskkill for all trees, then what
+		// it does not reach (see killProcessTree).
+		const pids = [...trackedDetachedChildPids];
+		const cleanups = pids.map(takeWindowsTreeCleanup);
+		try {
+			spawnSync(getTaskkillPath(), ["/F", "/T", ...pids.flatMap((pid) => ["/PID", String(pid)])], {
+				stdio: "ignore",
+				timeout: 2000,
+				windowsHide: true,
+			});
+		} catch {}
+		for (const cleanup of cleanups) cleanup();
+	} else {
+		for (const pid of trackedDetachedChildPids) {
+			killProcessTree(pid);
+		}
 	}
 	trackedDetachedChildPids.clear();
 }
@@ -509,42 +527,12 @@ function getTaskkillPath(): string {
 /**
  * Kill a process and all its children (cross-platform)
  */
-export function killProcessTree(pid: number, options?: { sync?: boolean }): void {
+export function killProcessTree(pid: number): void {
 	if (process.platform === "win32") {
-		// taskkill first, while the shell is there to walk the tree from; then, once it is done, what it does not reach:
-		// - the job of the tool's shell (see getWindowsJobs): everything started in it, whatever its parent. (Ended first, it
-		//   would end the shell, and a process the shell started before it was in the job, outside it, would then be reached
-		//   by neither: under load, Git Bash's launcher can have started bash, and bash a program, by then.)
-		// - a Cygwin-family shell's processes, by its group's variable (see killMsysGroup), whatever their parents. (Before
-		//   taskkill, it would end the processes that stand for a native program bash started, the parents of that program's
-		//   own tree, which taskkill would then no longer reach.)
-		// (The job is this kill's from here: the shell's exit, which taskkill brings, does not close it.)
-		const job = windowsJobOfPid.get(pid);
-		windowsJobOfPid.delete(pid);
-		const msys = msysGroupOfPid.get(pid);
-		let after = false;
-		const killRest = () => {
-			if (after) return;
-			after = true;
-			if (job !== undefined) {
-				try {
-					getWindowsJobs()?.terminate(job);
-					getWindowsJobs()?.close(job);
-				} catch {}
-			}
-			if (msys) killMsysGroup(msys.bash, msys.group);
-		};
+		const killRest = takeWindowsTreeCleanup(pid);
 		// The trusted System32 executable, so cleanup does not depend on PATH.
 		const taskkill = getTaskkillPath();
 		const taskkillArgs = ["/F", "/T", "/PID", String(pid)];
-		if (options?.sync) {
-			// Pi is exiting: there is no later to wait for.
-			try {
-				spawnSync(taskkill, taskkillArgs, { stdio: "ignore", windowsHide: true, timeout: 5000 });
-			} catch {}
-			killRest();
-			return;
-		}
 		try {
 			const child = spawn(taskkill, taskkillArgs, {
 				stdio: "ignore",
@@ -584,4 +572,33 @@ export function killProcessTree(pid: number, options?: { sync?: boolean }): void
 			}
 		}
 	}
+}
+
+/**
+ * What ends the rest of a tool shell's tree on Windows once taskkill is done, taken out of the tracking maps.
+ */
+function takeWindowsTreeCleanup(pid: number): () => void {
+	// taskkill first, while the shell is there to walk the tree from; then, once it is done, what it does not reach:
+	// - the job of the tool's shell (see getWindowsJobs): everything started in it, whatever its parent. (Ended first, it
+	//   would end the shell, and a process the shell started before it was in the job, outside it, would then be reached
+	//   by neither: under load, Git Bash's launcher can have started bash, and bash a program, by then.)
+	// - a Cygwin-family shell's processes, by its group's variable (see killMsysGroup), whatever their parents. (Before
+	//   taskkill, it would end the processes that stand for a native program bash started, the parents of that program's
+	//   own tree, which taskkill would then no longer reach.)
+	// (The job is this kill's from here: the shell's exit, which taskkill brings, does not close it.)
+	const job = windowsJobOfPid.get(pid);
+	windowsJobOfPid.delete(pid);
+	const msys = msysGroupOfPid.get(pid);
+	let after = false;
+	return () => {
+		if (after) return;
+		after = true;
+		if (job !== undefined) {
+			try {
+				getWindowsJobs()?.terminate(job);
+				getWindowsJobs()?.close(job);
+			} catch {}
+		}
+		if (msys) killMsysGroup(msys.bash, msys.group);
+	};
 }
