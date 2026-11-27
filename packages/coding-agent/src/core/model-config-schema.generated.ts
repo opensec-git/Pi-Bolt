@@ -141,6 +141,10 @@ export function modelsConfigSchema(): object {
 											},
 											{
 												type: "string",
+												const: "ant-ling",
+											},
+											{
+												type: "string",
 												const: "together",
 											},
 											{
@@ -167,13 +171,9 @@ export function modelsConfigSchema(): object {
 												type: "string",
 												const: "string-thinking",
 											},
-											{
-												type: "string",
-												const: "ant-ling",
-											},
 										],
 										description:
-											'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null.',
+											'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" (deprecated alias: "ant-ling") uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, and "string-thinking" uses top-level thinking.',
 									},
 									chatTemplateKwargs: {
 										type: "object",
@@ -737,6 +737,11 @@ export function modelsConfigSchema(): object {
 															type: "number",
 															description: "Cache-write cost in USD per million tokens.",
 														},
+														imageOutput: {
+															type: "number",
+															description:
+																"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
+														},
 														tiers: {
 															type: "array",
 															items: {
@@ -786,6 +791,12 @@ export function modelsConfigSchema(): object {
 										maxItems: 3,
 										description:
 											"Models Anthropic accepts for server-side refusal fallback, with local pricing metadata for returned fallback responses. When absent or empty, callers must omit fallbacks; Anthropic rejects the field for models with no permitted fallback targets.",
+									},
+									supportsReasoningReplay: {
+										type: "boolean",
+										description:
+											"Whether the model accepts reasoning blocks from earlier assistant messages. When false, earlier reasoning is not sent back. The generated catalog disables this for Kimi K3 models, which fail on Converse when it is sent.",
+										default: true,
 									},
 									imageInput: {
 										anyOf: [
@@ -925,7 +936,7 @@ export function modelsConfigSchema(): object {
 												},
 											},
 											description:
-												"Provider value sent for each thinking level. null marks a level unsupported. Levels the model does not map use the provider's default value through high; xhigh and max are unsupported.",
+												"Provider value sent for each thinking level. A string is sent to the provider; null hides the level. Levels left out use the provider's default value for off through high; xhigh and max are opt-in and only offered when mapped to a string.",
 										},
 										input: {
 											type: "array",
@@ -1002,6 +1013,11 @@ export function modelsConfigSchema(): object {
 												cacheWrite: {
 													type: "number",
 													description: "Cache-write cost in USD per million tokens.",
+												},
+												imageOutput: {
+													type: "number",
+													description:
+														"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
 												},
 												tiers: {
 													type: "array",
@@ -1220,6 +1236,10 @@ export function modelsConfigSchema(): object {
 														},
 														{
 															type: "string",
+															const: "ant-ling",
+														},
+														{
+															type: "string",
 															const: "together",
 														},
 														{
@@ -1246,13 +1266,9 @@ export function modelsConfigSchema(): object {
 															type: "string",
 															const: "string-thinking",
 														},
-														{
-															type: "string",
-															const: "ant-ling",
-														},
 													],
 													description:
-														'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null.',
+														'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" (deprecated alias: "ant-ling") uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, and "string-thinking" uses top-level thinking.',
 												},
 												chatTemplateKwargs: {
 													type: "object",
@@ -1826,6 +1842,11 @@ export function modelsConfigSchema(): object {
 																		type: "number",
 																		description: "Cache-write cost in USD per million tokens.",
 																	},
+																	imageOutput: {
+																		type: "number",
+																		description:
+																			"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
+																	},
 																	tiers: {
 																		type: "array",
 																		items: {
@@ -1877,6 +1898,12 @@ export function modelsConfigSchema(): object {
 													maxItems: 3,
 													description:
 														"Models Anthropic accepts for server-side refusal fallback, with local pricing metadata for returned fallback responses. When absent or empty, callers must omit fallbacks; Anthropic rejects the field for models with no permitted fallback targets.",
+												},
+												supportsReasoningReplay: {
+													type: "boolean",
+													description:
+														"Whether the model accepts reasoning blocks from earlier assistant messages. When false, earlier reasoning is not sent back. The generated catalog disables this for Kimi K3 models, which fail on Converse when it is sent.",
+													default: true,
 												},
 												imageInput: {
 													anyOf: [
@@ -1998,7 +2025,7 @@ export function modelsConfigSchema(): object {
 													},
 												},
 												description:
-													"Provider value sent for each thinking level. null marks a level unsupported. Levels the model does not map use the provider's default value through high; xhigh and max are unsupported.",
+													"Provider value sent for each thinking level. A string is sent to the provider; null hides the level. Levels left out use the provider's default value for off through high; xhigh and max are opt-in and only offered when mapped to a string.",
 											},
 											input: {
 												type: "array",
@@ -2074,6 +2101,11 @@ export function modelsConfigSchema(): object {
 													cacheWrite: {
 														type: "number",
 														description: "Cache-write cost in USD per million tokens.",
+													},
+													imageOutput: {
+														type: "number",
+														description:
+															"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
 													},
 													tiers: {
 														type: "array",
@@ -2295,6 +2327,10 @@ export function modelsConfigSchema(): object {
 															},
 															{
 																type: "string",
+																const: "ant-ling",
+															},
+															{
+																type: "string",
 																const: "together",
 															},
 															{
@@ -2321,13 +2357,9 @@ export function modelsConfigSchema(): object {
 																type: "string",
 																const: "string-thinking",
 															},
-															{
-																type: "string",
-																const: "ant-ling",
-															},
 														],
 														description:
-															'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, "string-thinking" uses top-level thinking, and "ant-ling" uses reasoning.effort only when the mapped effort is non-null.',
+															'Format for reasoning or thinking parameters. When omitted, Pi auto-detects the format from the provider URL. "openai" uses reasoning_effort, "openrouter" uses reasoning.effort, "deepseek" (deprecated alias: "ant-ling") uses thinking.type plus reasoning_effort when supported, "together" uses reasoning.enabled plus reasoning_effort when supported, "baseten" uses configurable chat_template_args plus reasoning_effort when supported, "zai" uses thinking.type, "qwen" uses top-level enable_thinking, "qwen-chat-template" uses chat_template_kwargs.enable_thinking and preserve_thinking, "chat-template" uses configurable chat_template_kwargs, and "string-thinking" uses top-level thinking.',
 													},
 													chatTemplateKwargs: {
 														type: "object",
@@ -2902,6 +2934,11 @@ export function modelsConfigSchema(): object {
 																			type: "number",
 																			description: "Cache-write cost in USD per million tokens.",
 																		},
+																		imageOutput: {
+																			type: "number",
+																			description:
+																				"Image output cost in USD per million tokens, for models that generate images. Image output tokens use this rate and the rest of output (text and reasoning) uses `output`. Unset means image tokens cost `output`.",
+																		},
 																		tiers: {
 																			type: "array",
 																			items: {
@@ -2953,6 +2990,12 @@ export function modelsConfigSchema(): object {
 														maxItems: 3,
 														description:
 															"Models Anthropic accepts for server-side refusal fallback, with local pricing metadata for returned fallback responses. When absent or empty, callers must omit fallbacks; Anthropic rejects the field for models with no permitted fallback targets.",
+													},
+													supportsReasoningReplay: {
+														type: "boolean",
+														description:
+															"Whether the model accepts reasoning blocks from earlier assistant messages. When false, earlier reasoning is not sent back. The generated catalog disables this for Kimi K3 models, which fail on Converse when it is sent.",
+														default: true,
 													},
 													imageInput: {
 														anyOf: [

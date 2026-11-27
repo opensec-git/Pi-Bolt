@@ -18,6 +18,7 @@ import {
 	HistoryUnavailableError,
 	LOG_START,
 	type PutBatchResult,
+	type RefusalReason,
 	remoteHead,
 	remoteHistory,
 	type Seq,
@@ -44,7 +45,8 @@ export const APPLY_BYTES = 4 * 1024 * 1024;
  * remote's head; one with commits finds out by uploading.
  */
 export type SyncState = {
-	readonly syncedHead: Seq | undefined;
+	/** Absent before the copy shared anything with the remote. */
+	readonly syncedHead?: Seq;
 	/**
 	 * Set while a pull applies a batch or snapshot ending here: a local head up to it holds the remote's commits, not
 	 * the copy's own, even when the pull stopped partway.
@@ -58,9 +60,12 @@ function sharedHead(state: SyncState | undefined, local: Seq): Seq {
 	return state?.syncedHead ?? LOG_START;
 }
 
+/** Where a host keeps each copy's `SyncState`, by session. */
 export interface SyncStateStore {
 	get(sessionId: string, context: Context): Promise<SyncState | undefined>;
 	set(sessionId: string, state: SyncState, context: Context): Promise<void>;
+	/** Forget a session's state: its next upload starts from the beginning (after `remote_empty`, or a deleted copy). */
+	delete(sessionId: string, context: Context): Promise<void>;
 }
 
 /** A store's head as a sequence: `lastSeq`, 0 for a store without commits. */
@@ -97,11 +102,17 @@ export type UploadResult =
 	/** Nothing was committed since the last upload. */
 	| { readonly type: "idle" }
 	/**
-	 * Another device continued the session from `at` first. This copy's commits after `at` are a different history:
-	 * the host renames the copy to a new session (forked from this one at `at`) and uploads it there, and the session
-	 * itself restores into a fresh store.
+	 * Another device continued the session from `at` first. This copy's commits after `at` are a different history,
+	 * which must not go into this session's: the host backs the copy up whole under a new remote id (a conflicted copy,
+	 * named for where it came from), and the local session keeps its id.
 	 */
 	| { readonly type: "diverged"; readonly at: Seq }
+	/**
+	 * The remote holds no history for the session, though this copy shared it up to `at`: the remote's copy was deleted
+	 * (or the remote was reset) since. The host decides whether to start over: forget the sync state, and the next upload
+	 * sends the whole store from the start.
+	 */
+	| { readonly type: "remote_empty"; readonly at: Seq }
 	/**
 	 * The copy lost commits it had uploaded, for example to a power loss: its head is below `syncedHead`. Its next
 	 * commits would reuse their sequences, so nothing is uploaded. Pull what it lost before the copy commits again; a pull
@@ -109,10 +120,10 @@ export type UploadResult =
 	 */
 	| { readonly type: "behind"; readonly head: Seq; readonly syncedHead: Seq }
 	/**
-	 * The remote refused this device's epoch: another device holds the right to write the session now. Like
-	 * `diverged`, the copy's commits after `at` are a different history, so the host forks the copy (S7).
+	 * The remote refused the next slot for good (`RefusalReason`): the bookmark and the outbox stay as they were, and
+	 * uploading again sends the same slot. The host stops uploading until whatever was refused is fixed.
 	 */
-	| { readonly type: "stale_epoch"; readonly at: Seq; readonly epoch: number };
+	| { readonly type: "refused"; readonly reason: RefusalReason };
 
 /**
  * Upload what this copy committed since it last shared the remote's history, from the store's outbox, and trim the
@@ -121,8 +132,9 @@ export type UploadResult =
  *
  * Where the outbox does not reach back to what the copy shares with the remote, the next slot is an archive slot: the
  * store's `export()` at its head. For a session the remote does not have yet, that is its first slot (the outbox was
- * turned on later, or trimmed, as for a copy renamed after it diverged); for one it has, the slot after its head (the
- * outbox was turned off, dropping commits not uploaded yet, and on again), so the history goes on from a full state.
+ * turned on later, or trimmed, as for a copy backed up under a new id after it diverged); for one it has, the slot
+ * after its head (the outbox was turned off, dropping commits not uploaded yet, and on again), so the history goes on
+ * from a full state.
  *
  * A slot this device created already is an upload whose response was lost: the remote has the history up to its end,
  * and the upload goes on from there.
@@ -134,11 +146,9 @@ export async function uploadSession(options: {
 	/** Only `putBatch` is used: an upload creates slots and never reads the remote. */
 	readonly store: SessionSyncUploader;
 	readonly state: SyncStateStore;
-	/** The writer's epoch, from whatever grants it (the remote, Radius); sent with every slot. */
-	readonly epoch?: number;
 	readonly context: Context;
 }): Promise<UploadResult> {
-	const { sessionId, device, source, store, state, epoch, context } = options;
+	const { sessionId, device, source, store, state, context } = options;
 	const outbox = outboxOf(source);
 	let synced = sharedHead(await state.get(sessionId, context), storeHead(source));
 	let uploaded: Seq | undefined;
@@ -166,17 +176,15 @@ export async function uploadSession(options: {
 		const after = synced;
 		let result: PutBatchResult;
 		try {
-			result = await store.putBatch(sessionId, after, to, device, body, context, {
-				...(archive ? { archive } : {}),
-				...(epoch === undefined ? {} : { epoch }),
-			});
+			result = await store.putBatch(sessionId, after, to, device, body, context, archive ? { archive } : {});
 		} finally {
 			// A remote that answered without reading the archive leaves the export holding the commit queue.
 			await close?.();
 		}
+		if (result.type === "refused") return { type: "refused", reason: result.reason };
 		// A history that does not end at `after` is another one too: the remote never held this copy's past `after`.
-		if (result.type === "stale_epoch") return { type: "stale_epoch", at: after, epoch: result.epoch };
-		if (result.type === "not_head") return { type: "diverged", at: after };
+		if (result.type === "not_head")
+			return result.head === LOG_START ? { type: "remote_empty", at: after } : { type: "diverged", at: after };
 		if (result.type === "exists" && result.device !== device) return { type: "diverged", at: after };
 		synced = result.type === "created" ? to : result.to;
 		await state.set(sessionId, { syncedHead: synced }, context);
@@ -463,6 +471,9 @@ class ScratchState implements SyncStateStore {
 	}
 	async set(_sessionId: string, state: SyncState): Promise<void> {
 		this.#state = state;
+	}
+	async delete(): Promise<void> {
+		this.#state = undefined;
 	}
 }
 

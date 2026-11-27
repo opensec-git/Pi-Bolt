@@ -45,7 +45,7 @@ const OwnerSchema = obj({ owner: str({ minLength: 1 }) });
 /**
  * Provider logins of the server (host-internal): p2's provider-owned flows over the shared credentials. A login
  * belongs to the owner that started it (as in Pi Mobile): only it sees its prompts and notices, answers, cancels or
- * dismisses it, and only its leaving ends it.
+ * dismisses it, and only its staying away ends it.
  */
 export const LoginService = local("p2.login-service", {
 	/** 3: no `abandon` (the service follows who holds `ProviderLogin`). */
@@ -81,33 +81,31 @@ export const LoginService = local("p2.login-service", {
 
 /**
  * Signing in to model providers (any owner, local or remote; never guests).
- * Credentials are stored in `auth.json` and never sent to the browser. Held while the Providers sheet is open: once
- * none of the starting owner's browsers holds it (closed sheets, disconnects), that owner's unfinished login is
- * cancelled. Another owner sees no `login` while one runs, and cannot start, answer or cancel it.
+ * Credentials are stored in `auth.json` and never sent to the browser. Held while a page is open: once none of the
+ * starting owner's pages holds it (closed tabs, dropped connections) for five minutes, that owner's unfinished login
+ * ends; a phone drops a background tab's connection while its owner signs in in the provider's tab. Closing the sheet
+ * cancels it at once. A new start by the same owner replaces their unfinished login. Another owner sees no `login`
+ * while one runs, and cannot start, answer or cancel it.
  */
 export const ProviderLogin = remote("p2.provider-login", {
-	version: 1,
+	version: 2,
 	params: {},
 	hostAddress: serverHost,
-	variants: {
-		owner: {
-			state: { providers: arr(ProviderSchema), login: union([LoginStateSchema, nul()]) },
-			methods: {
-				start: method(obj({ providerId: str(), authType: AuthTypeSchema }), AttemptSchema),
-				answer: method(
-					obj({
-						attemptId: str(),
-						promptId: str(),
-						value: str({ maxLength: 100_000 }),
-					}),
-				),
-				cancel: method(AttemptSchema),
-				/** Clears a finished login. */
-				dismiss: method(AttemptSchema),
-				logout: method(ProviderIdSchema),
-				/** Fetches the provider's current model list; returns how many models it has. */
-				refresh: method(ProviderIdSchema, obj({ models: num() })),
-			},
-		},
+	state: { providers: arr(ProviderSchema), login: union([LoginStateSchema, nul()]) },
+	methods: {
+		start: method(obj({ providerId: str(), authType: AuthTypeSchema }), AttemptSchema),
+		answer: method(
+			obj({
+				attemptId: str(),
+				promptId: str(),
+				value: str({ maxLength: 100_000 }),
+			}),
+		),
+		cancel: method(AttemptSchema),
+		/** Clears a finished login. */
+		dismiss: method(AttemptSchema),
+		logout: method(ProviderIdSchema),
+		/** Fetches the provider's current model list; returns how many models it has. */
+		refresh: method(ProviderIdSchema, obj({ models: num() })),
 	},
 });

@@ -37,6 +37,9 @@ export const bashOutputSchema = Type.Object({
 	output: Type.String({ description: "Combined stdout and stderr, possibly truncated" }),
 	truncated: Type.Boolean(),
 	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
+	full_output_error: Type.Optional(
+		Type.String({ description: "Why the full output could not be saved, when truncated and saving failed" }),
+	),
 	exit_code: Type.Number(),
 	wall_time_seconds: Type.Number(),
 });

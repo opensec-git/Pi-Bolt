@@ -3,7 +3,7 @@
 // project and Delete project…; on an archived project (the Archive's list) Restore project and Delete project…; and the
 // new-session screen's project page, which sets the project a new session joins and starts it at the project's
 // default place.
-import { BACKGROUND_CONTEXT, type HeldIn, withHeld } from "@p2/app/v1";
+import { BACKGROUND_CONTEXT, type Ref, withHeld } from "@p2/app/v1";
 import {
 	ArchiveIcon,
 	CloseIcon,
@@ -64,7 +64,7 @@ export function projectJoin(host: Host, name: string): NewSessionJoin {
 	return {
 		label: name,
 		run: (session) =>
-			withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), "owner", (live) =>
+			withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), (live) =>
 				live.assign({ session, project: name }, BACKGROUND_CONTEXT),
 			),
 	};
@@ -168,11 +168,11 @@ export const PROJECT_PAGES: Readonly<Record<string, CommandPage>> = {
 /** Runs `action` with the owner's live `Projects` and the target project's name. */
 async function withProjects(
 	ctx: CommandContext,
-	action: (live: HeldIn<typeof Projects, "owner">, name: string) => Promise<unknown>,
+	action: (live: Ref<typeof Projects>, name: string) => Promise<unknown>,
 ): Promise<void> {
 	const name = ctx.target?.id;
 	if (name === undefined) return;
-	await withHeld(ctx.host.hold(Projects, {}, BACKGROUND_CONTEXT), "owner", (live) => action(live, name));
+	await withHeld(ctx.host.hold(Projects, {}, BACKGROUND_CONTEXT), (live) => action(live, name));
 }
 
 /** Archives the target project with its sessions; an open session of it gives way to the new-session screen first. */
@@ -293,7 +293,7 @@ function RenameProjectPage() {
 				icon={PencilIcon}
 				onSelect={async () => {
 					await close();
-					await withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), "owner", (live) =>
+					await withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), (live) =>
 						live.rename({ name, to }, BACKGROUND_CONTEXT),
 					).catch(fail);
 				}}
@@ -302,26 +302,36 @@ function RenameProjectPage() {
 	);
 }
 
-/** Confirms deleting the target project: its sessions stay, in no project. */
+/**
+ * Confirms deleting the target project: its sessions stay, in no project; its coordinator is archived (an open one gives
+ * way to the new-session screen first).
+ */
 function DeleteProjectPage() {
 	const host = useHost();
 	const { close } = useCommandMenu();
 	const { fail } = useComposerState();
 	const name = useCommandTarget()?.id;
-	const memberships = usePageData()?.context.memberships ?? {};
+	const data = usePageData();
 	if (name === undefined) return null;
-	const count = Object.values(memberships).filter((project) => project === name).length;
+	const coordinator = data?.coordinators[name];
+	const memberships = data?.context.memberships ?? {};
+	const count = Object.entries(memberships).filter(
+		([session, project]) => project === name && session !== coordinator,
+	).length;
+	const moved =
+		count === 0 ? "No sessions" : `${count} ${count === 1 ? "session moves" : "sessions move"} to No project`;
+	const coordinatorLive = data?.rows.some((row) => row.id === coordinator && row.archivedAt === null);
 	return (
 		<CommandMenu.Group heading="Project">
 			<CommandMenu.Row
 				title={`Delete “${name}”`}
 				icon={CloseIcon}
-				suffix={
-					count === 0 ? "No sessions" : `${count} ${count === 1 ? "session moves" : "sessions move"} to No project`
-				}
+				suffix={coordinatorLive ? `${moved}; its coordinator is archived` : moved}
 				onSelect={async () => {
 					await close();
-					await withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), "owner", (live) =>
+					const nav = getNavigation();
+					if (coordinator !== undefined && nav.route.session === coordinator) void nav.replace(NEW_SESSION);
+					await withHeld(host.hold(Projects, {}, BACKGROUND_CONTEXT), (live) =>
 						live.remove({ name }, BACKGROUND_CONTEXT),
 					).catch(fail);
 				}}

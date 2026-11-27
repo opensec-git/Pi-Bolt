@@ -1,7 +1,8 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../src/api/openai-completions.ts";
-import { getModel, normalizeContext, stream, streamSimple } from "../src/compat.ts";
+import { getModel, normalizeContext, streamSimple } from "../src/compat.ts";
+import { getSupportedThinkingLevels } from "../src/models.ts";
 import type { AssistantMessage, Model, SimpleStreamOptions, Tool, ToolResultMessage } from "../src/types.ts";
 
 const mockState = vi.hoisted(() => ({
@@ -314,34 +315,6 @@ describe("openai-completions tool_choice", () => {
 		const functionTool = params.tools?.[0]?.function;
 		expect(functionTool?.strict).toBe(true);
 		expect(functionTool?.parameters?.required).toEqual(["required", "optional"]);
-	});
-
-	it("maps Groq Qwen reasoning levels to default reasoning_effort", async () => {
-		const model = getModel("groq", "qwen/qwen3.6-27b")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [
-					{
-						role: "user",
-						content: "Hi",
-						timestamp: Date.now(),
-					},
-				],
-			},
-			{
-				apiKey: "test",
-				reasoning: "medium",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { reasoning_effort?: string };
-		expect(params.reasoning_effort).toBe("default");
 	});
 
 	it("keeps normal reasoning_effort for groq models without compat mapping", async () => {
@@ -1413,51 +1386,6 @@ describe("openai-completions tool_choice", () => {
 		expect(messages[0]).not.toHaveProperty("reasoning");
 	});
 
-	it("sends thinking disabled for OpenCode Kimi K2.6 when thinking is off", async () => {
-		const model = getModel("opencode", "kimi-k2.6")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
-		expect(params.thinking).toEqual({ type: "disabled" });
-		expect(params.reasoning_effort).toBeUndefined();
-	});
-
-	it("sends thinking enabled for OpenCode Kimi K2.6 when thinking is enabled", async () => {
-		const model = getModel("opencode", "kimi-k2.6")!;
-		let payload: unknown;
-
-		await streamSimple(
-			model,
-			{
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test",
-				reasoning: "high",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		const params = (payload ?? mockState.lastParams) as { thinking?: unknown; reasoning_effort?: string };
-		expect(params.thinking).toEqual({ type: "enabled" });
-		expect(params.reasoning_effort).toBeUndefined();
-	});
-
 	it("omits disabled thinking for Moonshot Kimi K2.7 Code models", async () => {
 		const cases = [getModel("moonshotai", "kimi-k2.7-code"), getModel("moonshotai-cn", "kimi-k2.7-code")];
 
@@ -1507,7 +1435,7 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("sends max_tokens for OpenCode completions models", async () => {
-		const cases = [getModel("opencode-go", "kimi-k3")!, getModel("opencode", "kimi-k2.6")!] as const;
+		const cases = [getModel("opencode-go", "kimi-k3")!, getModel("opencode", "kimi-k3")!] as const;
 
 		for (const model of cases) {
 			let payload: unknown;
@@ -1898,18 +1826,17 @@ describe("openai-completions tool_choice", () => {
 	});
 
 	it("uses Ant Ling compatibility metadata", async () => {
-		const model = getModel("ant-ling", "Ring-2.6-1T")!;
+		const model = getModel("ant-ling", "Ling-3.1-flash")!;
 		let payload: unknown;
 
 		expect(model.compat).toMatchObject({
 			supportsStore: false,
 			supportsReasoningEffort: false,
 			maxTokensField: "max_tokens",
-			thinkingFormat: "ant-ling",
+			thinkingFormat: "deepseek",
+			supportsStrictMode: true,
 			supportsLongCacheRetention: false,
 		});
-		expect(model.compat?.supportsStrictMode).toBe(true);
-		expect(model.compat?.requiresReasoningContentOnAssistantMessages).toBeUndefined();
 
 		await streamSimple(
 			model,
@@ -1933,7 +1860,7 @@ describe("openai-completions tool_choice", () => {
 			max_tokens?: number;
 			max_completion_tokens?: number;
 			messages?: Array<{ role?: string }>;
-			reasoning?: { effort?: string };
+			thinking?: { type?: string };
 			reasoning_effort?: string;
 			store?: boolean;
 			prompt_cache_key?: string;
@@ -1942,48 +1869,34 @@ describe("openai-completions tool_choice", () => {
 		expect(params.max_tokens).toBe(123);
 		expect(params.max_completion_tokens).toBeUndefined();
 		expect(params.messages?.[0]?.role).toBe("system");
-		expect(params.reasoning).toEqual({ effort: "high" });
+		expect(params.thinking).toEqual({ type: "enabled" });
 		expect(params.reasoning_effort).toBeUndefined();
 		expect(params.store).toBeUndefined();
 		expect(params.prompt_cache_key).toBeUndefined();
 		expect(params.prompt_cache_retention).toBeUndefined();
 	});
 
-	it("omits Ant Ling reasoning for unmapped direct reasoning efforts and non-reasoning models", async () => {
-		const ring = getModel("ant-ling", "Ring-2.6-1T")!;
-		let payload: unknown;
+	it("sends identical requests for the deprecated ant-ling format and deepseek", async () => {
+		const model = getModel("ant-ling", "Ling-3.1-flash")!;
+		const legacy = { ...model, compat: { ...model.compat, thinkingFormat: "ant-ling" } } as const;
+		for (const reasoning of [undefined, "high"] as const) {
+			expect(await captureSimpleParams(legacy, reasoning)).toEqual(await captureSimpleParams(model, reasoning));
+		}
+	});
 
-		await stream(
-			ring,
-			{
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test",
-				reasoningEffort: "medium",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
+	// Ant Ling thinks by default; only thinking.type "disabled" turns it off.
+	it("toggles Ant Ling thinking on or off for every thinking level", async () => {
+		const model = getModel("ant-ling", "Ling-3.1-flash")!;
+		expect(getSupportedThinkingLevels(model)).toEqual(["off", "high"]);
 
-		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
+		for (const reasoning of ["minimal", "low", "medium", "high", "xhigh"] as const) {
+			const params = await captureSimpleParams(model, reasoning);
+			expect(params.thinking).toEqual({ type: "enabled" });
+			expect(params.reasoning_effort).toBeUndefined();
+		}
 
-		const ling = getModel("ant-ling", "Ling-2.6-flash")!;
-		await streamSimple(
-			ling,
-			{
-				messages: [{ role: "user", content: "Hi", timestamp: Date.now() }],
-			},
-			{
-				apiKey: "test",
-				reasoning: "high",
-				onPayload: (params: unknown) => {
-					payload = params;
-				},
-			},
-		).result();
-
-		expect((payload ?? mockState.lastParams) as { reasoning?: unknown }).not.toHaveProperty("reasoning");
+		const off = await captureSimpleParams(model, undefined);
+		expect(off.thinking).toEqual({ type: "disabled" });
+		expect(off.reasoning_effort).toBeUndefined();
 	});
 });

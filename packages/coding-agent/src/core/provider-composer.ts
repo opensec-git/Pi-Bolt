@@ -109,6 +109,7 @@ export interface ProviderConfigInput {
 	refreshModels?(context: RefreshModelsContext): Promise<ProviderModelConfig[]>;
 }
 
+/** Whether and how a provider has auth. `configured: false` with `source: "stored"` is a stored credential that does not resolve. */
 export type AuthStatus = {
 	configured: boolean;
 	source?: "stored" | "runtime" | "environment" | "fallback" | "models_json_key" | "models_json_command";
@@ -192,6 +193,7 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 					output: override.cost.output ?? model.cost.output,
 					cacheRead: override.cost.cacheRead ?? model.cost.cacheRead,
 					cacheWrite: override.cost.cacheWrite ?? model.cost.cacheWrite,
+					imageOutput: override.cost.imageOutput ?? model.cost.imageOutput,
 					tiers: override.cost.tiers ?? model.cost.tiers,
 				}
 			: model.cost,

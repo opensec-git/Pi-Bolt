@@ -3,6 +3,7 @@
  */
 
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import { bashTruncationNote } from "../../../core/messages.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -37,6 +38,7 @@ export class BashExecutionComponent extends Container {
 	private loader: Loader;
 	private truncationResult?: TruncationResult;
 	private fullOutputPath?: string;
+	private fullOutputError?: string;
 	private expanded = false;
 	/** The rows between the borders: the command, its output and the status (updateDisplay()). */
 	private content: Container;
@@ -65,7 +67,7 @@ export class BashExecutionComponent extends Container {
 			ui,
 			(spinner) => theme.fg(this.colorKey, spinner),
 			(text) => theme.fg("muted", text),
-			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
+			`Running... (${keyText("app.interrupt")} to cancel)`, // Plain text for loader
 		);
 
 		// Bottom border
@@ -138,6 +140,7 @@ export class BashExecutionComponent extends Container {
 		cancelled: boolean,
 		truncationResult?: TruncationResult,
 		fullOutputPath?: string,
+		fullOutputError?: string,
 	): void {
 		this.exitCode = exitCode;
 		this.status = cancelled
@@ -147,6 +150,7 @@ export class BashExecutionComponent extends Container {
 				: "complete";
 		this.truncationResult = truncationResult;
 		this.fullOutputPath = fullOutputPath;
+		this.fullOutputError = fullOutputError;
 
 		// Stop loader
 		this.loader.stop();
@@ -232,8 +236,13 @@ export class BashExecutionComponent extends Container {
 
 			// Add truncation warning (context truncation, not preview truncation)
 			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated || this.outputDropped;
-			if (wasTruncated && this.fullOutputPath) {
-				statusParts.push(theme.fg("warning", `Output truncated. Full output: ${this.fullOutputPath}`));
+			if (wasTruncated) {
+				statusParts.push(
+					theme.fg(
+						"warning",
+						bashTruncationNote({ fullOutputPath: this.fullOutputPath, fullOutputError: this.fullOutputError }),
+					),
+				);
 			}
 
 			if (statusParts.length > 0) {

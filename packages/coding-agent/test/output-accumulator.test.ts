@@ -142,7 +142,11 @@ describe("OutputAccumulator.snapshot", () => {
 			output.finish();
 			const snapshot = output.snapshot();
 			output.closeTempFile();
-			return { snapshot, lastLineBytes: output.getLastLineBytes() };
+			// (The file's result names its own path; whether it was saved is what has to agree.)
+			return {
+				snapshot: { ...snapshot, fullOutputFile: snapshot.fullOutputFile?.kind },
+				lastLineBytes: output.getLastLineBytes(),
+			};
 		});
 		for (const result of results.slice(1)) expect(result).toEqual(results[0]);
 	});

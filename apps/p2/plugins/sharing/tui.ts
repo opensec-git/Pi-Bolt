@@ -1,19 +1,22 @@
 // Sharing in the TUI (p2-tui-port.md P11a), after the web's share sheet. A TUI guest counts as connected while its
-// worker holds GuestPresence, as a guest's web page does (section 4.1; the owner's variant does nothing), held from a
+// worker holds GuestPresence, as a guest's web page does (section 4.1; the owner's does nothing), held from a
 // slot surface (after the link is live), not during facet load. The guest's name and access show in the header and,
 // read-only, in place of the editor (the chat surface).
 //
 // `/share` (owner): the session's two links and the guests connected now. Enter copies a link (creating it first)
 // through the launcher's `copy` (its consent screen shows the link); a first read/write link on a remote environment is
-// confirmed first. Ctrl+R resets a link (new token, its guests lose access), Ctrl+D removes a guest; both confirmed.
+// confirmed first. Through Radius without a tunnel host the copied link is a new invite (`ShareInvite`): Enter first
+// asks how long it is valid. Ctrl+R resets a link (new token, its guests lose access, its invites are withdrawn),
+// Ctrl+D removes a guest; both confirmed.
 //
 // While the brain is connected to Radius, `/share <email> [full]` shares the session with a person, who opens it in
 // Radius signed in with that email. The overlay lists them; Enter copies the session's Radius address to send them.
 
-import { BACKGROUND_CONTEXT, follow, liveIn, whenLive } from "@p2/app/v1";
+import { BACKGROUND_CONTEXT, follow, live, whenLive } from "@p2/app/v1";
 import type { TuiCommand, TuiContext } from "@p2/app/v1/tui";
 import { confirm, grantNotice, ListOverlay, type ListRow, lineText, TuiScope, tuiFacet } from "@p2/app/v1/tui";
-import { GuestPresence, type ShareMode, Sharing } from "./contract.ts";
+import { GuestPresence, ShareInvite, type ShareMode, Sharing } from "./contract.ts";
+import { DEFAULT_INVITE_SECONDS, INVITE_DURATIONS, validUntil } from "./durations.ts";
 
 const LABEL: Record<ShareMode, string> = { view: "Read-only", full: "Read/write" };
 type Link = { mode: ShareMode; token: string; url: string };
@@ -26,7 +29,8 @@ function openShare(ctx: TuiContext): void {
 	const session = ctx.identity.session;
 	if (!session) return;
 	const sharing = ctx.host.hold(Sharing, { session }, BACKGROUND_CONTEXT);
-	const owner = () => liveIn(sharing, "owner");
+	const invites = ctx.host.hold(ShareInvite, { session }, BACKGROUND_CONTEXT);
+	const owner = () => live(sharing);
 	let links: Link[] | undefined;
 	let guests: Guest[] = [];
 	let people: Guest[] = [];
@@ -63,13 +67,11 @@ function openShare(ctx: TuiContext): void {
 		status = message(error);
 		ctx.requestRender();
 	};
-	/** The link of `mode`, created first when missing (and confirmed for read/write on a remote environment). */
-	const linkOf = async (mode: ShareMode): Promise<string | undefined> => {
-		const service = owner();
-		if (service?.variant !== "owner") return undefined;
-		const existing = links?.find((link) => link.mode === mode)?.url;
-		if (existing) return existing;
-		const remote = mode === "full" && env !== null;
+	/** The URL to hand out for the link of `mode`, created first when missing (confirmed for read/write remotely). */
+	const linkOf = async (mode: ShareMode): Promise<{ url: string; expiresAt: number | null } | undefined> => {
+		const service = live(invites);
+		if (!service) return undefined;
+		const remote = mode === "full" && env !== null && !links?.some((link) => link.mode === mode);
 		if (
 			remote &&
 			!(await confirm(ctx, [
@@ -78,20 +80,21 @@ function openShare(ctx: TuiContext): void {
 			]))
 		)
 			return undefined;
-		await service.link({ mode, ...(remote ? { remoteConfirmed: true } : {}) }, BACKGROUND_CONTEXT);
-		// The answer follows its state: the new link is in `links` when the call resolves.
-		return service.links.value.find((link) => link.mode === mode)?.url;
+		const validFor = service.invites.value ? await chooseDuration(ctx, mode) : DEFAULT_INVITE_SECONDS;
+		if (validFor === undefined) return undefined;
+		return service.invite({ mode, validFor, ...(remote ? { remoteConfirmed: true } : {}) }, BACKGROUND_CONTEXT);
 	};
 	const copy = async (mode: ShareMode) => {
 		status = "";
-		const url = await linkOf(mode);
-		if (!url) return;
-		const result = await ctx.grant("copy", { text: url, label: `${LABEL[mode]} share link` });
-		grantNotice(ctx, `${LABEL[mode]} link copied`, result);
+		const link = await linkOf(mode);
+		if (!link) return;
+		const result = await ctx.grant("copy", { text: link.url, label: `${LABEL[mode]} share link` });
+		const invite = link.expiresAt === null ? "" : ` (an invite, valid until ${validUntil(link.expiresAt)})`;
+		grantNotice(ctx, `${LABEL[mode]} link copied${invite}`, result);
 	};
 	const reset = async (mode: ShareMode) => {
 		const service = owner();
-		if (service?.variant !== "owner" || !links?.some((link) => link.mode === mode)) return;
+		if (!service || !links?.some((link) => link.mode === mode)) return;
 		if (
 			!(await confirm(ctx, [
 				`New ${LABEL[mode].toLowerCase()} link?`,
@@ -112,7 +115,7 @@ function openShare(ctx: TuiContext): void {
 	};
 	const remove = async (guest: Guest, person: boolean) => {
 		const service = owner();
-		if (service?.variant !== "owner") return;
+		if (!service) return;
 		if (
 			!(await confirm(ctx, [
 				`Remove ${lineText(guest.name)}?`,
@@ -199,11 +202,42 @@ function openShare(ctx: TuiContext): void {
 			onClose: () => {
 				for (const stop of stops) stop();
 				sharing.release();
+				invites.release();
 				overlay.close();
 			},
 		}),
 		{ width: "100%", anchor: "bottom-center" },
 	);
+}
+
+/** Asks how long the invite for the link of `mode` is valid: its seconds, or undefined when closed without a choice. */
+function chooseDuration(ctx: TuiContext, mode: ShareMode): Promise<number | undefined> {
+	return new Promise((resolve) => {
+		let chosen: number | undefined;
+		const overlay = ctx.overlay(
+			"share-duration",
+			new ListOverlay(ctx, {
+				title: `${LABEL[mode]} link valid for`,
+				rows: () =>
+					INVITE_DURATIONS.map(({ seconds, label }) => ({
+						key: String(seconds),
+						label,
+						...(seconds === DEFAULT_INVITE_SECONDS ? { detail: "default" } : {}),
+					})),
+				onSelect: (row) => {
+					chosen = Number(row.key);
+					overlay.close();
+					resolve(chosen);
+				},
+				footer: () => [ctx.theme.current.fg("dim", "  Anyone with the link can join until then.")],
+				onClose: () => {
+					overlay.close();
+					resolve(chosen);
+				},
+			}),
+			{ width: "60%", anchor: "center" },
+		);
+	});
 }
 
 /** `/share <email> [full]`: shares the session with a person through Radius (read-only unless `full`). */
@@ -218,7 +252,6 @@ async function shareWith(ctx: TuiContext, args: string): Promise<void> {
 	const sharing = ctx.host.hold(Sharing, { session }, BACKGROUND_CONTEXT);
 	try {
 		await whenLive(sharing);
-		if (sharing.variant !== "owner") return;
 		if (!sharing.peopleUrl.value) {
 			ctx.notify("Connect this brain to Radius and open it there once to share with people by email");
 			return;

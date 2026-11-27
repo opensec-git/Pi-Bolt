@@ -8,6 +8,7 @@ import type { AgentSessionEvent } from "../src/core/agent-session.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import type { EntryRenderer, Extension } from "../src/core/extensions/types.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
+import { SETTINGS_DEFAULTS } from "../src/core/settings-defaults.ts";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import type { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { TranscriptContainer } from "../src/modes/interactive/components/transcript-container.ts";
@@ -292,7 +293,7 @@ function restore(
 					getCodeBlockIndent: () => "  ",
 					getShowImages: () => false,
 					getImageWidthCells: () => 60,
-					getShowCacheMissNotices: () => false,
+					getNotices: () => SETTINGS_DEFAULTS.notices,
 				},
 				extensionRunner: runner,
 			},

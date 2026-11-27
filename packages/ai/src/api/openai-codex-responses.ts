@@ -33,6 +33,7 @@ import { cachedArrayToJSON, cacheJsonSerialization } from "../utils/json-body.ts
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
 import { jsonBodyParts } from "../utils/request-body.ts";
 import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
+import { SseDecoder } from "../utils/sse.ts";
 import { getDeclaredTools, normalizeContext, resolveTranscript } from "../utils/transcript.ts";
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
@@ -64,8 +65,6 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reac
 const PREVIOUS_RESPONSE_NOT_FOUND_CODE = "previous_response_not_found";
 // The Responses API rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
 const MIN_OUTPUT_TOKENS = 16;
-// Fixed reasoning.effort while configuration_update items carry the thinking level.
-const CONFIGURATION_UPDATE_REQUEST_EFFORT = "medium";
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 	"completed",
@@ -637,13 +636,20 @@ function buildRequestBody(
 	// The system prompt goes into a leading developer item, not top-level `instructions`, as in Codex.
 	// From GPT-6.2 on, the backend appends `instructions` after `input`, so every new turn changed the
 	// prompt before the system prompt and it was never served from the prompt cache (#12273).
-	const { input: messages, requestTools } = convertResolvedResponsesInput(model, context, CODEX_TOOL_CALL_PROVIDERS, {
+	// On the Codex backend, medium + a high update can reason less than request-level high (#12361).
+	// Pin the initial effort instead. The public OpenAI Responses API was not implicated.
+	const {
+		input: messages,
+		requestTools,
+		requestEffortBaseline,
+	} = convertResolvedResponsesInput(model, context, CODEX_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
 		supportsAdditionalTools,
 		supportsToolSearch,
 		toolOptions: { strict: null, supportsStrictMode, supportsOpenAIGrammarTools },
 		configurationUpdateEffort,
+		effortBaseline: "initial",
 		cache,
 	});
 
@@ -680,10 +686,7 @@ function buildRequestBody(
 	}
 
 	if (options?.reasoningEffort !== undefined) {
-		const effort =
-			configurationUpdateEffort === undefined
-				? resolveReasoningEffort(model, options.reasoningEffort)
-				: CONFIGURATION_UPDATE_REQUEST_EFFORT;
+		const effort = requestEffortBaseline ?? resolveReasoningEffort(model, options.reasoningEffort);
 		if (effort !== null) {
 			body.reasoning = {
 				effort,
@@ -898,8 +901,7 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 	if (!response.body) return;
 
 	const reader = response.body.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
+	const sse = new SseDecoder();
 	const onAbort = () => {
 		void reader.cancel().catch(() => {});
 	};
@@ -914,33 +916,20 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 			if (signal?.aborted) {
 				throw new Error("Request was aborted");
 			}
-			buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
-			// Treat EOF as terminating the residual SSE frame.
-			if (done && buffer.trim()) buffer += "\n\n";
+			const events = done ? sse.end() : sse.push(value);
 
-			let idx = buffer.indexOf("\n\n");
-			while (idx !== -1) {
-				const chunk = buffer.slice(0, idx);
-				buffer = buffer.slice(idx + 2);
-
-				const dataLines = chunk
-					.split("\n")
-					.filter((l) => l.startsWith("data:"))
-					.map((l) => l.slice(5).trim());
-				if (dataLines.length > 0) {
-					const data = dataLines.join("\n").trim();
-					if (data && data !== "[DONE]") {
-						try {
-							yield JSON.parse(data) as Record<string, unknown>;
-						} catch (cause) {
-							throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-								cause,
-								payload: data,
-							});
-						}
+			for (const event of events) {
+				const data = event.data.trim();
+				if (data && data !== "[DONE]") {
+					try {
+						yield JSON.parse(data) as Record<string, unknown>;
+					} catch (cause) {
+						throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
+							cause,
+							payload: data,
+						});
 					}
 				}
-				idx = buffer.indexOf("\n\n");
 			}
 
 			if (done) break;

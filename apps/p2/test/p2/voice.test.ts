@@ -12,11 +12,11 @@ import { after, before, describe, it, mock } from "node:test";
 import type { ConversationView } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT, follow, whenLive } from "@p2/app/v1";
 import { WebSocket } from "ws";
-import { Chat } from "../../plugins/chat/contract.ts";
+import { CHAT_PARTICIPANT, Chat } from "../../plugins/chat/contract.ts";
 import { ChatMode, spokenMention } from "../../plugins/chat-mode/contract.ts";
-import { Sessions } from "../../plugins/sessions/contract.ts";
+import { SESSIONS_OWNER, Sessions } from "../../plugins/sessions/contract.ts";
 import { Sharing } from "../../plugins/sharing/contract.ts";
-import { BargeInDetector, type BargeInPhase, Pcm16kResampler } from "../../plugins/voice/barge-in.ts";
+import { BargeInDetector, Pcm16kResampler } from "../../plugins/voice/barge-in.ts";
 import { languagesOf, resolved } from "../../plugins/voice/choice.ts";
 import { VoiceMode, VoiceService } from "../../plugins/voice/contract.ts";
 import { responses } from "../../plugins/voice/engine.ts";
@@ -33,7 +33,7 @@ import { isStopCommand, SpeechChunker, speakable } from "../../plugins/voice/spe
 import { PendingTranscripts, type TranscriptTarget, voiceMessage } from "../../plugins/voice/transcripts.ts";
 import voiceWorker, { VOICE_PROMPT, voicePrompt } from "../../plugins/voice/worker.ts";
 import { chatModeHost } from "./chat-mode-host.ts";
-import { ChordError, expectChord, type Fixture, holdIn, http, poll, startFixture, until } from "./helpers.ts";
+import { ChordError, expectChord, type Fixture, holdWith, http, poll, startFixture, until } from "./helpers.ts";
 import { fakeSpeechService, VOICES } from "./voice-service.ts";
 
 describe("voice speech text", () => {
@@ -213,84 +213,6 @@ describe("voice transcripts waiting for the conversation", () => {
 		assert.equal(queue.size, 2);
 		assert.match(errors[1] ?? "", /Too many messages waiting/);
 		queue.clear();
-	});
-});
-
-describe("voice barge-in detector (pibot's)", () => {
-	const rate = 16000;
-	const frame = 1024;
-	const tone = (start: number, length: number) =>
-		Float32Array.from({ length }, (_, index) => 0.5 * Math.sin((2 * Math.PI * 300 * (start + index)) / rate));
-	let seed = 1;
-	const noise = (length: number, amplitude: number) =>
-		Float32Array.from({ length }, () => {
-			seed = (seed * 16807) % 2147483647;
-			return (seed / 2147483647 - 0.5) * 2 * amplitude;
-		});
-	const pcmOf = (input: Float32Array) => Int16Array.from(input, (sample) => Math.round(sample * 0x7fff));
-	/** Plays `seconds` of the tone into the reference; returns how many samples played. */
-	const playing = (detector: BargeInDetector, seconds: number) => {
-		for (let at = 0; at < seconds * rate; at += frame) detector.handlePlaybackAudio(tone(at, frame), rate);
-		return Math.ceil((seconds * rate) / frame) * frame;
-	};
-	/** Feeds `frames` frames made by `make`; the first triggering result, if any. */
-	const feed = (detector: BargeInDetector, frames: number, make: () => Float32Array, phase: BargeInPhase) => {
-		for (let index = 0; index < frames; index++) {
-			const input = make();
-			const result = detector.observeMic(input, rate, pcmOf(input), phase, true);
-			if (result.triggered) return result;
-		}
-		return undefined;
-	};
-
-	it("streams normally only while listening or hearing, and buffers for barge-in otherwise", () => {
-		const detector = new BargeInDetector(rate);
-		assert.equal(detector.shouldStreamMicNormally("listening"), true);
-		assert.equal(detector.shouldStreamMicNormally("hearing"), true);
-		for (const phase of ["thinking", "tool", "speaking", "inactive", "error"] as const)
-			assert.equal(detector.shouldStreamMicNormally(phase), false);
-		// A loud voice while listening is never a barge-in (it is streamed anyway).
-		assert.equal(
-			feed(detector, 20, () => noise(frame, 0.5), "listening"),
-			undefined,
-		);
-	});
-
-	it("takes the playback's own echo for echo while speaking", () => {
-		const detector = new BargeInDetector(rate);
-		const end = playing(detector, 1);
-		// The microphone hears the playback 100 ms late, frame after frame.
-		let at = end - 10 * frame - 0.1 * rate;
-		assert.equal(
-			feed(
-				detector,
-				10,
-				() => {
-					const echo = tone(at, frame);
-					at += frame;
-					return echo;
-				},
-				"speaking",
-			),
-			undefined,
-		);
-	});
-
-	it("interrupts after five frames of sound the playback does not explain, then streams until reset", () => {
-		const detector = new BargeInDetector(rate);
-		playing(detector, 1);
-		const result = feed(detector, 20, () => noise(frame, 0.5), "speaking");
-		assert(result?.preroll && result.metrics);
-		assert(result.metrics.residualRatio >= 0.62 && result.metrics.micRms >= 0.018);
-		// The preroll is the last second of microphone audio (16 kHz).
-		assert.equal(result.preroll.length, 5 * frame);
-		assert.equal(detector.isStreaming(), true);
-		detector.resetStreaming();
-		assert.equal(detector.isStreaming(), false);
-		// The next trigger's preroll holds only what was not streamed yet (noise triggering again and again must not
-		// send more than real time).
-		const again = feed(detector, 20, () => noise(frame, 0.5), "speaking");
-		assert.equal(again?.preroll?.length, 5 * frame);
 	});
 });
 
@@ -689,9 +611,9 @@ describe("voice in chat mode", () => {
 			revision: 1,
 		} as const;
 		const where = { session: "s1", conversation: 1 };
-		const owner = await holdIn(fixture.client(OWNER), Chat, where, "participant");
-		const alice = await holdIn(fixture.client(ALICE), Chat, where, "participant");
-		const mode = await holdIn(fixture.client(OWNER), ChatMode, where, "owner");
+		const owner = await holdWith(fixture.client(OWNER), Chat, where, ...CHAT_PARTICIPANT);
+		const alice = await holdWith(fixture.client(ALICE), Chat, where, ...CHAT_PARTICIPANT);
+		const mode = await holdWith(fixture.client(OWNER), ChatMode, where, "set", "rename");
 		await mode.set({ enabled: true }, BACKGROUND_CONTEXT);
 		await until(mode.enabled, (value) => value === true);
 		const answered = (view: ConversationView | null | undefined) =>
@@ -762,8 +684,8 @@ describe("voice mode's switch and voice", () => {
 		const fixture = await chatModeHost({ facet: voiceWorker });
 		t.after(() => fixture.close());
 		const where = { session: "s1", conversation: 1 };
-		const owner = await holdIn(fixture.client({ kind: "owner", access: "local" }), VoiceMode, where, "owner");
-		const alice = await holdIn(
+		const owner = await holdWith(fixture.client({ kind: "owner", access: "local" }), VoiceMode, where, "choose");
+		const alice = await holdWith(
 			fixture.client({
 				kind: "guest",
 				id: "alice",
@@ -774,7 +696,6 @@ describe("voice mode's switch and voice", () => {
 			}),
 			VoiceMode,
 			where,
-			"participant",
 		);
 		await owner.set({ enabled: true }, BACKGROUND_CONTEXT);
 		// The answer follows its state: the owner's switch and voice are on the page when each call resolves.
@@ -790,13 +711,8 @@ describe("voice mode's switch and voice", () => {
 		await alice.set({ enabled: false }, BACKGROUND_CONTEXT);
 		assert.equal(alice.enabled.value, false);
 		assert.equal(owner.enabled.value, true);
-		// A reference carries every variant's members; the participant's binding refuses the owner's (cast: the type has
-		// only the participant's).
-		const asOwner = alice as unknown as typeof owner;
-		await expectChord(
-			asOwner.choose({ engine: "kokoro", voice: "kokoro-af_heart", speed: 1, language: "de" }, BACKGROUND_CONTEXT),
-			"invalid",
-		);
+		// `choose` is the owner's: not granted, the guest's reference does not have it.
+		assert.equal(alice.choose, undefined);
 		// A view-only guest has no voice mode.
 		const bob = fixture
 			.client({ kind: "guest", id: "bob", name: "Bob", home: "s1", sessions: { s1: "view" }, revision: 1 })
@@ -819,7 +735,7 @@ describe("voice routes and mode", () => {
 	});
 
 	it("publishes the service's engines live as voice.json appears, breaks, moves away and returns", async () => {
-		const service = await holdIn(fixture.browser(), VoiceService, {}, "talker");
+		const service = await holdWith(fixture.browser(), VoiceService, {});
 		await until(service.voices, (value) => value === null);
 		const file = join(fixture.dataDir, "voice.json");
 		writeFileSync(file, JSON.stringify({ url: `${speech.url}/`, token: "secret-token" }));
@@ -840,7 +756,9 @@ describe("voice routes and mode", () => {
 		const port = fixture.server.port;
 		const owner = fixture.browser();
 		const session = (
-			await (await holdIn(owner, Sessions, {}, "owner")).create({ cwd: fixture.workspace }, BACKGROUND_CONTEXT)
+			await (
+				await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER)
+			).create({ cwd: fixture.workspace }, BACKGROUND_CONTEXT)
 		).id;
 		const sharing = owner.hold(Sharing, { session }, BACKGROUND_CONTEXT);
 		await sharing.link({ mode: "full" }, BACKGROUND_CONTEXT);
@@ -965,7 +883,7 @@ describe("voice routes and mode", () => {
 		assert.equal(await status(path, {}), 403, "loopback alone is nobody");
 
 		// The engines for both (pushed live); a sample for the owner only; logs for both, the guest's marked as such.
-		const alice = await holdIn(fixture.client(full).host, VoiceService, {}, "talker");
+		const alice = await holdWith(fixture.client(full).host, VoiceService, {});
 		assert.deepEqual(await until(alice.voices, (value) => value !== null), VOICES);
 		alice.release();
 		await expectChord(whenLive(fixture.client(view).host.hold(VoiceService, {}, BACKGROUND_CONTEXT)), "forbidden");
@@ -1047,12 +965,12 @@ describe("voice routes and mode", () => {
 
 	it("turns the voice prompt section on per conversation", async () => {
 		const owner = fixture.browser();
-		const sessions = await holdIn(owner, Sessions, {}, "owner");
+		const sessions = await holdWith(owner, Sessions, {}, ...SESSIONS_OWNER);
 		const session = await sessions.create({ cwd: fixture.workspace }, BACKGROUND_CONTEXT);
 		const input = { session: session.id, conversation: 1 };
-		const chat = await holdIn(owner, Chat, input, "participant");
+		const chat = await holdWith(owner, Chat, input, ...CHAT_PARTICIPANT);
 		const keep = follow(chat.view, () => {});
-		const mode = await holdIn(owner, VoiceMode, input, "owner");
+		const mode = await holdWith(owner, VoiceMode, input, "choose");
 		const sections = () => JSON.stringify(chat.view.value?.entries ?? []);
 		await chat.send({ text: "typed", requestId: "one" }, BACKGROUND_CONTEXT);
 		await until(chat.view, (view) => (view?.entries ?? []).some((entry) => entry.kind === "pi.assistant"));

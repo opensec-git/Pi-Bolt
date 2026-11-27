@@ -228,7 +228,13 @@ export default defineFacet((host) => {
 			),
 			query: (query, ctx) =>
 				worker().liveness.call(async () => {
-					if ("path" in query && workspacePath(query.path) === undefined)
+					if (
+						(query.kind === "list" ||
+							query.kind === "file" ||
+							query.kind === "search" ||
+							query.kind === "diff") &&
+						workspacePath(query.path) === undefined
+					)
 						throw new Error("Invalid workspace path");
 					if (query.kind === "search" && !workspaceSearchText(query.text)) throw new Error("Invalid search text");
 					const { workspace, location } = await workspaceResource.value.current();
@@ -262,20 +268,14 @@ export default defineFacet((host) => {
 	host.serve(Workspace, ({ session, conversation }, principal, self) => {
 		if (!canSend(principal, session)) throw forbidden("participants only");
 		const backend = self.get(WorkspaceBackend, { conversation });
-		return {
-			variant: "reader",
-			members: { changes: backend.changes, query: (query, ctx) => backend.query(query, ctx) },
-		};
+		return { changes: backend.changes, query: (query, ctx) => backend.query(query, ctx) };
 	});
 	host.serve(WorkspaceTransfer, ({ conversation }, principal, self) => {
 		if (principal.kind !== "server") throw forbidden("server only");
 		const backend = self.get(WorkspaceBackend, { conversation });
 		return {
-			variant: "server",
-			members: {
-				read: (query, ctx) => backend.read(query, ctx),
-				write: (upload, ctx) => backend.write(upload, ctx),
-			},
+			read: (query, ctx) => backend.read(query, ctx),
+			write: (upload, ctx) => backend.write(upload, ctx),
 		};
 	});
 });

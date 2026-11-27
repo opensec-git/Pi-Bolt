@@ -10,7 +10,7 @@
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { type Context, withAbortSignal } from "../context/index.ts";
 import { ChordError, type FailureCause, isChordError, type Principal } from "../data/index.ts";
-import { asChordError } from "../data/internal.ts";
+import { asChordError, stackless } from "../data/internal.ts";
 import {
 	asRemoteOldWork,
 	type Caller,
@@ -35,6 +35,7 @@ import {
 	type WireEvent,
 	wireError,
 } from "../link/internal.ts";
+import { appended, NO_ITEMS } from "../lists.ts";
 import { parentOf } from "../telemetry.ts";
 import { Hold } from "./hold.ts";
 import type { HostLink } from "./host-link.ts";
@@ -102,7 +103,7 @@ export class ProviderSide implements EventSender {
 	#ownSent = 0;
 	#ownAcked = 0;
 	/** The holds the current batch touched, in order; its flush sends or queues them. */
-	#touched: Hold[] = [];
+	#touched: readonly Hold[] = NO_ITEMS;
 	/** Holds whose ops wait in their pending queues for a slot. */
 	readonly #waiting = new Set<Hold>();
 	/** Holds waiting for a slot to send their first binding. */
@@ -114,11 +115,15 @@ export class ProviderSide implements EventSender {
 	/** When state began waiting for a slot (`performance.now()`), while some waits: `chord.backpressure.wait`. */
 	#waitingSince: number | undefined;
 	/** The event flush's entries for this origin's holds served here, until it sends them (`sendEvents`). */
-	#events: WireEvent[] = [];
+	#events: readonly WireEvent[] = NO_ITEMS;
 	/** The sender of each `event` message of this origin in flight, in order: an event `ack` consumes the first ones. */
 	readonly #tickets: EventTicket[] = [];
 	/** This host's own `event` messages in flight: at most the host's `eventWindow`. */
 	#eventsInFlight = 0;
+	/** The end of a batch that touched its holds (`#flush`): one function for every batch, no closure per batch. */
+	readonly #flushBatch = (context: Context): void => this.#flush(context);
+	/** Whom the holds of a link other than the parent act for: the link's principal and the peer's incarnation. */
+	#linkCaller: Caller | undefined;
 
 	constructor(link: HostLink, origin: number, limit: number | undefined) {
 		this.link = link;
@@ -161,7 +166,7 @@ export class ProviderSide implements EventSender {
 		const closing = this.link.host.closing;
 		const entries = [...this.#entries.values()];
 		this.#entries.clear();
-		const closed = new ChordError({ code: "unavailable", message: "the link closed" });
+		const closed = stackless({ code: "unavailable", message: "the link closed" });
 		const relayed: RelayedCall[] = [];
 		for (const call of this.#calls.values()) {
 			if (call.kind === "served") call.abort.abort(closed);
@@ -176,8 +181,8 @@ export class ProviderSide implements EventSender {
 			else entry.drop();
 		}
 		// A batch or an event flush running later finds nothing of this side.
-		this.#touched = [];
-		this.#events = [];
+		this.#touched = NO_ITEMS;
+		this.#events = NO_ITEMS;
 		const relay = this.#relay;
 		if (relay === undefined) return;
 		this.link.host.relays.delete(relay.origin);
@@ -225,7 +230,7 @@ export class ProviderSide implements EventSender {
 	 * A message from upstream link `from` for this origin's relayed holds, forwarded with this origin: `bound` and
 	 * `state` join the window's senders (their `ack` goes back to `from`), a reply ends its call (after this host's own
 	 * waiting state: `reply`), `gone` forgets its hold. A hold's calls still waiting for the upstream window are rejected
-	 * before its `loading` (`unavailable`: they carry the old variant's method indexes; its forwarded ones are kept),
+	 * before its `loading` (`unavailable`: they carry the old binding's method indexes; its forwarded ones are kept),
 	 * `failed` or `gone` (with that cause) is forwarded. A link answers only for what was relayed over it: an entry, a
 	 * notice or a reply naming a hold (or a call) this origin did not relay over `from` is dropped (Q1); a `bound` or
 	 * `state` left without entries is acknowledged to `from` at once. Parts travel unchecked and unparsed: the end that
@@ -282,7 +287,7 @@ export class ProviderSide implements EventSender {
 				const error =
 					forwarded.kind === "failed"
 						? this.#failure(hold, forwarded.cause)
-						: new ChordError({ code: "unavailable", message: `hold ${hold.id}: rebinding` });
+						: stackless({ code: "unavailable", message: `hold ${hold.id}: rebinding` });
 				this.#rejectRelayed(hold, error, "queued");
 				this.send(forwarded);
 			}
@@ -346,13 +351,16 @@ export class ProviderSide implements EventSender {
 	 */
 	forget(hold: Hold | RelayedHold, error?: ChordError): void {
 		if (this.#entries.get(hold.id) === hold) this.#entries.delete(hold.id);
-		const reason = error ?? new ChordError({ code: "released", message: `hold ${hold.id}: released` });
+		// Made by the first served call it aborts (most holds end with none): one reason for all of them, as before.
+		let reason = error;
 		let relayed: RelayedCall[] | undefined;
 		for (const [id, call] of this.#calls) {
 			if (call.hold !== hold) continue;
 			this.#calls.delete(id);
-			if (call.kind === "served") call.abort.abort(reason);
-			else {
+			if (call.kind === "served") {
+				reason ??= stackless({ code: "released", message: `hold ${hold.id}: released` });
+				call.abort.abort(reason);
+			} else {
 				relayed ??= [];
 				relayed.push(call);
 			}
@@ -396,7 +404,7 @@ export class ProviderSide implements EventSender {
 	}
 
 	/**
-	 * An event flush's entry for served hold `hold`'s event member `member` (an index into its bound variant's). While
+	 * An event flush's entry for served hold `hold`'s event member `member` (an index into its binding's). While
 	 * this host's event window is full for this origin it is dropped as visited (counted), before anything is encoded:
 	 * nothing waits for a slow consumer, and no value is encoded only to be dropped (the window cannot change during a
 	 * flush: acks arrive in other turns, and this side sends one message per flush). Otherwise it is queued for this
@@ -413,19 +421,21 @@ export class ProviderSide implements EventSender {
 			entry.part = this.link.part(jsonPart(entry.value), this.link.context);
 			metrics.counter("chord.events.encodes").add(1);
 		}
-		this.#events.push({ hold, member, at: entry.at, value: entry.part });
+		this.#events = appended(this.#events, { hold, member, at: entry.at, value: entry.part });
 	}
 
 	/** The event flush visited every entry: this origin's admitted entries go as one `event` message, taking a slot. */
 	sendEvents(): void {
 		const events = this.#events;
-		this.#events = [];
+		this.#events = NO_ITEMS;
 		// The side closed during the flush.
 		if (events.length === 0) return;
 		this.#eventsInFlight++;
 		this.#tickets.push(LOCAL);
 		this.link.host.metrics.counter("chord.events.sent").add(events.length);
-		this.send({ kind: "event", events });
+		// A list of its own (`Message` types it mutable): `appended` made it from the shared empty one, never written
+		// again once handed off here.
+		this.send({ kind: "event", events: events as WireEvent[] });
 	}
 
 	/** A hold's object is live: its `bound` goes now when a slot is free, else with the next free slot's bindings. */
@@ -461,8 +471,8 @@ export class ProviderSide implements EventSender {
 
 	/** A hold's members changed in the current batch; its flush sends or queues it. */
 	touched(hold: Hold): void {
-		if (this.#touched.length === 0) this.link.host.batch.flushing((context) => this.#flush(context));
-		this.#touched.push(hold);
+		if (this.#touched.length === 0) this.link.host.batch.flushing(this.#flushBatch);
+		this.#touched = appended(this.#touched, hold);
 	}
 
 	/**
@@ -527,7 +537,11 @@ export class ProviderSide implements EventSender {
 	 */
 	#caller(message: Extract<Message, { readonly kind: "hold" }>): Caller {
 		const { link } = this;
-		if (link.role !== "parent") return { principal: link.principal, incarnation: link.peer };
+		// One for every hold of the side (the peer's `hello` came before any hold): callers are read, never compared.
+		if (link.role !== "parent") {
+			this.#linkCaller ??= { principal: link.principal, incarnation: link.peer };
+			return this.#linkCaller;
+		}
 		// The message schema checked a principal's shape on an untrusted link; a trusted parent is believed.
 		const principal = (message.principal as Caller["principal"]) ?? link.principal;
 		return { principal, incarnation: message.incarnation ?? link.peer };
@@ -555,7 +569,7 @@ export class ProviderSide implements EventSender {
 	 * arguments from a child (clients never compress) are protocol errors. On a relayed hold it is forwarded, its
 	 * arguments checked against this link's part limit first (the bytes are here). On a served hold that is not callable
 	 * (not bound yet, nor rebinding by the names its consumer still has after a `loading`) it is
-	 * refused `not_ready`; its method is an index into the bound variant (one outside it is a protocol error) and its
+	 * refused `not_ready`; its method is an index into the binding's methods (one outside them is a protocol error) and its
 	 * arguments are opened and parsed here within the hold's limits (past one the call fails `too_large/part`; a
 	 * malformed part is a protocol error), absent ones `null`. Arguments this host must inflate asynchronously are
 	 * inflated first, then the call is handled again.
@@ -699,7 +713,7 @@ export class ProviderSide implements EventSender {
 				for (const id of sender.holds) {
 					const hold = this.#relayedHold(id, sender.from);
 					if (hold === undefined) continue;
-					const error = new ChordError({ code: "unavailable", message: `hold ${id}: rebound` });
+					const error = stackless({ code: "unavailable", message: `hold ${id}: rebound` });
 					this.#rejectRelayed(hold, error, "queued");
 				}
 				break;
@@ -760,11 +774,11 @@ export class ProviderSide implements EventSender {
 		const holds = this.#touched;
 		// The side closed during the batch: nothing is sent.
 		if (holds.length === 0) return;
-		this.#touched = [];
+		this.#touched = NO_ITEMS;
 		// A hold touched in this batch may have left its binding since (a reload unbound it).
 		if (this.#free) {
-			const entries: StateEntry[] = [];
-			for (const hold of holds) if (hold.bound) entries.push(hold.entry(context));
+			let entries: readonly StateEntry[] = NO_ITEMS;
+			for (const hold of holds) if (hold.bound) entries = appended(entries, hold.entry(context));
 			if (entries.length > 0) this.#sendOwn({ kind: "state", holds: entries });
 			return;
 		}

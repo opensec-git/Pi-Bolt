@@ -13,7 +13,7 @@ import { eq } from "../../src/store/expression.ts";
 import { json } from "../../src/store/json-column.ts";
 import { LiveQuery } from "../../src/store/live-query.ts";
 import { query } from "../../src/store/query.ts";
-import type { Read } from "../../src/store/read.ts";
+import { Read } from "../../src/store/read.ts";
 import { ReadRefresh, Reads } from "../../src/store/reads.ts";
 import type { Step } from "../../src/store/step.ts";
 import type { ChordStore } from "../../src/store/store.ts";
@@ -131,9 +131,12 @@ describe("activation", () => {
 		await host.load([{ name: "@test/app", facet: defineFacet((h) => serveBoard(h, 3)) }], context);
 		const refused = (await rejection(host.get(Board, {}, context))) as ChordError;
 		expect(refused.message).toContain("stored at version 9");
-		expect(errors.map((error) => [error.kind, "failure" in error ? error.failure.kind : ""])).toEqual([
-			["activation_failed", "broken"],
-		]);
+		expect(
+			errors.map((error) => [
+				error.kind,
+				error.kind === "activation_failed" || error.kind === "object_failed" ? error.failure.kind : "",
+			]),
+		).toEqual([["activation_failed", "broken"]]);
 		await host.close(context);
 		await store.close(context);
 	});
@@ -315,7 +318,7 @@ describe("failure", () => {
 				],
 			],
 		});
-		expect(errors.map((error) => [error.kind, "query" in error ? error.query : ""])).toEqual([
+		expect(errors.map((error) => [error.kind, error.kind === "query_failed" ? error.query : ""])).toEqual([
 			["query_failed", "items"],
 		]);
 		// The object stays live: only the member failed.
@@ -337,6 +340,39 @@ describe("memory", () => {
 		await host.close(context);
 		await store.close(context);
 	});
+
+	it("keeps none of the stored rows its runs fetched while it shows them", async () => {
+		// node:sqlite returns each row as a dictionary-mode object (256 B for two columns): the read keeps their keys,
+		// the value its decoded rows, and the comparison of the next run their values.
+		const fetched: WeakRef<object>[] = [];
+		const fetch = Read.prototype.fetch;
+		Read.prototype.fetch = async function (this: Read, ...args: Parameters<Read["fetch"]>) {
+			const run = await fetch.apply(this, args);
+			if (run.kind === "rows") for (const row of run.result.rows) fetched.push(new WeakRef(row));
+			return run;
+		};
+		try {
+			const store = await memoryStore();
+			const { board: reference, host } = await board(store);
+			for (const id of [1, 2, 3]) await reference.put({ id, text: `t${id}` }, context);
+			await reference.rename({ id: 2, text: "two" }, context);
+			expect(fetched.length).toBeGreaterThan(3);
+			await expectCollected(...fetched);
+			const shown = reference.items.value;
+			expect(shown).toEqual([
+				{ id: 3, text: "t3" },
+				{ id: 2, text: "two" },
+				{ id: 1, text: "t1" },
+			]);
+			// An unchanged row is still the same object in the next frame.
+			await reference.put({ id: 4, text: "t4" }, context);
+			expect(reference.items.value[1]).toBe(shown[0]);
+			await host.close(context);
+			await store.close(context);
+		} finally {
+			Read.prototype.fetch = fetch;
+		}
+	});
 });
 
 describe("a refresh applied again", () => {
@@ -346,7 +382,8 @@ describe("a refresh applied again", () => {
 		// Stubs: the refresh takes the reads over the written table from the index, runs and adopts them, and hands the
 		// step through. A read without a result is never skipped.
 		const stub = {
-			plan: { uses: [{ table: "t" }] },
+			plan: { uses: [{ table: "t" }], table: "t" },
+			what: { kind: "count" },
 			latest: () => undefined,
 			run: async () => ({ kind: "count", count: ++runs }),
 			ran: () => {},

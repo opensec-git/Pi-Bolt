@@ -83,12 +83,12 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// Cerebras
 	{ provider: "cerebras", model: "zai-glm-4.7", label: "cerebras-zai-glm-4.7" },
 	// Cloudflare Workers AI
-	{ provider: "cloudflare-workers-ai", model: "@cf/moonshotai/kimi-k2.6", label: "cloudflare-kimi-k2.6" },
+	{ provider: "cloudflare-workers-ai", model: "@cf/zai-org/glm-5.3", label: "cloudflare-glm-5.3" },
 	// Cloudflare AI Gateway
 	{
 		provider: "cloudflare-ai-gateway",
-		model: "workers-ai/@cf/moonshotai/kimi-k2.6",
-		label: "cloudflare-gateway-kimi-k2.6",
+		model: "workers-ai/@cf/zai-org/glm-5.3",
+		label: "cloudflare-gateway-glm-5.3",
 	},
 	{
 		provider: "cloudflare-ai-gateway",
@@ -115,7 +115,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// Meta
 	{ provider: "meta", model: "muse-spark-1.3", label: "meta-muse-spark-1.3" },
 	// Mistral
-	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
+	{ provider: "mistral", model: "mistral-medium-latest", label: "mistral-medium" },
 	// MiniMax
 	{ provider: "minimax", model: "MiniMax-M2.7", label: "minimax-m2.7" },
 	{ provider: "minimax-cn", model: "MiniMax-M2.7", label: "minimax-m2.7" },

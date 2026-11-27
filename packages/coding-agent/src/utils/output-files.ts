@@ -5,7 +5,7 @@
  * go to the OS temp directory.
  */
 
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, openSync, rmSync, writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +35,9 @@ export async function writeOutputFile(prefix: string, extension: string, data: s
 	return path;
 }
 
+/** Where streamed output ended up: a complete file, or why it could not be saved. */
+export type OutputFileResult = { kind: "saved"; path: string } | { kind: "failed"; error: string };
+
 /**
  * An output file that streamed output is appended to as it arrives.
  *
@@ -46,7 +49,7 @@ export async function writeOutputFile(prefix: string, extension: string, data: s
  */
 export class OutputFile {
 	readonly path: string;
-	/** Whether the file was created. When it was not, `close()` throws why, and there is no file at `path`. */
+	/** Whether the file was created. When it was not, `result` says why, and there is no file at `path`. */
 	readonly opened: boolean;
 	private readonly maxBytes: number;
 	private fd: number | undefined;
@@ -61,7 +64,7 @@ export class OutputFile {
 			// `wx` never follows a link someone else placed at the path.
 			this.fd = openSync(path, "wx", OUTPUT_FILE_MODE);
 		} catch (error) {
-			// Writes run in output handlers, where a throw would end the process; `close()` reports it.
+			// Writes run in output handlers, where a throw would end the process; `result` reports it.
 			this.error = error instanceof Error ? error : new Error(String(error));
 		}
 		this.opened = this.fd !== undefined;
@@ -72,14 +75,23 @@ export class OutputFile {
 		return this.error !== undefined;
 	}
 
+	/**
+	 * `saved` while no write has failed (the file is complete once closed), else why the file is missing output. Open,
+	 * write and close failures (full disk, quota, unwritable temp dir) never throw; a file that failed after it was
+	 * created is removed, since a partial file would pass for the full output.
+	 */
+	get result(): OutputFileResult {
+		return this.error ? { kind: "failed", error: this.error.message } : { kind: "saved", path: this.path };
+	}
+
 	/** Whether the file reached its size limit: it ends with a note, and output written after that is not in it. */
 	get capped(): boolean {
 		return this.reachedMaxBytes;
 	}
 
 	/**
-	 * Append `data`. After a failed write the file stops taking data, and `close()` throws the error. Past `maxBytes`
-	 * the file ends with a note and takes no more data.
+	 * Append `data`. After a failed write the file stops taking data, and `result` says why. Past `maxBytes` the file
+	 * ends with a note and takes no more data.
 	 */
 	write(data: string | Uint8Array): void {
 		if (this.fd === undefined) {
@@ -116,17 +128,15 @@ export class OutputFile {
 				this.closeFd();
 			}
 		} catch (error) {
-			this.error = error instanceof Error ? error : new Error(String(error));
+			this.fail(error);
 			this.closeFd();
 		}
 	}
 
-	/** Close the file. Throws the error of a failed write, if there was one. */
-	close(): void {
+	/** Close the file. Never throws: returns `result`. */
+	close(): OutputFileResult {
 		this.closeFd();
-		if (this.error) {
-			throw this.error;
-		}
+		return this.result;
 	}
 
 	private closeFd(): void {
@@ -138,8 +148,19 @@ export class OutputFile {
 		try {
 			closeSync(fd);
 		} catch (error) {
-			this.error ??= error instanceof Error ? error : new Error(String(error));
+			this.fail(error);
 		}
+		if (this.error) {
+			try {
+				rmSync(this.path, { force: true });
+			} catch {
+				// Removing is best effort; `result` already reports the file as failed.
+			}
+		}
+	}
+
+	private fail(error: unknown): void {
+		this.error ??= error instanceof Error ? error : new Error(String(error));
 	}
 }
 

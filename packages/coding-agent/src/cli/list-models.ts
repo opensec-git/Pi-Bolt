@@ -6,7 +6,6 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { formatNoModelsAvailableMessage } from "../core/auth-guidance.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
-import { chalk } from "../utils/lazy-packages.ts";
 
 /**
  * Format a number as human-readable (e.g., 200000 -> "200K", 1000000 -> "1M")
@@ -31,11 +30,6 @@ export async function listModels(
 	searchPattern?: string,
 	signal?: AbortSignal,
 ): Promise<void> {
-	const loadError = modelRuntime.getError();
-	if (loadError) {
-		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
-	}
-
 	const models = [...(await modelRuntime.getAvailable(undefined, { signal }))];
 
 	if (models.length === 0) {

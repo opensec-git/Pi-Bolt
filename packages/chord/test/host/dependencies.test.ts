@@ -114,13 +114,13 @@ describe("the dependency check", () => {
 			version: 1,
 			params: {},
 			hostAddress: () => Server(),
-			variants: { v: { state: { n: int() } } },
+			state: { n: int() },
 		});
 		const B = remote("app.b", {
 			version: 1,
 			params: {},
 			hostAddress: () => Session({ id: "S1" }),
-			variants: { v: { state: { n: int() } } },
+			state: { n: int() },
 		});
 		const X = local("app.x", { version: 1, params: {}, members: { n: int() } });
 		const Kick = local("app.kick", { version: 1, params: {}, members: { n: int() } });
@@ -132,7 +132,7 @@ describe("the dependency check", () => {
 				// The server's host object starts the worker; its A and the worker's B then start in the same turns, so
 				// the activation chains miss the ring (M§7's gap).
 				h.serve(Kick, (_p, self) => ({ n: self.get(B, {}).n }));
-				h.serve(A, (_p, _principal, self) => ({ variant: "v", members: { n: self.get(B, {}).n } }));
+				h.serve(A, (_p, _principal, self) => ({ n: self.get(B, {}).n }));
 			},
 			worker: (h) => {
 				h.serve(Front, (_p, self) => ({ n: self.get(A, {}).n }));
@@ -140,7 +140,7 @@ describe("the dependency check", () => {
 				h.serve(B, (_p, _principal, self) => {
 					const a = self.get(A, {});
 					self.get(X, {});
-					return { variant: "v", members: { n: a.n } };
+					return { n: a.n };
 				});
 			},
 		});
@@ -433,5 +433,53 @@ describe("a denied dependency (slice 14 §2.2)", () => {
 			expect(errors.map(({ kind }) => kind)).toEqual([]);
 			await host.close(context);
 		});
+	});
+});
+
+// The third review of the hot-path pass (Astra, 2026-11-26): pinKeys names a key's reference by the label it had
+// when the load started, read once (plugin code may release the reference meanwhile).
+describe("the keys a factory pinned", () => {
+	it("a failing first load is named by its target as it started, though initial() released the reference", async () => {
+		const Keys = local("app.keys", {
+			version: 1,
+			params: { id: int() },
+			members: { rows: keyed(obj({ n: int() })) },
+		});
+		const View = local("app.view", { version: 1, params: { id: int() }, members: { n: int() } });
+		let release: (() => void) | undefined;
+		const Rows = defineState("rows", {
+			version: 1,
+			keyed: true,
+			schema: obj({ n: int() }),
+			initial: () => {
+				if (release !== undefined) {
+					const once = release;
+					release = undefined;
+					once();
+					throw new Error("load failed");
+				}
+				return { n: 0 };
+			},
+		});
+		const { host } = await loaded((h) => {
+			h.serve(Keys, (_, self) => ({ rows: self.state(Rows) }));
+			h.serve(View, (_, self) => {
+				const reference = self.get(Keys, { id: 17 });
+				release = () => reference.release();
+				const at = reference.rows.at("a");
+				return { n: self.derive([at], ([row]) => row.n) };
+			});
+		});
+		try {
+			const kept = await host.get(Keys, { id: 17 }, context);
+			const view = host.hold(View, { id: 1 }, context);
+			const trace = statesOf(await view.state.watch(context));
+			await flushed();
+			expect(trace).toContainEqual(expect.stringContaining("waiting for app.keys(17):"));
+			kept.release();
+			view.release();
+		} finally {
+			await host.close(context);
+		}
 	});
 });

@@ -26,12 +26,10 @@ export const SETTINGS_DEFAULTS = {
 		},
 	},
 	hideThinkingBlock: false,
-	showCacheMissNotices: false,
 	shadedCodeBlocks: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",
 	collapseChangelog: false,
-	enableInstallTelemetry: true,
 	enableAnalytics: false,
 	enableSkillCommands: true,
 	terminal: {
@@ -55,6 +53,12 @@ export const SETTINGS_DEFAULTS = {
 	},
 	warnings: {
 		anthropicExtraUsage: true,
+	},
+	notices: {
+		cacheMisses: false,
+		cacheWarming: false,
+		compactionCosts: false,
+		reasoningDrops: false,
 	},
 	codemode: {
 		mode: "on",

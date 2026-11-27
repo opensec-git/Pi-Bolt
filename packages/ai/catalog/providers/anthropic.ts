@@ -1,10 +1,10 @@
 import type { Model } from "../../src/types.ts";
 import { addMissing, defineProvider, mergeCompat, mergeThinking, modelsDevModels, withInputLimits } from "../define.ts";
 import {
-	claude55ThinkingLevels,
+	CLAUDE_55_THINKING_LEVELS,
 	enableClaudeMidConvoEffort,
+	supportsClaudeMidConvoChanges,
 	supportsClaudeMidConvoEffort,
-	supportsClaudeMidConvoSystemMessages,
 } from "../families/anthropic.ts";
 
 // Models the API may fall back to, with the price the caller is billed.
@@ -30,6 +30,8 @@ const CLAUDE_FABLE_5_2: Model<"anthropic-messages"> = {
 	cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
 	contextWindow: 1000000,
 	maxTokens: 128000,
+	// Without a models.dev entry the shared rule cannot tell; Fable rejects `thinking: {type: "disabled"}`.
+	thinkingLevelMap: { off: null },
 };
 
 export default defineProvider({
@@ -40,7 +42,7 @@ export default defineProvider({
 				api: "anthropic-messages",
 				baseUrl: "https://api.anthropic.com",
 				map: (model) => {
-					if (MODELS_55.has(model.id)) mergeThinking(model, claude55ThinkingLevels(model.id));
+					if (MODELS_55.has(model.id)) mergeThinking(model, CLAUDE_55_THINKING_LEVELS);
 					if (MODELS_WITH_1M_CONTEXT.has(model.id)) model.contextWindow = 1000000;
 					return model;
 				},
@@ -51,13 +53,13 @@ export default defineProvider({
 		if (model.api !== "anthropic-messages") return;
 		const messagesModel = model as Model<"anthropic-messages">;
 		if (supportsClaudeMidConvoEffort(model.id)) enableClaudeMidConvoEffort(messagesModel);
-		if (supportsClaudeMidConvoSystemMessages(model.id)) {
+		if (supportsClaudeMidConvoChanges(model.id)) {
 			mergeCompat(messagesModel, { supportsMidConvoSystemMessages: true, supportsMidConvoToolChanges: true });
 		}
 		mergeCompat(messagesModel, { supportsStrictTools: true });
 		// Ephemeral entries have a hard five-minute lifetime; `ttl: "1h"` extends
-		// it to one hour. Only direct Anthropic is annotated so cache warming does
-		// not assume equivalent behavior through proxies.
+		// it to one hour. Proxies are annotated only after their lifetimes were
+		// checked (github-copilot), so cache warming does not assume them.
 		// https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
 		model.promptCache = { short: 300, long: 3600 };
 		withInputLimits(model, {

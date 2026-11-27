@@ -73,10 +73,10 @@ import type { Facet } from "./facet.ts";
 import { deleteFrom, HostDataGate, type HostDataSite, importInto } from "./host-data.ts";
 import { contributionOf } from "./members.ts";
 import type { CloseFailed } from "./native.ts";
-import { ChordObject, type Holder, type ReloadFate, type Served } from "./object.ts";
+import { ChordObject, type Holder, type ReloadFate, type Removal, type Served } from "./object.ts";
 import { chainAttempts, OldWork } from "./old-work.ts";
 import { type Presence, References } from "./presence.ts";
-import { Binding, type CheckedParams, type Held, type Reference, type Target } from "./reference.ts";
+import { Binding, type CheckedParams, type Reference, type Target } from "./reference.ts";
 import { ReloadCycles } from "./reload-cycle.ts";
 import { RevocationKeys, type RevokedBy } from "./revocation.ts";
 import { type RootOptions, RootScopes } from "./root.ts";
@@ -202,6 +202,11 @@ export type HostError =
 			readonly error: unknown;
 	  }
 	| { readonly kind: "protocol_error"; readonly error: unknown }
+	/**
+	 * The heartbeat closed a link whose peer stayed silent past `close` (slice 15 §4): a stalled or gone peer. Its
+	 * holders here are `loading` until another link holds them again; once per closed link.
+	 */
+	| { readonly kind: "link_closed"; readonly reason: "heartbeat"; readonly role: LinkRole }
 	| { readonly kind: "resolve_failed"; readonly address: string; readonly error: unknown }
 	/**
 	 * A derive's compute threw (its owner's, once per failure episode: the first failure after a value or after its
@@ -214,6 +219,13 @@ export type HostError =
 	 * `self.query`, the named query's label for `self.liveQuery`, `self.count` and `self.list`.
 	 */
 	| { readonly kind: "query_failed"; readonly object: string; readonly query: string; readonly error: unknown }
+	/**
+	 * A source followed over a changing source (`self.follow(over, attach)`) failed while live: the attach to the
+	 * value given rejected, or its runtime failed its observer. Once per failure episode (its next attachment ends
+	 * it): the member is failed until then, the object stays live. Also a runtime's detach of an observation that
+	 * threw (each time).
+	 */
+	| { readonly kind: "follow_failed"; readonly object: string; readonly error: unknown }
 	/** A routine's call threw, or its source failed for good; `routine` is its kind and position. */
 	| { readonly kind: "routine_failed"; readonly object: string; readonly routine: Position; readonly error: unknown }
 	/** A job's `run` threw (not after an abort): its outcome is `failed { threw }`. */
@@ -335,10 +347,10 @@ export interface Host<P extends Principal = Principal, R extends JsonValue = Jso
 	 * A reference at once, following its object until released: loading, live, failed (retried as its object is) and
 	 * loading again while its link is down; it never rejects. Throws at once only for invalid params and before `load`
 	 * (`not_ready`). A type not served where it goes is `failed { waiting }` (bound when a publication serves it;
-	 * reported `unbound_long` after 5 s); a `hostAddress` or route that refuses fails it broken. Its `variant` is
-	 * `undefined` until its first binding.
+	 * reported `unbound_long` after 5 s); a `hostAddress` or route that refuses fails it broken. Its grantable members
+	 * are `undefined` and `granted` empty until its first binding.
 	 */
-	hold<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options?: GetOptions): Held<C>;
+	hold<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options?: GetOptions): Reference<C>;
 	/**
 	 * A link from a child: this host serves its remote types over it, every hold and call arriving on it acting as
 	 * `principal`. `context` is the parent of the work arriving on it (its cancellation is dropped).
@@ -1092,10 +1104,10 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 		return binding.reference as Reference<C>;
 	}
 
-	hold<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options: GetOptions = {}): Held<C> {
+	hold<C extends Contract>(Type: C, params: ParamsOf<C>, context: Context, options: GetOptions = {}): Reference<C> {
 		this.batch.assertOutside("hold");
-		// The binding was built from `Type`'s members; it may be unbound, so `variant` may be undefined.
-		return this.#hold(Type, params, this.#own(), context, options).reference as Held<C>;
+		// The binding was built from `Type`'s members; unbound, its grantable members are `undefined`.
+		return this.#hold(Type, params, this.#own(), context, options).reference as Reference<C>;
 	}
 
 	accept(link: Link, options: LinkOptions<P>, context: Context): void {
@@ -1360,10 +1372,10 @@ export class ChordHost<P extends Principal = Principal, R extends JsonValue = Js
 	}
 
 	/**
-	 * `binding`, whose object left it (its type removed, its version no longer bound: slice 7b §6), waits unbound with
-	 * `cause` under its type's name; a publication places it again (`params` checked as it was, under `context`).
+	 * `binding`, whose object left it (its type removed, its version no longer bound or refused a member: slice 7b §6),
+	 * waits unbound with `removal`'s cause under its type's name; a publication places it again.
 	 */
-	rewait(binding: Binding, Type: Contract, params: CheckedParams, cause: FailureCause, context: Context): void {
+	rewait(binding: Binding, Type: Contract, { params, cause, context }: Removal): void {
 		this.#wait(binding, Type.name, cause, () => this.#place(binding, Type, params, context));
 	}
 

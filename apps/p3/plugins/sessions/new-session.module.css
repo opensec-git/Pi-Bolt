@@ -1,0 +1,9 @@
+/* The session kind's create step: one column of fields, as wide as text reads well. */
+
+.form {
+	display: flex;
+	inline-size: 100%;
+	max-inline-size: var(--semantic-dimension-size-max-width-content-small);
+	flex-direction: column;
+	gap: var(--semantic-dimension-space-flow-medium);
+}

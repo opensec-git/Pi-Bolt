@@ -149,12 +149,15 @@ function referenceTruncateTail(content: string, options: TruncationOptions = {})
 
 		if (outputBytesCount + lineBytes > maxBytes) {
 			truncatedBy = "bytes";
-			// Edge case: if we haven't added ANY lines yet and this line exceeds maxBytes,
-			// take the end of the line (partial)
-			if (outputLinesArr.length === 0) {
-				const truncatedLine = truncateStringToBytesFromEnd(line, maxBytes);
+			// Edge case (Pi 1.6.1, #12350): if this line exceeds the limit and nothing or only blank lines come after it,
+			// take the end of the line (partial) so the output is not just the blank lines
+			const remainingBytes = maxBytes - outputBytesCount - (outputLinesArr.length > 0 ? 1 : 0);
+			const isBlank = (text: string) => text.trim().length === 0;
+			if (outputLinesArr.length === 0 || (!isBlank(line) && outputLinesArr.every(isBlank) && remainingBytes > 0)) {
+				const truncatedLine = truncateStringToBytesFromEnd(line, remainingBytes);
 				outputLinesArr.push(truncatedLine);
-				outputBytesCount = Buffer.byteLength(truncatedLine, "utf-8");
+				outputBytesCount +=
+					lineBytes - Buffer.byteLength(line, "utf-8") + Buffer.byteLength(truncatedLine, "utf-8");
 				lastLinePartial = true;
 			}
 			break;

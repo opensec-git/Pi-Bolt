@@ -77,9 +77,9 @@ async function opened(handle: TableHandle, q = TAGGED) {
 	const batch = new Batch(() => {}, undefined);
 	const spec = { query: q, table: handle.sql.table, projection: {}, owner: handle };
 	// A binding changed: its one read runs again, as a live query's.
-	const opened = new OpenQuery({ store, batch }, spec, "rows", () => void open.load(), context);
+	const opened = new OpenQuery({ store, batch }, spec, "rows", { rebound: () => void open.load(context) }, context);
 	const open = opened.read({ kind: "rows", range: { limit: 5 } }, { adopt: (run) => void runs.push(run) });
-	await open.load();
+	await open.load(context);
 	return { open, query: opened, runs, batch };
 }
 
@@ -163,6 +163,42 @@ describe("a run belongs to the registration that computed it (code review round 
 	});
 });
 
+describe("an open query's reads (hot-path pass)", () => {
+	it("are re-registered on a binding change and closed with it, one or several, also after the only one closed", async () => {
+		// The one read is kept without a set (152 B), the second makes one: every open read is told either way.
+		store = await memoryStore();
+		const [notes, tags] = [await tableIn(store, Notes), await tableIn(store, Tags)];
+		store.reads.bind(TagSet.name, { table: tags.sql.table, definition: Tags }, tags);
+		const { open: first, query: opened_ } = await opened(notes);
+		first.close();
+		const range = { kind: "rows", range: { limit: 5 } } as const;
+		const sink = { adopt: () => {} };
+		const reads = [opened_.read(range, sink)];
+		const registered = () => reads.map((read) => read.read);
+		// The set's table ready again after a migration: the query compiles again and its reads are registered anew.
+		const recompiled = () => {
+			store.reads.hold(tags.sql.table);
+			store.reads.ready(tags.sql.table);
+		};
+		const before = registered();
+		recompiled();
+		const after = registered();
+		expect(after.every((read, at) => read !== undefined && read !== before[at])).toBe(true);
+		reads.push(opened_.read(range, sink), opened_.read(range, sink));
+		reads[1]!.close();
+		const several = registered();
+		recompiled();
+		expect(registered().map((read, at) => (read === undefined ? "closed" : read !== several[at]))).toEqual([
+			true,
+			"closed",
+			true,
+		]);
+		opened_.close();
+		expect(registered()).toEqual([undefined, undefined, undefined]);
+		expect(store.reads.on(notes.sql.table)).toBeUndefined();
+	});
+});
+
 describe("the index and the refresh", () => {
 	it("enter a read under every table it uses: the other owner's commit runs it; closed, nothing does", async () => {
 		store = await memoryStore();
@@ -240,7 +276,7 @@ describe("the index and the refresh", () => {
 		const other = {};
 		const batch = new Batch(() => {}, undefined);
 		const spec = { query: query(Notes) as never, table: notes.sql.table, projection: {}, owner: other };
-		const staying = new OpenQuery({ store, batch }, spec, "rows", () => {}, context);
+		const staying = new OpenQuery({ store, batch }, spec, "rows", { rebound: () => {} }, context);
 		staying.read({ kind: "rows", range: { limit: 5 } }, { adopt: () => {} });
 		store.reads.retire(notes);
 		expect([retiring.query.closed, staying.closed, store.reads.on(notes.sql.table)?.size]).toEqual([true, false, 1]);
@@ -261,7 +297,7 @@ describe("the index and the refresh", () => {
 		const late = opened_.read({ kind: "rows", range: { limit: 5 } }, { adopt: (run) => void runs.push(run) });
 		const known = opened_.readKnown({ limit: 5 }, [], { adopt: (run) => void runs.push(run) });
 		expect([late.read, known.read, store.reads.on(notes.sql.table)]).toEqual([undefined, undefined, undefined]);
-		expect(await late.load()).toBeUndefined();
+		expect(await late.load(context)).toBeUndefined();
 		await put(notes, { id: 1, text: "t" }, batch);
 		expect(runs).toEqual([]);
 	});

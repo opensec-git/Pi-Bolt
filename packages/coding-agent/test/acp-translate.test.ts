@@ -225,8 +225,8 @@ describe("terminalOutputDelta", () => {
 			},
 			close() {
 				output.closeTempFile();
-				const path = output.snapshot().fullOutputPath;
-				if (path) rmSync(path, { force: true });
+				const file = output.snapshot().fullOutputFile;
+				if (file?.kind === "saved") rmSync(file.path, { force: true });
 			},
 		};
 	};

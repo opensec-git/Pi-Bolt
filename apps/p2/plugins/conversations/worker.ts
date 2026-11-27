@@ -1,16 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AssistantEntry, type Cursor, defineExtension, LiveDoc, section } from "@earendil-works/pi-durable";
 import { bool, obj, opt, type Static, str, union } from "@earendil-works/pi-schema";
-import {
-	defineFacet,
-	expectVariant,
-	forbidden,
-	literal,
-	local,
-	PEER_MESSAGE_ENTRY,
-	type PeerMessage,
-	senderText,
-} from "@p2/app/v1";
+import { defineFacet, forbidden, literal, local, PEER_MESSAGE_ENTRY, type PeerMessage, senderText } from "@p2/app/v1";
 import {
 	defineP2Tool,
 	Extensions,
@@ -77,7 +68,7 @@ const conversationsExtension = (worker: () => WorkerParts) => {
 					"list: IDs, titles, models, working/idle/stopped state, location (env:cwd) and project of each session (excludes archived ones), and the projects with their places.",
 					"send (to = stable session ID, message; optional followUp): deliver an attributed message; steering by default, followUp queues after current work.",
 					"answer (to): read the latest completed answer without sending input or waiting for current work.",
-					"create (message, and project or cwd; optional env, title, model 'provider/modelId': a signed-in one, default your own): start a new session there with message as its first input, from you. Returns its ID.",
+					"create (message, and project or cwd, a project's coordinator defaults to its project; optional env, title, model 'provider/modelId': a signed-in one, default your own): start a new session there with message as its first input, from you. Returns its ID.",
 					"stop (to): abort the session's current run; queued messages from people go back to their authors' composers, those from agents and sessions stay queued for its next input.",
 					"archive (to) / restore (to): archive a session (its worker stops, its history stays) or bring it back.",
 					"Replies arrive only when the peer explicitly uses send back to your ID. No automatic reports. Do not poll or create reply loops.",
@@ -99,7 +90,7 @@ const conversationsExtension = (worker: () => WorkerParts) => {
 						// A root of the worker's own under the tool's context (its cancellation, its trace).
 						const result = await worker().root(
 							async (ctx) =>
-								expectVariant(await ctx.get(Conversations, {}), "worker").query(
+								(await ctx.get(Conversations, {})).query(
 									{
 										conversation: 1,
 										requestId: `${api.taskId}:${api.callId}`,
@@ -134,84 +125,81 @@ export default defineFacet((host) => {
 		const gates = self.registry(InputGates);
 		const status = self.get(StatusReport, {});
 		return {
-			variant: "broker",
-			members: {
-				send: ({ source, title, requestId, message, followUp }, ctx) =>
-					worker().liveness.call(async () => {
-						for (const gate of gates.value.values()) await gate(ctx);
-						const durable = harness().durable;
-						const main = await durable.conversation(await mainConversation(durable, ctx), ctx);
-						if (!main) throw new Error("No main conversation");
-						const sent = await main.submit(
-							{
-								type: "input",
-								content: [
-									{ type: "text", text: senderText({ kind: "session", id: source, title }) },
-									{ type: "text", text: message },
-								],
-								entry: {
-									kind: PEER_MESSAGE_ENTRY,
-									data: {
-										from: { id: source, title },
-										text: message,
-									} satisfies PeerMessage,
-								},
-								requestId: `conversation:${source}:${requestId}`,
-								whenBusy: followUp ? "followUp" : "steer",
-								// A Stop keeps it queued for the next input: the sending session cannot take it back.
-								onAbort: "keep",
+			send: ({ source, title, requestId, message, followUp }, ctx) =>
+				worker().liveness.call(async () => {
+					for (const gate of gates.value.values()) await gate(ctx);
+					const durable = harness().durable;
+					const main = await durable.conversation(await mainConversation(durable, ctx), ctx);
+					if (!main) throw new Error("No main conversation");
+					const sent = await main.submit(
+						{
+							type: "input",
+							content: [
+								{ type: "text", text: senderText({ kind: "session", id: source, title }) },
+								{ type: "text", text: message },
+							],
+							entry: {
+								kind: PEER_MESSAGE_ENTRY,
+								data: {
+									from: { id: source, title },
+									text: message,
+								} satisfies PeerMessage,
 							},
-							ctx,
-						);
-						// The recipient's working dot is current when the sender's tool answers.
-						await status.push(ctx);
-						return { submissionId: sent.id };
-					}),
-				answer: (ctx) =>
-					worker().liveness.call(async () => {
-						const durable = harness().durable;
-						const main = await durable.conversation(await mainConversation(durable, ctx), ctx);
-						if (!main) throw new Error("No main conversation");
-						let cursor: Cursor | undefined;
-						let text: string | undefined;
-						let truncated = false;
-						let limited = false;
-						for (let scanned = 0; scanned < 2000; ) {
-							const page = await main.entries({}, 100, cursor, ctx);
-							for (const entry of page.items) {
-								scanned++;
-								const message = AssistantEntry.is(entry)
-									? (entry.model?.[0] as AssistantMessage | undefined)
-									: undefined;
-								if (message?.stopReason !== "stop") continue;
-								const value = message.content
-									.flatMap((part) => (part.type === "text" ? [part.text] : []))
-									.join("");
-								if (!value.trim()) continue;
-								text = value.slice(0, 65536);
-								truncated = value.length > 65536;
-								break;
-							}
-							if (text !== undefined || !page.next) break;
-							cursor = page.next;
-							limited = scanned >= 2000;
+							requestId: `conversation:${source}:${requestId}`,
+							whenBusy: followUp ? "followUp" : "steer",
+							// A Stop keeps it queued for the next input: the sending session cannot take it back.
+							onAbort: "keep",
+						},
+						ctx,
+					);
+					// The recipient's working dot is current when the sender's tool answers.
+					await status.push(ctx);
+					return { submissionId: sent.id };
+				}),
+			answer: (ctx) =>
+				worker().liveness.call(async () => {
+					const durable = harness().durable;
+					const main = await durable.conversation(await mainConversation(durable, ctx), ctx);
+					if (!main) throw new Error("No main conversation");
+					let cursor: Cursor | undefined;
+					let text: string | undefined;
+					let truncated = false;
+					let limited = false;
+					for (let scanned = 0; scanned < 2000; ) {
+						const page = await main.entries({}, 100, cursor, ctx);
+						for (const entry of page.items) {
+							scanned++;
+							const message = AssistantEntry.is(entry)
+								? (entry.model?.[0] as AssistantMessage | undefined)
+								: undefined;
+							if (message?.stopReason !== "stop") continue;
+							const value = message.content
+								.flatMap((part) => (part.type === "text" ? [part.text] : []))
+								.join("");
+							if (!value.trim()) continue;
+							text = value.slice(0, 65536);
+							truncated = value.length > 65536;
+							break;
 						}
-						const busy = (await durable.snapshot(LiveDoc, main.id, ctx))?.run !== undefined;
-						return { ...(text === undefined ? {} : { text }), busy, truncated, limited };
-					}),
-				stop: (ctx) =>
-					worker().liveness.call(async () => {
-						const durable = harness().durable;
-						const main = await mainConversation(durable, ctx);
-						const stopped = (await durable.snapshot(LiveDoc, main, ctx))?.run !== undefined;
-						// As Stop in the chat: the run ends, messages from agents and sessions stay queued. No author is the caller
-						// here, so every person's queued text waits in their drafts for their composer.
-						const { restored } = await (await ctx.get(Conversation, { conversation: main })).stop(ctx);
-						if (restored.length)
-							await (await ctx.get(DraftStore, {})).add({ conversation: main, items: restored }, ctx);
-						return { stopped };
-					}),
-			},
+						if (text !== undefined || !page.next) break;
+						cursor = page.next;
+						limited = scanned >= 2000;
+					}
+					const busy = (await durable.snapshot(LiveDoc, main.id, ctx))?.run !== undefined;
+					return { ...(text === undefined ? {} : { text }), busy, truncated, limited };
+				}),
+			stop: (ctx) =>
+				worker().liveness.call(async () => {
+					const durable = harness().durable;
+					const main = await mainConversation(durable, ctx);
+					const stopped = (await durable.snapshot(LiveDoc, main, ctx))?.run !== undefined;
+					// As Stop in the chat: the run ends, messages from agents and sessions stay queued. No author is the caller
+					// here, so every person's queued text waits in their drafts for their composer.
+					const { restored } = await (await ctx.get(Conversation, { conversation: main })).stop(ctx);
+					if (restored.length)
+						await (await ctx.get(DraftStore, {})).add({ conversation: main, items: restored }, ctx);
+					return { stopped };
+				}),
 		};
 	});
 });
@@ -223,8 +211,8 @@ function queryOf(args: ToolArgs): Query | string {
 			return { action: "list" };
 		case "create": {
 			if (!args.message?.trim()) return "create needs a message: the new session's first input.";
-			if ((args.project === undefined) === (args.cwd === undefined))
-				return "create needs either a project or a cwd.";
+			// Neither is the server's to answer: a project's coordinator gets its project.
+			if (args.project !== undefined && args.cwd !== undefined) return "create takes either a project or a cwd.";
 			return {
 				action: "create",
 				message: args.message,

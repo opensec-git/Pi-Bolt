@@ -198,6 +198,10 @@ function renderToolRemovalNotice(names: readonly string[]): string {
 	return `The following tools are no longer available. Do not call them:\n${names.map((name) => `- ${name}`).join("\n")}`;
 }
 
+/**
+ * Render input items for replay, as used by Codex WebSocket continuation. Use `convertResolvedResponsesInput` to build a
+ * request.
+ */
 export function convertResponsesMessages<TApi extends Api>(
 	model: Model<TApi>,
 	context: TranscriptContext,
@@ -212,13 +216,18 @@ export function convertResponsesMessages<TApi extends Api>(
 	).input;
 }
 
-/** Convert the provider's already resolved transcript and derive the top-level tools from that same history. */
+/**
+ * Convert the provider's already resolved transcript and derive the top-level tools from that same history.
+ * With `effortBaseline: "initial"`, the first reasoning effort of the transcript is returned as `requestEffortBaseline`
+ * for the request's own `reasoning` field instead of being sent as a configuration_update item, and repeated efforts
+ * are not sent again.
+ */
 export function convertResolvedResponsesInput<TApi extends Api>(
 	model: Model<TApi>,
 	normalizedContext: TranscriptContext,
 	allowedToolCallProviders: ReadonlySet<string>,
-	options?: ConvertResponsesMessagesOptions,
-): { input: ResponseInput; requestTools: Tool[] } {
+	options?: ConvertResponsesMessagesOptions & { effortBaseline?: "initial" },
+): { input: ResponseInput; requestTools: Tool[]; requestEffortBaseline: string | undefined } {
 	const messages: ResponseInput = [];
 
 	const normalizeIdPart = (part: string): string => {
@@ -304,8 +313,19 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 			tools: convertResponsesTools(tools, { ...options?.toolOptions, toolSearchResult: true }),
 		} satisfies ResponseToolSearchOutputItemParam);
 	};
-	const pushConfigurationUpdate = (effort: string): void => {
-		messages.push({
+	let requestEffortBaseline: string | undefined;
+	let previousEffort: string | undefined;
+	/** Adds a configuration_update item at `at` (default: the end). */
+	const pushConfigurationUpdate = (effort: string, at = messages.length): void => {
+		if (options?.effortBaseline === "initial") {
+			if (previousEffort === effort) return;
+			previousEffort = effort;
+			if (requestEffortBaseline === undefined) {
+				requestEffortBaseline = effort;
+				return;
+			}
+		}
+		messages.splice(at, 0, {
 			type: "configuration_update",
 			reasoning: { effort: effort as NonNullable<ResponseConfigurationUpdateItemParam.Reasoning["effort"]> },
 		} satisfies ResponseConfigurationUpdateItemParam);
@@ -367,8 +387,10 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 			});
 			if (!converted) continue;
 		} else if (msg.role === "assistant") {
-			// Text items without an id of their own are named after the message's index.
-			const converted = unit(sources[index], msgIndex, (out) => {
+			// Text items without an id of their own are named after the message's index. The conversion gives the
+			// effort to switch to before the message; the switch depends on the efforts before it, so it is added here.
+			const start = messages.length;
+			const converted = unit(sources[index], msgIndex, (out): { effort: string | undefined } | undefined => {
 				const firstItem = out.length;
 				const assistantMsg = msg as AssistantMessage;
 				const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
@@ -420,47 +442,45 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 							itemId = undefined;
 						}
 
+						// OpenAI returns tool calls with status "completed", so replay them the same way. Over the Codex
+						// WebSocket, OpenAI keeps the previous response's items itself, and later reasoning is generated after
+						// calls that have the status. After 5 idle minutes the connection closes and pi sends the whole history
+						// again. If a call lacks the status there, the history no longer matches, and from GPT-6.2 on OpenAI
+						// drops the reasoning that follows it (`prefix_mismatch`, #12367).
+						// Always "completed": a stream that ends with an unfinished tool call fails, and failed messages are not
+						// replayed. `status` is spread in because the SDK declares it only on returned custom tool calls; the
+						// API accepts it on input too.
+						const replayedCall = {
+							id: itemId,
+							call_id: callId,
+							name: toolCall.name,
+							status: "completed" as const,
+							...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
+						};
 						if (customInputProperty !== undefined) {
 							out.push({
 								type: "custom_tool_call",
-								id: itemId,
-								call_id: callId,
-								name: toolCall.name,
+								...replayedCall,
 								input: sanitizeSurrogates(
 									getGrammarToolInput(toolCall.name, toolCall.arguments, customInputProperty),
 								),
-								...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
-							} satisfies ResponseOutputItem);
+							});
 						} else {
 							out.push({
 								type: "function_call",
-								id: itemId,
-								call_id: callId,
-								name: toolCall.name,
+								...replayedCall,
 								arguments: JSON.stringify(toolCall.arguments),
-								...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
 							});
 						}
 					}
 				}
-				if (out.length === firstItem) return false;
-				if (
-					options?.configurationUpdateEffort !== undefined &&
-					isSameModel &&
-					msg.providerThinkingLevel !== undefined
-				) {
-					out.splice(firstItem, 0, {
-						type: "configuration_update",
-						reasoning: {
-							effort: msg.providerThinkingLevel as NonNullable<
-								ResponseConfigurationUpdateItemParam.Reasoning["effort"]
-							>,
-						},
-					} satisfies ResponseConfigurationUpdateItemParam);
-				}
-				return true;
+				if (out.length === firstItem) return undefined;
+				return { effort: isSameModel ? msg.providerThinkingLevel : undefined };
 			});
 			if (!converted) continue;
+			if (options?.configurationUpdateEffort !== undefined && converted.effort !== undefined) {
+				pushConfigurationUpdate(converted.effort, start);
+			}
 		} else if (msg.role === "toolResult") {
 			// The conversion also reads the (possibly renamed) tool call id.
 			unit(sources[index], msg.toolCallId, (out) => {
@@ -486,7 +506,7 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 	}
 	if (options?.configurationUpdateEffort !== undefined) pushConfigurationUpdate(options.configurationUpdateEffort);
 
-	return { input: messages, requestTools: transcriptTools.requestTools };
+	return { input: messages, requestTools: transcriptTools.requestTools, requestEffortBaseline };
 }
 
 // =============================================================================

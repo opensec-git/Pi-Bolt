@@ -87,7 +87,8 @@ export class Query<
 		// A copy of what is expected so far: the compilation adds what this condition's `exists` use.
 		const expected: Expected = new Map([...this.expected].map(([set, columns]) => [set, new Map(columns)]));
 		const compiled = compileCondition(this.#scope(), fn(...this.#refs()), "where", expected);
-		return this.#and(compiled, expected);
+		// Nothing expected (no `exists` so far: most queries): the map it had, none kept per query.
+		return this.#and(compiled, expected.size === 0 ? this.expected : expected);
 	}
 
 	/**
@@ -160,7 +161,8 @@ export class Query<
 
 	/** The order of its rows: the `orderBy` columns, then the key columns not among them. */
 	get order(): Order {
-		const columns = [...this.#orderBy, ...this.table.key.filter((column) => !this.#orderBy.includes(column))];
+		// `concat`: a list of exactly its columns (a plan keeps it; a spread reserves room for 16 more).
+		const columns = this.#orderBy.concat(this.table.key.filter((column) => !this.#orderBy.includes(column)));
 		return { columns, direction: this.#direction ?? "asc" };
 	}
 
@@ -239,11 +241,21 @@ export function decodeCursor(
 	}
 	// Wire input: every field is checked below.
 	const { t, o, d, v } = (decoded ?? {}) as { t?: unknown; o?: unknown; d?: unknown; v?: unknown };
-	if (t !== sqlName || d !== order.direction || JSON.stringify(o) !== JSON.stringify(order.columns)) refuse();
+	if (t !== sqlName || d !== order.direction || !sameColumns(o, order.columns)) refuse();
 	if (!Array.isArray(v) || v.length !== order.columns.length) return refuse();
 	return order.columns.map((name, index) => {
 		const type = column(name)!.type;
 		// Order columns are non-opt `str` or `int` (checked when the query was built).
 		return checkScalar(type as "str" | "int", v[index], `${table.name}: cursor`) as string | number;
 	});
+}
+
+/**
+ * Whether a cursor's `o` (wire input, parsed JSON) names `columns`, in order: a list of the same strings. Compared
+ * name by name, as their JSON compared before (no text made per page read).
+ */
+function sameColumns(o: unknown, columns: readonly string[]): boolean {
+	if (!Array.isArray(o) || o.length !== columns.length) return false;
+	for (let at = 0; at < columns.length; at++) if (o[at] !== columns[at]) return false;
+	return true;
 }

@@ -1,7 +1,7 @@
 // External stores over Chord's watchables (slice 11 §3): what React's `useSyncExternalStore` reads. A store's snapshot
 // is the watchable's current value (`undefined` while it has none: a reference not bound yet, ended, or a member its
-// variant lacks; nothing throws during a render); subscribing starts a watch whose every call notifies React, and the
-// unsubscribe ends it.
+// binding lacks (not granted); nothing throws during a render); subscribing starts a watch whose every call notifies
+// React, and the unsubscribe ends it.
 
 import { BACKGROUND_CONTEXT, withAbortSignal } from "../context/index.ts";
 import type { NativeWatchable, Watchable } from "../watch.ts";
@@ -22,6 +22,8 @@ export function watchStore<T>(source: Watchable<T> | NativeWatchable<T> | undefi
 			// A watch that cannot start (its source ended, the abort came first) only means no more changes.
 			source.watch(context).then(
 				(watch) => {
+					// The component unsubscribed while the watch was made: the abort stopped it, nothing to follow.
+					if (abort.signal.aborted) return;
 					(watch.start as (listener: () => Promise<void>) => void)(async () => {
 						changed();
 					});

@@ -76,6 +76,66 @@ slice spec's section citations are for orientation, not a reading limit (owner, 
   (`remote/hold.ts`), a route's admission (`host/route-admission.ts`, the gated path and its fence in
   `remote/path.ts`, `Channel.fence`, `createWorkers`' `admit`), `deleteHostData(address, ctx, { plugin })`; example
   69.
+- **Slice 15, grantable members and flags** (built 2026-11-25, `slice-15.md` §1): `grantable(...)` and `flags` in
+  remote contracts (`contracts/declare.ts`, `schema.ts`; members, grantable names and flags in `VersionData`, the
+  shape a grant leaves in `grantedMembers`), `GrantableName`, `allow({ granted })` read against the contract
+  (`host/admission.ts`), builders called for granted members only (`host/members.ts`), references with optional
+  grantable members and `granted` (`host/reference.ts`), `granted` indexes on the wire's `bound`, `useLive` and
+  `TuiScope.live` (`surfaces/live.ts`); variants removed everywhere (contracts, `evolve`, `accepts`, factories,
+  references, wire, React and TUI bindings); example 77.
+- **Slice 15, denials with a message** (built 2026-11-25, `slice-15.md` §2): `deny(reason, message?)`, the message
+  as data in the `forbidden` error's `details.message` and part of the decision (`host/admission.ts`);
+  `MessageData` and `MessageSchema` (in `contracts/message.ts` since flag labels are messages; re-exported by `data` and `surfaces`); example 78.
+- **Slice 15, the commit index** (built 2026-11-25, `slice-15.md` §3): `store/read-index.ts` (buckets by the
+  equalities a read's plan fixes, `ReadPlan.equalities`; kept keys, kept current by the read, `Read.kept`), used by
+  `Reads.candidates` in a commit's refresh; the oracle's world shared by `test/store/skip.test.ts` and
+  `read-index.test.ts` (`test/store/read-world.ts`); `test/bench/commit-index.ts`.
+- **Slice 15, stale holders** (built 2026-11-25, `slice-15.md` §4, §8): reproduced across processes
+  (`test/link/channel.test.ts`, fixtures `stall.ts`, `socket-link.ts`); no holder live and old; why a link closed
+  (`LinkCloseReason` in `link/channel.ts`), `chord.links.closed { reason }` and the `link_closed` report of a heartbeat
+  close (`remote/host-link.ts`).
+- **Slice 15, lazy named queries** (built 2026-11-25, `slice-15.md` §5): a reference's `queries` member makes its
+  `ReferenceQuery`s on first use (`referenceQueries` in `host/named-query.ts`, a class per member and contract
+  version, cached weakly), labels built when asked; `test/bench/reference-heap.ts`.
+- **Hold memory** (built 2026-11-25 on slice 15, no slice of its own; `benchmarks.md` "Hold memory"): what an object
+  keeps while it is held, about halved with no change of behaviour. Maps, sets and lists of an attempt, an object,
+  its documents, a decision and a reference are made by their first entry (`host/attempt.ts`, `object.ts`,
+  `admission.ts`, `reference.ts`, `documents/documents.ts`); short lists are built without a `push`'s slack
+  (`src/lists.ts`: `appended`, `NO_ITEMS`); a source keeps none or one dependent without a set
+  (`state/dependents.ts`, telling whom a set's iteration tells whatever its dependents do meanwhile); a decision
+  follows its references' states directly (`Binding.followState`), no promise and abort listener per reference, and
+  ends all its follows by one listener of a signal depending on its context's; a granted set is shared by the decisions granting the same names of a contract version, held weakly
+  (`grantedSet` in `host/admission.ts`), a member order by every binding of the same members (`memberOrder` in
+  `contracts/contract.ts`); canonical JSON, labels and
+  instance ids are flat strings (`data/principal.ts`, `host/object.ts`, `host/uuid.ts`); a read plan of an unjoined
+  query shares its sides and keeps exact lists (`store/read-plan.ts`, `query.ts`, `read.ts`, `live-query.ts`).
+  `test/bench/hold-heap.ts`; cost guards in `test/lists.test.ts`, `test/state/dependents.test.ts`,
+  `test/host/object.test.ts` and `test/host/admission.test.ts`.
+- **Hot paths** (built 2026-11-26 on the hold-memory pass, no slice of its own; `benchmarks.md` "Hot paths"): time,
+  garbage and retained memory of admitted objects held over a link, of live queries and of the commit step, for plain
+  data (values handed to Chord are immutable by convention: never copied, compared by identity first). An admission's
+  re-read compares the value with the one it read last, field by field (`sameJson` in `data/plain-json.ts`), and its
+  names as bits of the version's grant indexes (`grantTable` in `host/admission.ts`), no canonical text; granted sets
+  are found by a hash of those indexes, granted members and grant indexes by the shared set, a combination's members
+  held weakly by its names (`grantedMembers` in `contracts/contract.ts`); a checked implementation keeps the object's
+  values over the contract's names (`MemberValues` in `host/members.ts`); the rare fields of an attempt and an object
+  sit in records made on first use (`AttemptExtras`, `ObjectExtras`); holders and followers keep one member without a
+  set (`src/small-set.ts`); instance ids are built from numbers (`host/uuid.ts`). The binary codec encodes into one
+  kept buffer with one exact copy per message and decodes lists by readers (`link/binary.ts`); a hold's followed
+  member is its own subscriber, its encoder and pending queue made at first use, a served hold keeps its params as
+  their text (`remote/hold.ts`); a remote object keeps one binding without a set (`remote/bindings.ts`), makes its
+  hold request per hold, and shares its granted set per version and names (`remote/consumer.ts`). A live query keeps
+  its rows' values, not the backend's rows (`store/live-query.ts`; the backend's row contract in `store/backend.ts`);
+  reads of one named query share their plan's shape, each still compiled and checked in full (`PlanShape` in
+  `store/read-plan.ts`); the commit index files a value's one read without a set and files a read run again by
+  difference (`store/read-index.ts`). What a host retains after work came and went: `test/host/retained.test.ts`
+  (every cache evicts; no growth round after round). Benches `test/bench/hot-paths.ts`, `list-heap.ts`,
+  `hold-heap.ts` (client heap, case 8), `commit-index.ts` (case 3).
+- **A follow over a changing source** (built 2026-11-27, no slice of its own; decision "A follow re-attaches over a
+  changing source", ERNDL-1191): `self.follow(over, attach)` in `host/follow-over.ts`, an attach for
+  `host/follow.ts` (each attachment its own observer; a failed member retried with backoff; `follow_failed`;
+  `chord.follow.attaches`), the `over` check (`followedOver`, also in staging); tests in `test/host/follow.test.ts`
+  (the describes "over a changing source: …"); example 79.
 - **Chord's shared code** (upstream pi): `src/watch.ts` (`Watch`, `NativeWatch`, `WatchHandle`, `WatchEnd`,
   `NativeWatchable`), Delta (`track`, `diffRevisions`, `applyImmutable`, encoders, `PendingOps`, `appendText`),
   context, JSON, output, SQLite drivers.
@@ -107,6 +167,7 @@ telemetry last, since it instruments the app kit too; 2026-11-01: the plugin mod
 | 11 | **Web and TUI** | `chord/web` (page host), `chord/react` (React hooks), `chord/tui` with `chord/tui/launcher` (sandbox, launcher) and `chord/surfaces` (their server side), from p2's code |
 | 9 | **Telemetry** | spans, events, metrics across hosts |
 | 14 | **Admission, named live queries, lists, joins by key** | admission with a typed value, route admission, named queries read live by any object on the store's host with a skip test and a keyed probe, counts, lists, column sets with `exists` and a one-to-one join, conditions as data (`slice-14.md`; built in parts, see "What exists" and "Carry-over") |
+| 15 | **Grantable members and flags, denials with a message, the commit index, stale holders, lazy queries** | variants replaced by grantable members and flags, `deny(reason, message?)`, an index of open reads by equality and kept keys for the commit step, holders never left live and stale after a stall, a reference's named queries built on first use (`slice-15.md`) |
 
 The playground (`apps/chord-playground`) moves to the new code once slice 4 exists. Round-3 cuts (C3-C16) and
 carry-over entries are decided in the slice that first needs them.
@@ -136,7 +197,8 @@ pattern, no code. Decided cuts are noted where they apply.
 | 4 | revocation (`revokedBy`, `host.revoke`, propagation to children) | 4b |
 | 5 | `local` types: params, members, checked arguments (Q15), results unchecked | 1 |
 | 5 | version and fingerprint match at acquisition; reserved member names (`then`, `release`, `state`, `retry`) | 1 |
-| 5 | `remote` types, variants chosen by the factory (`{ variant, members }`), identity with principal key, calls checked against the binding's variant | 3a |
+| 5 | `remote` types, identity with principal key, calls checked against the binding | 3a |
+| 5 | grantable members and flags (`grantable`, `flags`, `GrantableName`), `allow({ granted })`, builders called only if granted, `forbidden` for a member not granted; variants removed | 15 |
 | 5 | `accepts` mappings at runtime (old consumers), keyed members per key, `contract_mismatch` | 7b |
 | 5 | event members (remote `events`, local `event(schema)`), `EventMember`/`EventSource`/`EventSubscription`, the member check for event members | events |
 | 6 | lifecycle, one object per identity, lifetime from kind and params (Q-A), factory, activation, ending | 1 |
@@ -151,7 +213,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 7 | `ctx.get` (call-scoped references) | 3a |
 | 7 | `ref.state` (tagged), `ref.retry()`, `host.hold`, calls parking, failed references | 3b |
 | 7 | getters wait through `waiting`; `host.hold` throws only for invalid params | 7a |
-| 7 | `ref.variant` as discriminant, `RefIn` (C15: no `inVariant`/`expectVariant`) | 3a |
+| 7 | a reference's grantable members (optional, there while granted or before it was first live) and `granted` | 15 |
 | 7 | `state: false` (C8: cut) | - |
 | 7 | remote references of one host sharing one wire hold (sharing key per path, seen members, a non-final release cancelling its own calls newest first, the private retry after `too_large/part`, the hold span as shared work; spec `shared-holds/design.md`) | shared holds |
 | 7 | optional dependencies as registries | doc (8) |
@@ -177,7 +239,11 @@ pattern, no code. Decided cuts are noted where they apply.
 | 11 | named queries (`queries`, `self.queries`), `self.liveQuery` (arguments that follow a value), `self.count`, `page` | 14 |
 | 11 | lists over one named query (`self.list`: pages between bookmarks, `more`, splits and merges, overflow, bookmarks across a reload) | 14 |
 | 11 | lists over several named queries merged into one | 14 (carry-over) |
+| 11 | the commit index: a commit skip-tests only the reads its writes can concern (buckets by equality, kept keys) | 15 |
+| 3 | why a link closed (`chord.links.closed { reason }`), a heartbeat close reported (`link_closed`); a stall leaves no holder live and old | 15 |
+| 11 | a reference's named queries made on first use | 15 |
 | 6 | admission with a typed value (`admission`, `admit`, the watch table, staging's rehearsal, no jobs in an admitted object) | 14 |
+| 6 | `deny(reason, message?)`: a message as data for the person in the denial's `details.message` | 15 |
 | 3 | a route's admission (`RouteOptions.admit`, one decision per principal and address, the fence after a denial, `createWorkers`' `admit`) | 14 |
 | 10 | `deleteHostData(address, ctx, { plugin })` | 14 |
 | 22 | the failure kind `denied`; binding fences per acknowledgement | 14 |
@@ -201,7 +267,7 @@ pattern, no code. Decided cuts are noted where they apply.
 | 22 | trace carriers (R5) | 9 |
 | 22 | the `event` message, `ack.events`, both codecs, part limits and compression for event values | events |
 | 23 | `useEvents` (`chord/react`), `TuiScope.on` | events |
-| 23 | `useVariant` (`chord/react`), `TuiScope.variant`: a reference read in one variant (decision "C15 stands; the UI bindings follow the variant") | after 14 (2026-11-15) |
+| 23 | `useLive` (`chord/react`), `TuiScope.live`: a reference read while live, following its `granted` (replace `useVariant` and `TuiScope.variant`) | 15 |
 | 23 | workers: a worker's exit published after its link's work ended, its incarnation in `WorkerState`; a route's `opened(incarnation)` (§3) | after 14 (2026-11-15) |
 | 27 | event edits (`event`, `addEvent`, `removeEvent`), `accepts.events`, one mapping per emit per older version (`event_mapping_failed`) | events |
 | 23 | HTTP (routes, wraps, responses as descriptions, request bodies, plugin sockets), workers; channels and chunked transfers stay owner patterns until a second user | 10 |
@@ -235,8 +301,9 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
 
 ### Any slice (protocol and checks)
 
-- **Bump `PROTOCOL_VERSION`** for any message or reason change once p3 has shipped (slice 3b added `retry`, `loading`
-  and `failed`'s `retryIn`; slice 4a parts, the list `bound`, `hello`'s `calls`, `ack`, `ping`, `pong`, `closed`,
+- **Bump `PROTOCOL_VERSION`** for any message or reason change (it is 2 since slice 15, which covers every change
+  listed here; slice 3b added `retry`, `loading` and `failed`'s `retryIn`; slice 4a parts, the list `bound`,
+  `hello`'s `calls`, `ack`, `ping`, `pong`, `closed`,
   `origin` and the hold's `address`, `principal` and `incarnation`; the reload build `call`'s `old` and the
   `unavailable` reasons `version` and `reload_cycle`; the events build `event`, `ack`'s `events` and an optional
   `hello.calls`; all without a bump: nothing is deployed). (Owner, slice 3b.)
@@ -244,6 +311,60 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   it only if a real case needs it. (Slice 3b spec.)
 - No CBOR; revisit only if benchmarks show encoding as a bottleneck (slice 3a's and 4a's do not). (L2 decisions.)
 - **The Durable conversation view's size on re-hold** is a known cost until pi #11327 (windowed view) lands. (Slice 4.)
+
+### Any slice (memory of held objects and hot paths; from the hold-memory pass, 2026-11-25, and the hot-path pass, 2026-11-26)
+
+- **A decision with references keeps a signal depending on its context's** (`AbortSignal.any`, 1.2 KiB with its one
+  listener, `Decision.#followUntilAborted`), only to end its follows at the place of an abort's dispatch they always
+  ended at: after the listeners of the context's own signal, ahead of the signals made from it later (an opener's, a
+  resolver's). Both orders are observable (`test/host/admission.test.ts` "whose opener timed out…",
+  `test/host/route-admission.test.ts` "is still told of a reference that fails in a listener…"). Decide the rule (an
+  attempt's follows end before its abort is dispatched, say) and the owner can end them with one call, for nothing.
+- **A reference is an object in dictionary mode.** Its `state`, its `granted` and each grantable member are own
+  accessors (`Object.defineProperty`), which V8 keeps in a dictionary (256 B and about 130 B per accessor, for every
+  `self.get`, `host.get` and hold). Accessors on a prototype per contract version would be fast properties, but they
+  are no own properties then (`Object.keys`, a spread); decide whether that may change.
+- **An activation's steps are async functions** (`#activate`, `#runAdmission`, `#ownSteps`, `#decide`, `settle` and
+  others: 0.3 to 1.2 KiB each). Running the ones whose common path never awaits as plain functions saved about 3 KiB
+  of garbage per hold and per rebuild, with the turns kept; taken out again as too brittle (owner, 2026-11-26).
+- **A list's pages keep the backend's rows** (`host/tiling.ts`): node:sqlite returns a row as an object in dictionary
+  mode, about 240 B more per row of two columns than an array of its values. Keeping the values, with one column
+  list per statement as a live query's `DecodedRows` does, costs about 11 µs per page of 50 rows run. Undecided trade
+  (`test/bench/list-heap.ts`).
+- **node:sqlite's `setReturnArrays`** in the backend: a select of 100 rows 43 → 30 µs in a micro-bench and no
+  dictionary rows at the source, but every row access of the store changes.
+- **`Binding.followInstance`** hands each reader of a named query a release closure (about 40 B per live query); a
+  token instead needs `ReferenceQuery.follow` to return something else.
+- **Composite keys are identified by a JSON text per row** (`identity` in `store/read.ts`; made once per fetched row
+  for the read and its decoding). Nested maps by column were built and taken out: more memory where the first key
+  columns differ (8-column keys 2,621 against 363 B per row), another equality (bigint) and other set sizes. A design
+  that beats the text for every key shape: choose per kept set (nested maps only where one first value covers many
+  rows), normalize values to JSON's equality first (non-finite numbers to null, bigint refused), keep `Set`'s API.
+- **A remote object stringifies its params per hold** (`remote/remote-object.ts`): about 100 B less per reference on
+  the client; a re-hold (after a reconnect, or a route admitting it again on the same link) pays the text again (a
+  32 KB param: 91 against 31 µs per re-hold). Keeping the text is 50 B per reference.
+- **The commit index has no recorded trace:** the reviews compared candidates, their order, the lookup SQL and the
+  skip, probe and run counts of seeded random worlds against the code before the pass. Kept as a fixture (recorded
+  once, replayed by a test, re-recorded on purpose), later changes of the index would be checked the same way.
+- **Decoded lists of 2 to 17 items have `push`'s capacity** (`link/binary.ts`: a decoded `bound` of two grants 314
+  against 192 B per hold, transient). Exact-size lists cost the decode 142 → 219 ns per message.
+- **A served hold placed again walks its params' text** when it is longer than a third of a link limit (`within` in
+  `link/part.ts`; the base read the kept bytes' length): 1 MiB of params under 2 MiB limits 13.2 against 3.1 ms per
+  republish. A kept byte length per served hold would end it.
+- **A long text encoded where no native UTF-8 count exists** (a browser: no `Buffer`; `Writer` in `link/binary.ts`)
+  reserves the rest of a text that did not fit at three bytes a unit and copies the frame right-sized: a text of 1 Mi
+  two-byte units 5.77 MB of buffers and 1,437 µs against 3.16 MB and 744 µs before the pass. On Node the rest is
+  counted exactly.
+- **The encoder sizes a frame past its kept buffer from the message** (`partsLength` in `link/binary.ts`: parts and
+  their prefixes exactly, a failure by a flat 72 B, an event by 24 B, a text by its units and, once one fell short,
+  every text at its UTF-8). Of 51 frame shapes the review measured against the code before the pass (Node, medians)
+  none is above it in both buffers and time; above it in one: failures whose errors are long (1.06 to 1.39 times
+  the buffers, at 0.3 to 1.0 times the time), events with small ids and stamps (1.44 to 1.55 times the buffers, at a
+  sixth of the time), one megabyte text that is not ASCII (the same buffers, 1.09 to 1.25 times the time: the
+  native count of its bytes). The estimate runs for every message: about 0.3 KiB of garbage per rebuilt object in
+  `hot-paths.ts` (its loops over holds and members); indexed loops would end that.
+- **Small items** (30 to 60 B each): an open query's compiled-plan wrapper, a given query's argument wrapper, a read
+  plan's equality entries; a consumer's `#move` batch closure and list copy (about 0.3 KiB of garbage per move).
 
 ### Any slice (lifetimes)
 
@@ -257,6 +378,15 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   "retire a provider side's record only once its event tickets drained"). Whether an ended attempt should cut what it
   reaches (its object, its links' records) is undecided. (Events build reviews.)
 
+### Later: follows (when a case needs it)
+
+- **`self.follow(over, attach)` over a JSON watchable** (a reference's member, a document, a derive): only registry
+  values and writables are taken, compared by identity; a JSON source changes by ops, so a new value is no new
+  runtime to attach to without a comparison the case decides. (ERNDL-1191.)
+- **A held attachment's retirement folds into its replacement:** calls a new attachment made before it resolved are
+  given as one `[["r", newest]]` with `retired` false; a retirement among them is not carried on. Durable's views
+  over a changing source (the conversation) do not retire. (ERNDL-1191.)
+
 ### Workers: what the exit order left (decision "A worker's exit is published after its link's work ended")
 
 - **A call an exited worker made that the server relayed** to another host is cancelled there when the cancel
@@ -264,8 +394,8 @@ deleted (the slice's spec and code are the record). Moved here from `carry-over.
   other host's answer; build it when a case reports through a relay.
 - **p2 keeps its hand-written generation checks** (its principal's `generation`, the checks in its report methods)
   until it is ported: it passes `store` to `createWorkers` now, so they are redundant, not wrong.
-- **`useVariant`'s snapshot** (the narrowed reference, so two `live` states in different variants differ to React)
-  is tested through the page (a variant change while mounted), not with a forced coalesced render.
+- **`useLive`'s snapshot** (the reference's `granted`, so two `live` states with different grants differ to React) is
+  tested through the page (a grant change while mounted), not with a forced coalesced render.
 
 ### Later: reload (when a case needs it)
 
@@ -302,7 +432,7 @@ Left by the second part (admission, route admission, `deleteHostData({ plugin })
   type.
 - **Two persons cannot widen a read by params** (§10 test 13) is still not written: it wants the worked example's
   `PersonAccess` (the condition from the admission's sources), which is p3's.
-- Bump `PROTOCOL_VERSION` for `denied` with p3's first release.
+- Bump `PROTOCOL_VERSION` for `denied` with p3's first release. Done: it is 2 since slice 15.
 
 Left by the first part itself:
 
@@ -331,9 +461,14 @@ Left by the first part itself:
 - **Small leftovers of code review round 1:** `QueryPage` (contracts) and `Page` (store) are one shape with two
   names; a list decodes every loaded row's identity on each page adoption (0.6 ms a message at 20 pages); a list's
   method is `more` beside the values `more` and `moreAfter`, as the spec has it.
-- **Reads are not shared between readers** (§3.1's last bullet; test 3): two readers of one query with equal
-  arguments are two reads. The case that brings it back: many readers of identical arguments measured in a commit
-  step.
+- **A shared read holds its subscribers strongly** (`store/shared-read.ts`; ERNDL-1176, Opus's explainer check): a
+  reader leaves it only through its attempt's end (`detach`), its failure or another read; an object dropped without
+  its attempt ending would stay subscribed. Every way an object ends today detaches (tested: release, failure, reload,
+  a subscriber leaving while a frame is delivered). Weak subscriptions only if a case drops objects without ending them.
+- **A list's pages are not shared between lists** (decision "Identical live reads share one source"; ERNDL-1176):
+  live queries and counts share one read per (provider instance, query, arguments, shape); two lists of one query
+  with equal arguments are still two tilings. Next: share pages keyed by (query, arguments, bookmarks), every fresh
+  list's first page, pages behind a list's own `more` its own.
 - **A failed migration's held reads** keep their rows and stay held; §5 asks for `failed unavailable` ("table X is
   not ready") with the rows as last values. The case: a screen that must say why it is stale.
 - **Staging knows a recorded handle as a table, a named query of the object, or anything else.** A table given to
@@ -358,6 +493,11 @@ Left by the first part itself:
 
 ### After slice 11
 
+- **A tagged "building" state for the scripts object** (review of f86677f79, Opus, 2026-11-26): before its surface
+  built, the scripts object shows `ScriptSet` with `base: ""`, which clients skip (`surfaces/client.ts`). A tagged
+  value (`{ kind: "building" } | { kind: "built", set }`) would say it in the type instead of a sentinel. With it, decide
+  what a client that reconnected during the build shows when the first push then fails: today it keeps its old code
+  silently until the next step's push sends the set.
 - **Small examples** (owner, 2026-10-30: the 7c examples are complete but complex): once HTTP, workers, web and TUI
   exist, a pass of small, easy-to-read examples, each showing one thing a plugin author or app does.
 

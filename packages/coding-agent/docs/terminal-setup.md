@@ -15,6 +15,7 @@ Pi uses extended-key protocols so terminals can distinguish combinations such as
 | Inline images or colors are not detected | [Override detected capabilities](#override-detected-capabilities) |
 | An IME candidate window appears in the wrong place | [WezTerm](#wezterm) or [IntelliJ IDEA](#intellij-idea-integrated-terminal) |
 | Modified keys fail only inside tmux | [Run Pi in tmux](tmux.md) |
+| After Pi exits, moving the mouse or typing puts text such as `[<35;12;5M` or `[;;;129:3u` into the shell prompt | [Recover the terminal after Pi was killed](#recover-the-terminal-after-pi-was-killed) |
 
 Use `/hotkeys` to inspect Pi's active shortcuts. See [Keybindings](keybindings.md) to change them.
 
@@ -220,6 +221,30 @@ Settings take precedence over environment variables. An unset value or `auto` pr
 
 Only force a capability supported by the complete terminal path. Unsupported escape sequences can corrupt rendering. See [Environment Variables](environment-variables.md#pi-process-configuration) and [Settings](settings.md) for the canonical value definitions.
 
+## Recover the terminal after Pi was killed
+
+Pi turns on key, mouse, and paste reporting while it runs, and the alternate screen in fullscreen mode. It turns them off when it exits. If Pi is killed (`kill -9`, Task Manager, out of memory), they stay on and the shell types the reports into the prompt.
+
+The real fix is to find what kills Pi and stop it. Look for `JavaScript heap out of memory` in the terminal, or a script or IDE that ends the process, and [open an issue](https://github.com/earendil-works/pi/issues) with what you find.
+
+To reset the terminal, run this in the affected pane. Starting and quitting Pi again is not enough.
+
+bash or zsh:
+
+```bash
+printf '\e[<16u\e[=0;1u\e[>4;0m\e[?2004;1000;1002;1003;1004;1006l\e[?7;25h'
+```
+
+PowerShell:
+
+```powershell
+$e = [char]27; [Console]::Write("$e[<16u$e[=0;1u$e[>4;0m$e[?2004;1000;1002;1003;1004;1006l$e[?7;25h")
+```
+
+If the prompt still shows Pi's last screen, also run `printf '\e[?1049l'` or `[Console]::Write("$([char]27)[?1049l")`. Only in that case: otherwise it confuses the shell's line editor.
+
+If you cannot type in the pane, start Pi in another tab and ask it: "Reset my other terminal tab with the reset sequence from Pi's terminal-setup docs." Then press `Ctrl+C` in the fixed tab to clear the line.
+
 ## Program status
 
 Pi reports its state with the [Program Status Protocol (OSC 7501)](https://www.superlogical.com/rex/docs/build/program-status), so terminals and agent dashboards can show whether it is working, waiting for you, done, or failed:
@@ -233,3 +258,31 @@ Pi reports its state with the [Program Status Protocol (OSC 7501)](https://www.s
 | `idle` | Pi started, or you cancelled the run. |
 
 Reports never contain prompts or model output. Pi sends them only after the terminal answers the protocol's support query; tmux and screen do not forward them. Set `PI_PROGRAM_STATUS=1` to send reports without asking, or `PI_PROGRAM_STATUS=0` to turn them off.
+
+## Program resume
+
+Pi tells the terminal how to bring the session back after the terminal restarts, with the [Program Resume Protocol (OSC 7577)](https://www.superlogical.com/rex/docs/build/program-resume). Terminals that support it set `OSC7577_TOKEN` in the environment; Pi reports only when it is set.
+
+The command contains everything needed to resume the session, because the terminal runs it without Pi's environment: the session ID, `--agent-dir` and `--session-dir` when those folders are not the default, and the restriction and resource flags Pi was started with, as typed (tools, extensions, skills, prompt templates, themes, context files, system prompts, project trust, `--models`). For example, `pi --session <id> -t read,grep`. The terminal runs it in the session's directory. Other flags are left out, because the session keeps its model, thinking level, and name. The command Pi prints when you quit is the same without the repeated flags.
+
+Pi updates the command when you start, resume, or fork a session, and once a new session has its first message. It removes the command while a new session has no messages, when you quit (`Ctrl+D`, `Ctrl+C` twice, `/quit`), and, if Pi was started with flags, when you open a session from another directory, because relative paths in the flags would point elsewhere. When the terminal closes or restarts and ends Pi, Pi leaves the command in place, so the terminal can resume it.
+
+The terminal resumes a command only if a rule trusts it. Rex rules with a `flags` table do not work for Pi yet (Node overwrites the command line Rex checks them against), so add one rule per flag combination you use, with the flags in the order you type them. In Rex's `init.lua`:
+
+```lua
+-- One rule per command: the words after `pi`, as Pi reports them.
+local function trust_pi(name, ...)
+	rex.set("resume.trust.pi_" .. name, { command = { "pi", ... } })
+end
+
+local id = rex.match.uuid
+trust_pi("plain", "--session", id)
+trust_pi("readonly", "--session", id, "-t", "read,grep,find,ls")
+trust_pi("readonly_noext", "--session", id, "-t", "read,grep,find,ls", "--no-extensions")
+-- A separate profile set with PI_CODING_AGENT_DIR and PI_CODING_AGENT_SESSION_DIR: absolute paths, before --session
+trust_pi("work", "--agent-dir", "/home/you/.pi/work/agent", "--session-dir", "/home/you/.pi/work/agent/sessions", "--session", id)
+```
+
+A Pi started with a combination no rule lists comes back as a plain shell, not without its flags.
+
+Pi removes `OSC7577_TOKEN` from its own environment at startup, so shells, editors, and extension processes it starts cannot replace its command or register commands of their own. Whether and when the terminal resumes a command is up to the terminal.

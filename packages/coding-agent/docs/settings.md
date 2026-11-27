@@ -17,7 +17,10 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `thinkingBudgets` | object | Built-in budgets | Token budgets for `minimal`, `low`, `medium`, and `high` thinking levels. |
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. |
-| `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
+| `notices.cacheMisses` | boolean | `false` | Show a notice when a response re-bills a significant part of the prompt cache, such as after a model switch or an idle gap. |
+| `notices.cacheWarming` | boolean | `false` | Show the cost of cache warming requests. |
+| `notices.compactionCosts` | boolean | `false` | Show the cost of compactions and branch summaries. |
+| `notices.reasoningDrops` | boolean | `false` | Show a notice when a provider drops reasoning items from a request, such as OpenAI reasoning items after a prefix mismatch or Anthropic thinking blocks during recovery. |
 | `shadedCodeBlocks` | boolean | `false` | Render code blocks on a background (the `mdCodeBlockBg` theme color) with the language label above, instead of between literal ``` fence lines. |
 | `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"streaming"` | Keep eligible provider prompt caches warm during active runs and, with `"idle"`, for up to 30 minutes between runs. `"idle"` re-sends the session's last request while you are away, and each refresh is billed. Global setting only. |
 
@@ -174,11 +177,10 @@ Resource arrays support glob exclusions with `!pattern`, exact inclusion with `+
 
 The built-in extensions are named `builtin:mcp`, `builtin:llama.cpp`, `builtin:codemode`, and `builtin:tool-search` in `extensions`. They load by default; `-builtin:mcp` disables one. A `+builtin:<name>` or `-builtin:<name>` entry in project settings overrides the user setting. `pi config` lists them under Built-in. `--no-extensions` disables them too, and `-e builtin:<name>` loads one explicitly.
 
-## Updates, telemetry, and warnings
+## Updates and warnings
 
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `collapseChangelog` | boolean | `false` | Show a condensed changelog after an update. Also condenses extension package changelogs to one line per package. |
-| `enableInstallTelemetry` | boolean | `true` | Enable anonymous install/update reporting and selected provider attribution headers. Does not control update checks. |
 | `enableAnalytics` | boolean | `false` | Opt in to analytics data sharing. Currently used only by the experimental first-run setup. |
 | `warnings.anthropicExtraUsage` | boolean | `true` | Warn when Anthropic subscription authentication may use paid extra usage. |

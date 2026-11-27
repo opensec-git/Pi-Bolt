@@ -15,20 +15,23 @@
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import { awaitWithContext, type Context } from "../context/index.ts";
 import type { Contract, ParamsOf } from "../contracts/index.ts";
-import type { ContractShape } from "../contracts/internal.ts";
+import { type ContractShape, NO_GRANTS } from "../contracts/internal.ts";
 import { ChordError, type FailureCause, type Principal } from "../data/index.ts";
-import { asChordError, binds, invalid, type Provider, sameCause } from "../data/internal.ts";
-import { Documents, type KeyedSlot } from "../documents/internal.ts";
+import { asChordError, binds, invalid, type Provider, sameCause, stackless } from "../data/internal.ts";
+import { Documents, type DocumentsOwner, type KeyedSlot, type TransactionCancelled } from "../documents/internal.ts";
 import type { JobDefinition } from "../jobs/index.ts";
 import { JobRecords } from "../jobs/internal.ts";
 import type { JsonValue } from "../json.ts";
 import { CHAIN } from "../link/internal.ts";
+import { appended, NO_ITEMS } from "../lists.ts";
 import type { RegistryContribution } from "../registries/internal.ts";
-import type { DeriveSource } from "../state/internal.ts";
+import { SmallSet } from "../small-set.ts";
+import type { Batch, DeriveSource } from "../state/internal.ts";
+import type { ChordStore } from "../store/store.ts";
 import type { TableDefinition } from "../store/table.ts";
 import { chordMetrics } from "../telemetry.ts";
 import { refusal } from "./adapted.ts";
-import { type AdmitSelf, revoked, type Verdict } from "./admission.ts";
+import { type AdmitSelf, type AdmittedValue, type Allowed, revoked, type Verdict } from "./admission.ts";
 import { Attempt, type PinnedKey, type Self } from "./attempt.ts";
 import type { Caller } from "./ctx.ts";
 import type { Dependency } from "./dependencies.ts";
@@ -74,7 +77,7 @@ export type Served =
 			readonly factory: (
 				params: ParamsOf<Contract>,
 				principal: Principal,
-				...rest: [self: Self] | [admitted: JsonValue, self: Self]
+				...rest: [self: Self] | [admitted: AdmittedValue, self: Self]
 			) => unknown;
 			/** Its admission, when its contract declares one. */
 			readonly admission: ServedAdmission | undefined;
@@ -179,14 +182,100 @@ const CLOSE: NativeCloseReason = { kind: "close" };
 
 const RELOAD: NativeCloseReason = { kind: "reload" };
 
+/** Before its first attempt: the shared state. */
+const WAITING: ObjectState = { kind: "waiting" };
+
 /** No holders listed: what presence gets of an admitted object that is not allowed. */
-const NO_HOLDERS: ReadonlySet<Holder> = new Set();
+const NO_HOLDERS: readonly Holder[] = NO_ITEMS;
 
 /** No dependencies waited for: the shared empty list. */
 const NO_DEPENDENCIES: readonly Dependency[] = [];
 
+/** No job runs: the shared empty list. */
+const NO_JOBS: readonly JobRecords[] = [];
+
 /** No contributions leaving: the shared empty list. */
 const NO_CONTRIBUTIONS: readonly RegistryContribution[] = [];
+
+/**
+ * An object as the owner of its documents: what `Documents` asks of it, read from the object when asked (one small
+ * record per object, where an owner made of closures cost 280 B).
+ */
+class ObjectDocuments implements DocumentsOwner {
+	readonly #object: ChordObject;
+	readonly context: Context;
+
+	constructor(object: ChordObject, context: Context) {
+		this.#object = object;
+		this.context = context;
+	}
+
+	get label(): string {
+		return this.#object.label;
+	}
+
+	get batch(): Batch {
+		return this.#object.host.batch;
+	}
+
+	get store(): { readonly store: ChordStore; readonly owner: string } | undefined {
+		const { host, served } = this.#object;
+		return host.store === undefined ? undefined : { store: host.store, owner: served.contract.name };
+	}
+
+	get telemetry(): TelemetryContext {
+		return this.#object.host.telemetry;
+	}
+
+	fail(error: ChordError): void {
+		this.#object.documentFailed(error);
+	}
+
+	report(error: TransactionCancelled): void {
+		this.#object.host.report(error);
+	}
+}
+
+/**
+ * What an object has only for features few objects use (jobs, the start barrier, wake signals, restarts and reload
+ * cycles, calls waiting at the gate, lists), made by the first of them: a field each cost every object 8 B for as long
+ * as it lives.
+ */
+type ObjectExtras = {
+	/** Its job runs by job name, across its attempts; made by the first job. */
+	jobs: Map<string, JobRecords> | undefined;
+	/**
+	 * Its first outcome (decision (a)): live, failed, parked with no blocker here still without one, or ended; once.
+	 * The promise is made by the first who waits for it (the start barrier, for host-lifetime objects).
+	 */
+	firstOutcome: PromiseWithResolvers<void> | undefined;
+	/** The one timer storing its jobs' held state changes by their earliest deadline (D8), while one is held. */
+	flush: { readonly deadline: number; readonly timer: ReturnType<typeof setTimeout> } | undefined;
+	/** Its wake signals (`retryOn`), the last attempt's declaration; made by the first. */
+	wakes: RetryWakes | undefined;
+	/**
+	 * A restart's old attempt while it is open (until it stopped changing): old work runs on it, and consumers whose
+	 * version it binds see it live (decision "Reload restarts every affected object", rules 2 and 5).
+	 */
+	old: Attempt | undefined;
+	/**
+	 * A restart's old attempt without natives whose contributions stay in the tables until its successor is live (F-c),
+	 * replaced there in one batch; they leave if the successor fails, parks on a failure or the object ends.
+	 */
+	kept: Attempt | undefined;
+	/** A restart's readiness, until its successor's first dependency check. */
+	readiness: Readiness | undefined;
+	/** A restart's successor that shows its readiness's failures, until the old attempt ended. */
+	showsReadiness: Attempt | undefined;
+	/** Starts a restart's readiness and successor, once every fate of its reload started (`startSuccessor`). */
+	startSuccessor: (() => void) | undefined;
+	/** The objects whose gate its activation's opener waits at now: its wait edges for reload cycles. */
+	gateWaits: Set<ChordObject> | undefined;
+	/** Resolves at its next change of state, for calls waiting at the gate; made by the first one. */
+	changed: PromiseWithResolvers<void> | undefined;
+	/** What its lists keep across its attempts (slice 14 §4), by list name; made by the first list. */
+	lists: Map<string, ListMemory> | undefined;
+};
 
 /**
  * One object. Each attempt is a fresh `Attempt`; the documents, the line, the job runs and the holders outlive it. An
@@ -225,20 +314,15 @@ export class ChordObject implements Target {
 	#trigger: TelemetryContext;
 	/** Its attempts so far (the activation span's `attempt`). */
 	#attempts = 0;
-	/** Its job runs by job name, across its attempts. */
-	readonly #jobs = new Map<string, JobRecords>();
+	/** What it has only for features few objects use (`ObjectExtras`), made by the first of them. */
+	#extras: ObjectExtras | undefined;
 	/** This instance's id (uuidv7), minted at its first attempt: a restarted object is a new instance (D4). */
 	#instance: string | undefined;
-	#state: ObjectState = { kind: "waiting" };
-	/** References and holds of this object. */
-	readonly #holders = new Set<Holder>();
+	#state: ObjectState = WAITING;
+	/** References and holds of this object (most have one: no `Set` for it). */
+	readonly #holders = new SmallSet<Holder>();
 	/** The dependencies its parked attempt waits for; their objects are followed to find cycles (Q5). */
 	#waitingFor: readonly Dependency[] = NO_DEPENDENCIES;
-	/**
-	 * Its first outcome (decision (a)): live, failed, parked with no blocker here still without one, or ended; once.
-	 * The promise is made by the first who waits for it (the start barrier, for host-lifetime objects).
-	 */
-	#firstOutcome: PromiseWithResolvers<void> | undefined;
 	#hasFirstOutcome = false;
 	/** The error of the last failed attempt, or the last cause a parked attempt showed, until one goes live. */
 	#lastFailure: ChordError | undefined;
@@ -258,43 +342,19 @@ export class ChordObject implements Target {
 	 * re-exposed ones: audit A10); not once it stopped changing.
 	 */
 	#following = false;
-	/** The one timer storing its jobs' held state changes by their earliest deadline (D8), while one is held. */
-	#flush: { readonly deadline: number; readonly timer: ReturnType<typeof setTimeout> } | undefined;
-	/** Its wake signals (`retryOn`), the last attempt's declaration; made by the first. */
-	#wakes: RetryWakes | undefined;
-	/**
-	 * A restart's old attempt while it is open (until it stopped changing): old work runs on it, and consumers whose
-	 * version it binds see it live (decision "Reload restarts every affected object", rules 2 and 5).
-	 */
-	#old: Attempt | undefined;
-	/**
-	 * A restart's old attempt without natives whose contributions stay in the tables until its successor is live (F-c),
-	 * replaced there in one batch; they leave if the successor fails, parks on a failure or the object ends.
-	 */
-	#kept: Attempt | undefined;
-	/** A restart's readiness, until its successor's first dependency check. */
-	#readiness: Readiness | undefined;
-	/** A restart's successor that shows its readiness's failures, until the old attempt ended. */
-	#showsReadiness: Attempt | undefined;
-	/** Starts a restart's readiness and successor, once every fate of its reload started (`startSuccessor`). */
-	#startSuccessor: (() => void) | undefined;
-	/** The objects whose gate its activation's opener waits at now: its wait edges for reload cycles. */
-	#gateWaits: Set<ChordObject> | undefined;
-	/** Resolves at its next change of state, for calls waiting at the gate; made by the first one. */
-	#changed: PromiseWithResolvers<void> | undefined;
-	/** What its lists keep across its attempts (slice 14 §4), by list name; made by the first list. */
-	#lists: Map<string, ListMemory> | undefined;
 	/**
 	 * The attempts whose admission holds its requests, in the order they bound them (slice 14 §2.2, rule 4): a sealed
 	 * one's are released once a later one bound its own, so a source held only by admissions never ends across a
 	 * rebuild. Made by the first (admitted types only).
 	 */
-	#admissions: Attempt[] | undefined;
+	#admissions: readonly Attempt[] | undefined;
 	/**
 	 * Whether presence lists show an admitted object's holders (§19): from its first allow until a denial. Always true
 	 * for a type without an admission.
 	 */
 	#allowed: boolean;
+	/** What its last live attempt was granted (slice 15 §1.4): kept while it loads or failed, none once denied. */
+	#granted: ReadonlySet<string> = NO_GRANTS;
 
 	constructor(
 		host: AnyHost,
@@ -313,23 +373,18 @@ export class ChordObject implements Target {
 		this.principal = principal;
 		this.key = key;
 		this.identity = identity;
-		this.label = key === "" ? served.contract.name : `${served.contract.name}(${key})`;
+		// Joined: one flat string (a template's result is kept as the tree of its parts, three times its size).
+		this.label = key === "" ? served.contract.name : [served.contract.name, "(", key, ")"].join("");
 		this.chain = chain;
 		this.#trigger = trigger;
 		this.#context = context;
 		this.#allowed = served.kind !== "remote" || served.admission === undefined;
-		const { store } = host;
-		this.documents = new Documents({
-			label: this.label,
-			batch: host.batch,
-			context,
-			store: store === undefined ? undefined : { store, owner: served.contract.name },
-			fail: (error) => {
-				if (this.#state.kind === "live") this.failLive(this.#state.attempt, { kind: "broken", error });
-			},
-			report: (error) => host.report(error),
-			telemetry: host.telemetry,
-		});
+		this.documents = new Documents(new ObjectDocuments(this, context));
+	}
+
+	/** A document of the live object the code cannot read fails it `broken` (slice 6a §1.4); ignored when not live. */
+	documentFailed(error: ChordError): void {
+		if (this.#state.kind === "live") this.failLive(this.#state.attempt, { kind: "broken", error });
 	}
 
 	/** The object's state as its references show it. */
@@ -364,7 +419,10 @@ export class ChordObject implements Target {
 	/** Whether a restart's open old attempt binds `version` and `fingerprint`: its consumers of that version may use it. */
 	oldServes(version: number, fingerprint: string): boolean {
 		const old = this.openOldAttempt;
-		return old !== undefined && binds(old.served.provider, version, fingerprint);
+		// One that refuses the version a member serves it nothing (its mapping would throw, N1).
+		return (
+			old !== undefined && binds(old.served.provider, version, fingerprint) && old.refusalAt(version) === undefined
+		);
 	}
 
 	/**
@@ -372,15 +430,15 @@ export class ChordObject implements Target {
 	 * version it binds see it as the live instance; `undefined` otherwise.
 	 */
 	get openOldAttempt(): Attempt | undefined {
-		const old = this.#old;
+		const old = this.#extras?.old;
 		return old?.draining ? old : undefined;
 	}
 
 	/** Resolves at its first outcome (the start barrier waits for it); never rejects. */
 	get firstOutcome(): Promise<void> {
 		if (this.#hasFirstOutcome) return Promise.resolve();
-		this.#firstOutcome ??= Promise.withResolvers<void>();
-		return this.#firstOutcome.promise;
+		this.#more().firstOutcome ??= Promise.withResolvers<void>();
+		return this.#extras!.firstOutcome!.promise;
 	}
 
 	/**
@@ -427,7 +485,7 @@ export class ChordObject implements Target {
 	}
 
 	/** Its holders, for a presence list made after they took it: none while an admitted object is not allowed. */
-	get holders(): ReadonlySet<Holder> {
+	get holders(): Iterable<Holder> {
 		return this.#allowed ? this.#holders : NO_HOLDERS;
 	}
 
@@ -435,20 +493,20 @@ export class ChordObject implements Target {
 	 * What its live attempt's admission allowed, with the fingerprint of the admission schema it was decided under: a
 	 * reload's staging rehearses its new factory with it (slice 14 §2.5); `undefined` without one.
 	 */
-	get admitted(): { readonly value: JsonValue; readonly fingerprint: string } | undefined {
+	get admitted(): { readonly allowed: Allowed; readonly fingerprint: string } | undefined {
 		const state = this.#state;
 		if (state.kind !== "live") return undefined;
 		const { admitted, served } = state.attempt;
 		if (admitted === undefined || served.kind !== "remote" || served.admission === undefined) return undefined;
-		return { value: admitted.value, fingerprint: served.admission.fingerprint };
+		return { allowed: admitted, fingerprint: served.admission.fingerprint };
 	}
 
 	/**
-	 * The variant a live remote object's factory chose (a restart's open old attempt's meanwhile); `undefined` for a
-	 * local object and before it is live.
+	 * The names its last live attempt's admission granted (slice 15 §1.2: a restart's open old attempt's while its
+	 * successor loads), kept while it loads or failed; none for a local object, before it is live and while denied.
 	 */
-	get variant(): string | undefined {
-		return this.#state.kind === "live" ? this.#state.attempt.variant : this.openOldAttempt?.variant;
+	get granted(): ReadonlySet<string> {
+		return this.#granted;
 	}
 
 	/** The live object's state members, as Chord follows them. */
@@ -495,9 +553,9 @@ export class ChordObject implements Target {
 	 * if that attempt fails; one while live does nothing.
 	 */
 	retryOn(sources: readonly RetrySource[]): void {
-		if (this.#wakes === undefined && sources.length === 0) return;
-		this.#wakes ??= new RetryWakes();
-		this.#wakes.replace(sources, () => this.#wake());
+		if (this.#extras?.wakes === undefined && sources.length === 0) return;
+		this.#more().wakes ??= new RetryWakes();
+		this.#extras!.wakes!.replace(sources, () => this.#wake());
 	}
 
 	/** Calls a method of the live object for a reference's `binding`: as its caller, at its version (`callAs`). */
@@ -533,6 +591,9 @@ export class ChordObject implements Target {
 			}
 			// Old work here found no open old attempt (else it was routed above): any version cycles through the gate.
 			await this.host.waitAsOldWork(this.#openerGate(context), this, this.served.contract, context);
+			// The attempt it waited for may refuse its version a member: nothing of it runs (its holder waits unbound).
+			const refused = refusal(this.served, version);
+			if (refused !== undefined) throw refused;
 		}
 		return this.#live().call(method, args, context, caller, version, parent ?? context.telemetry);
 	}
@@ -618,8 +679,8 @@ export class ChordObject implements Target {
 	async #openerGate(context: Context): Promise<void> {
 		const opener = context.value(OPENING);
 		if (opener === undefined) return this.#gate(context);
-		opener.#gateWaits ??= new Set();
-		const waits = opener.#gateWaits;
+		opener.#more().gateWaits ??= new Set();
+		const waits = opener.#extras!.gateWaits!;
 		waits.add(this);
 		this.host.reloadCycles.recheck();
 		try {
@@ -634,7 +695,7 @@ export class ChordObject implements Target {
 	 * to, and those whose gate its opener waits at.
 	 */
 	waitEdges(): ChordObject[] {
-		const edges = [...(this.#gateWaits ?? [])];
+		const edges = [...(this.#extras?.gateWaits ?? [])];
 		for (const dependency of this.#waitingFor) {
 			const target = dependency.kind === "reference" ? dependency.binding.target : undefined;
 			if (target instanceof ChordObject) edges.push(target);
@@ -661,11 +722,11 @@ export class ChordObject implements Target {
 				const message = `${this.label}: a call waited ${ready} ms for its object to go live`;
 				throw new ChordError({ code: "unavailable", reason: "park_timeout", message });
 			}
-			this.#changed ??= Promise.withResolvers();
+			this.#more().changed ??= Promise.withResolvers();
 			const timer = Promise.withResolvers<void>();
 			const timeout = setTimeout(timer.resolve, left);
 			try {
-				await awaitWithContext(Promise.race([this.#changed.promise, timer.promise]), context);
+				await awaitWithContext(Promise.race([this.#extras!.changed!.promise, timer.promise]), context);
 			} finally {
 				clearTimeout(timeout);
 			}
@@ -682,17 +743,21 @@ export class ChordObject implements Target {
 	 * list had. It goes with the object.
 	 */
 	listMemory(name: string): ListMemory {
-		this.#lists ??= new Map();
-		let memory = this.#lists.get(name);
+		this.#more().lists ??= new Map();
+		let memory = this.#extras!.lists!.get(name);
 		if (memory === undefined) {
 			memory = { signature: "", bookmarks: [], open: true };
-			this.#lists.set(name, memory);
+			this.#extras!.lists!.set(name, memory);
 		}
 		return memory;
 	}
 
-	/** The named query `name` of `queries` member `member` of the live object (slice 14 §3.1). */
-	queryMember(member: string, name: string): OwnQuery {
+	/** The named query `name` of `queries` member `member` of the live object, as a consumer of `contract` sees it. */
+	queryMember(member: string, name: string, contract: Contract): OwnQuery {
+		// A restart's old attempt serves no query to a version it does not serve (`stateFor`): it waits for the successor.
+		if (this.#state.kind === "activating" && !this.oldServes(contract.version, contract.fingerprint)) {
+			throw new ChordError({ code: "not_ready", message: `${this.label}: not live yet` });
+		}
 		return this.#live().queryMember(member, name);
 	}
 
@@ -706,11 +771,13 @@ export class ChordObject implements Target {
 	 * lingering object stays.
 	 */
 	hold(holder: Holder): void {
-		// A version it binds whose member the live provider refuses (an older consumer): it waits unbound instead.
-		const state = this.#state;
-		const unfit = state.kind === "live" ? this.#unfit(holder, state.attempt) : undefined;
+		// A version it binds whose member its provider refuses (an older consumer): it waits unbound for a publication,
+		// also on a failed or denied object. Not live, a version only a restart's old attempt binds waits for it.
+		const unfit = this.#state.kind === "live" ? this.#unfit(holder) : this.#refusedBy(holder);
 		if (unfit !== undefined) {
 			this.#unbound(holder, unfit);
+			// It may hold nothing else: it ends as at a release, once the caller's bind is over.
+			queueMicrotask(() => this.#idle());
 			return;
 		}
 		this.#holders.add(holder);
@@ -734,7 +801,8 @@ export class ChordObject implements Target {
 	 * version with another fingerprint is refused (`checkJob`).
 	 */
 	jobRecords(definition: JobDefinition<unknown, unknown, unknown>): JobRecords {
-		const records = this.#jobs.get(definition.name);
+		this.#more().jobs ??= new Map();
+		const records = this.#extras!.jobs!.get(definition.name);
 		if (records === undefined) {
 			const { store } = this.host;
 			const owner = {
@@ -747,7 +815,7 @@ export class ChordObject implements Target {
 				held: (deadline: number) => this.#heldUntil(deadline),
 			};
 			const made = new JobRecords(definition, owner);
-			this.#jobs.set(definition.name, made);
+			this.#extras!.jobs!.set(definition.name, made);
 			return made;
 		}
 		this.checkJob(definition);
@@ -757,7 +825,7 @@ export class ChordObject implements Target {
 
 	/** Refuses a declaration of a job its records cannot take (`JobRecords.check`); a reload's staging checks it too. */
 	checkJob(definition: JobDefinition<unknown, unknown, unknown>): void {
-		this.#jobs.get(definition.name)?.check(definition);
+		this.#extras?.jobs?.get(definition.name)?.check(definition);
 	}
 
 	/**
@@ -820,19 +888,20 @@ export class ChordObject implements Target {
 
 	/** A held state change must be stored by `deadline`: the timer is set for the earliest one. */
 	#heldUntil(deadline: number): void {
-		if (this.#flush !== undefined && this.#flush.deadline <= deadline) return;
-		if (this.#flush !== undefined) clearTimeout(this.#flush.timer);
+		const flush = this.#extras?.flush;
+		if (flush !== undefined && flush.deadline <= deadline) return;
+		if (flush !== undefined) clearTimeout(flush.timer);
 		// A foreground timer: what is held is stored before the process may exit.
 		const timer = setTimeout(() => void this.#flushHeld(), Math.max(0, deadline - Date.now()));
-		this.#flush = { deadline, timer };
+		this.#more().flush = { deadline, timer };
 	}
 
 	/** The timer fired: every held change past its deadline is stored, and the timer set for the next one. */
 	async #flushHeld(): Promise<void> {
-		this.#flush = undefined;
+		if (this.#extras !== undefined) this.#extras.flush = undefined;
 		if (this.#state.kind === "ended") return;
 		const now = Date.now();
-		const jobs = [...this.#jobs.values()];
+		const jobs = [...(this.#extras?.jobs?.values() ?? NO_JOBS)];
 		await Promise.all(jobs.map((records) => records.flushHeld(now)));
 		const next = Math.min(...jobs.map((records) => records.nextDeadline()));
 		if (Number.isFinite(next)) this.#heldUntil(next);
@@ -880,8 +949,7 @@ export class ChordObject implements Target {
 	 * §2.2, rule 4).
 	 */
 	admitting(attempt: Attempt): void {
-		this.#admissions ??= [];
-		this.#admissions.push(attempt);
+		this.#admissions = appended(this.#admissions ?? NO_ITEMS, attempt);
 		this.#releaseSuperseded();
 	}
 
@@ -893,10 +961,13 @@ export class ChordObject implements Target {
 		const admissions = this.#admissions;
 		if (admissions === undefined) return;
 		const last = admissions.at(-1);
-		for (const attempt of [...admissions]) {
+		// The list as it is now: each release takes its attempt out by replacing the list.
+		for (const attempt of admissions) {
 			if (attempt === last || !attempt.sealed) continue;
 			attempt.releaseAdmission();
-			admissions.splice(admissions.indexOf(attempt), 1);
+			const left = this.#admissions ?? NO_ITEMS;
+			const at = left.indexOf(attempt);
+			if (at !== -1) this.#admissions = left.slice(0, at).concat(left.slice(at + 1));
 		}
 	}
 
@@ -912,7 +983,7 @@ export class ChordObject implements Target {
 		const state = this.#state;
 		if ((state.kind === "live" || state.kind === "activating") && state.attempt === attempt) {
 			this.#rebuild(attempt, denial);
-		} else if (this.#old === attempt && attempt.draining) {
+		} else if (this.#extras?.old === attempt && attempt.draining) {
 			this.#sealDraining(attempt, denial);
 		} else if (state.kind === "failed" && this.#admissions?.at(-1) === attempt) {
 			this.#followFailed(attempt, verdict);
@@ -979,7 +1050,7 @@ export class ChordObject implements Target {
 	/** What a change of its admission rejects running calls with: `forbidden/revoked` for a denial, else `unavailable`. */
 	#readmitted(denial: ChordError | undefined): ChordError {
 		if (denial !== undefined) return revoked(this.label, denial);
-		return new ChordError({ code: "unavailable", message: `${this.label}: its admission changed` });
+		return stackless({ code: "unavailable", message: `${this.label}: its admission changed` });
 	}
 
 	/**
@@ -1009,6 +1080,10 @@ export class ChordObject implements Target {
 
 	/** An admitted object is denied: presence lists its holders no more, until its next allow (§19). */
 	#disallow(): void {
+		this.#granted = NO_GRANTS;
+		// A holder of a version its provider no longer binds or refuses a member waits for one that serves it: the denial
+		// is no answer for it (F3, G1). Its last holders gone, it ends as at their release, once the caller told the rest.
+		if (this.#unbindUnfit((holder) => this.#unfit(holder))) queueMicrotask(() => this.#idle());
 		if (!this.#allowed) return;
 		this.host.unreferenced(this, this.#holders, this.#context);
 		this.#allowed = false;
@@ -1060,9 +1135,9 @@ export class ChordObject implements Target {
 
 	/** The contributions a restart kept for its successor leave the tables (F-c): it will not take them over now. */
 	#dropKept(): void {
-		const kept = this.#kept;
+		const kept = this.#extras?.kept;
 		if (kept === undefined) return;
-		this.#kept = undefined;
+		if (this.#extras !== undefined) this.#extras.kept = undefined;
 		this.#withdraw(kept);
 	}
 
@@ -1138,20 +1213,20 @@ export class ChordObject implements Target {
 	#restart(requests: readonly Request[]): Attempt {
 		// A restart starts from a live object (`reloadFate`).
 		const old = (this.#state as Extract<ObjectState, { readonly kind: "live" }>).attempt;
-		this.#old = old;
+		this.#more().old = old;
 		old.beginDrain();
 		old.stopRoutines();
-		if (!old.opensNatives) this.#kept = old;
+		if (!old.opensNatives) this.#more().kept = old;
 		this.#instance = uuidv7();
 		const attempt = this.#replace();
 		const shows = (cause: FailureCause | undefined): void => this.#readinessShown(attempt, cause);
 		const readiness = new Readiness(this.host, this.#caller(), requests, shows, this.#context);
-		this.#readiness = readiness;
+		this.#more().readiness = readiness;
 		const due = Date.now() + this.host.timeouts.reload;
 		const ended = this.#endOld(old, readiness, due);
 		this.host.ending(this.identity, this.#reported(ended));
 		const ending = this.host.endingOf(this.identity);
-		this.#startSuccessor = () => this.#startRestarted(attempt, old, readiness, ended, ending);
+		this.#more().startSuccessor = () => this.#startRestarted(attempt, old, readiness, ended, ending);
 		return attempt;
 	}
 
@@ -1182,8 +1257,8 @@ export class ChordObject implements Target {
 
 	/** Starts a restart's readiness and its successor, once every fate of the reload started (its served types are new). */
 	startSuccessor(): void {
-		const start = this.#startSuccessor;
-		this.#startSuccessor = undefined;
+		const start = this.#extras?.startSuccessor;
+		if (this.#extras !== undefined) this.#extras.startSuccessor = undefined;
 		start?.();
 	}
 
@@ -1200,23 +1275,23 @@ export class ChordObject implements Target {
 		ended: Promise<unknown>,
 		ending: Promise<void> | undefined,
 	): void {
-		this.#showsReadiness = attempt;
+		this.#more().showsReadiness = attempt;
 		// Before the successor's own steps (`ending` settles after `ended`): its own checks show what it waits for then.
 		void ended.then(() => {
-			if (this.#showsReadiness === attempt) this.#showsReadiness = undefined;
+			if (this.#extras?.showsReadiness === attempt) this.#extras.showsReadiness = undefined;
 		});
 		readiness.start();
 		void this.#run(attempt, ending);
 		void Promise.all([ended, attempt.checked]).then(() => {
 			old.releaseReferences();
 			readiness.release();
-			if (this.#readiness === readiness) this.#readiness = undefined;
+			if (this.#extras?.readiness === readiness) this.#extras.readiness = undefined;
 		});
 	}
 
 	/** What a restart's readiness finds now: a failed request the successor waits for, if any (the report's). */
 	get readinessCause(): FailureCause | undefined {
-		return this.#readiness?.cause;
+		return this.#extras?.readiness?.cause;
 	}
 
 	/**
@@ -1227,7 +1302,7 @@ export class ChordObject implements Target {
 	 */
 	#readinessShown(attempt: Attempt, cause: FailureCause | undefined): void {
 		const state = this.#state;
-		if (this.#showsReadiness !== attempt || state.kind !== "activating" || state.attempt !== attempt) return;
+		if (this.#extras?.showsReadiness !== attempt || state.kind !== "activating" || state.attempt !== attempt) return;
 		const shown: RefState = cause === undefined ? LOADING : { kind: "failed", cause, retryAt: undefined };
 		if (sameState(state.shown, shown)) return;
 		this.#state = { kind: "activating", attempt, shown };
@@ -1290,12 +1365,31 @@ export class ChordObject implements Target {
 
 	/** The `released` error of an attempt a reload replaced. */
 	#reloaded(): ChordError {
-		return new ChordError({ code: "released", reason: "ended", message: `${this.label}: replaced by a reload` });
+		return stackless({ code: "released", reason: "ended", message: `${this.label}: replaced by a reload` });
+	}
+
+	/** Its extras, made by the first feature that needs one (all of them start undefined). */
+	#more(): ObjectExtras {
+		this.#extras ??= {
+			jobs: undefined,
+			firstOutcome: undefined,
+			flush: undefined,
+			wakes: undefined,
+			old: undefined,
+			kept: undefined,
+			readiness: undefined,
+			showsReadiness: undefined,
+			startSuccessor: undefined,
+			gateWaits: undefined,
+			changed: undefined,
+			lists: undefined,
+		};
+		return this.#extras;
 	}
 
 	/** The `released` error of this object. */
 	ended(): ChordError {
-		return new ChordError({ code: "released", reason: "ended", message: `${this.label}: ended` });
+		return stackless({ code: "released", reason: "ended", message: `${this.label}: ended` });
 	}
 
 	/** Runs `attempt`'s activation once `ending` (its predecessors' teardowns, if any) finished; takes its outcome. */
@@ -1322,22 +1416,25 @@ export class ChordObject implements Target {
 	}
 
 	#wentLive(attempt: Attempt): void {
-		if (this.#wakes !== undefined) this.#wakes.during = undefined;
+		if (this.#extras?.wakes !== undefined) this.#extras.wakes.during = undefined;
 		// Before the new instance is shown: holders of a version its provider does not bind leave with their last values,
 		// which their references take from the instance shown so far.
-		const unbound = this.#unbindUnfit(attempt);
+		const unbound = this.#unbindUnfit((holder) => this.#unfit(holder));
 		this.#state = { kind: "live", attempt };
+		this.#granted = attempt.granted;
 		this.#exposed = attempt;
 		this.#following = true;
 		if (!this.#allowed) {
 			// An admitted object's first allow, or its first since a denial: presence lists its holders from now on (§19).
 			this.#allowed = true;
-			for (const holder of this.#holders) this.host.referenced(this, holder, this.#context);
+			this.#holders.forEach((holder) => {
+				this.host.referenced(this, holder, this.#context);
+			});
 		}
 		const { contributions } = attempt;
 		// A restart's kept contributions leave in the batch the new ones enter (F-c), so no reader sees a gap.
-		const leaving = this.#kept?.contributions ?? NO_CONTRIBUTIONS;
-		this.#kept = undefined;
+		const leaving = this.#extras?.kept?.contributions ?? NO_CONTRIBUTIONS;
+		if (this.#extras !== undefined) this.#extras.kept = undefined;
 		// In the registries' tables before anyone sees it live (a getter released now reads them recomposed).
 		if (contributions.length > 0 || leaving.length > 0) {
 			this.host.batch.within(() => {
@@ -1363,28 +1460,29 @@ export class ChordObject implements Target {
 	 * runs of the jobs it declares are retried.
 	 */
 	#takeJobs(attempt: Attempt): void {
-		if (this.#jobs.size === 0) return;
+		const jobs = this.#extras?.jobs;
+		if (jobs === undefined || jobs.size === 0) return;
 		const reloaded = attempt.reloadStarted;
-		for (const [name, records] of this.#jobs) {
+		for (const [name, records] of jobs) {
 			if (!attempt.declaresJob(name)) records.undeclare();
 			else if (reloaded) void records.retryBlocked(this.#context);
 		}
 	}
 
 	/**
-	 * Its holders whose version `attempt`'s provider (going live) does not bind (a reload dropped it, slice 7b §6), or
-	 * of which it refuses a member (`contract_mismatch`), leave it: they wait unbound `version` (`failed { waiting }`),
+	 * Its holders `check` finds unfit (`#unfit`: a version its provider does not bind, a reload dropped it, slice 7b §6,
+	 * or of which it refuses a member, `contract_mismatch`) leave it: they wait unbound `version` (`failed { waiting }`),
 	 * references with their last values, until a publication serves their version again. The object and its other
 	 * holders stay.
 	 */
-	#unbindUnfit(attempt: Attempt): boolean {
+	#unbindUnfit(check: (holder: Holder) => ChordError | undefined): boolean {
 		let unfit: [Holder, ChordError][] | undefined;
-		for (const holder of this.#holders) {
-			const error = this.#unfit(holder, attempt);
-			if (error === undefined) continue;
+		this.#holders.forEach((holder) => {
+			const error = check(holder);
+			if (error === undefined) return;
 			unfit ??= [];
 			unfit.push([holder, error]);
-		}
+		});
 		if (unfit === undefined) return false;
 		for (const [holder] of unfit) this.#holders.delete(holder);
 		this.host.unreferenced(
@@ -1398,20 +1496,28 @@ export class ChordObject implements Target {
 
 	/** Whether a holder of `version` holds it. */
 	#heldAt(version: number): boolean {
-		for (const holder of this.#holders) if (holder.contract.version === version) return true;
-		return false;
+		return this.#holders.some((holder) => holder.contract.version === version);
 	}
 
 	/**
-	 * Why `holder` cannot bind to `attempt` (live): its version is not one the provider binds, or the provider refuses a
-	 * member of it (`contract_mismatch`); `undefined` when it binds.
+	 * Why `holder` cannot bind to its served provider: its version is not one the provider binds, or the provider
+	 * refuses a member of it (`contract_mismatch`); `undefined` when it binds.
 	 */
-	#unfit(holder: Holder, attempt: Attempt): ChordError | undefined {
+	#unfit(holder: Holder): ChordError | undefined {
 		const { contract, provider } = this.served;
 		const { version, fingerprint } = holder.contract;
-		if (version === contract.version && fingerprint === contract.fingerprint) return undefined;
-		if (binds(provider, version, fingerprint)) return refusal(this.served, version, attempt.variant);
+		if (binds(provider, version, fingerprint)) return refusal(this.served, version);
 		return new ChordError({ code: "contract_mismatch", message: `${contract.name} v${version} is not served here` });
+	}
+
+	/**
+	 * The member of `holder`'s older version that its served provider, binding it, refuses (`contract_mismatch`); none
+	 * while a restart's open old attempt serves that version (old work's getters use it, as consumers of it do).
+	 */
+	#refusedBy(holder: Holder): ChordError | undefined {
+		const { version, fingerprint } = holder.contract;
+		if (!binds(this.served.provider, version, fingerprint) || this.oldServes(version, fingerprint)) return undefined;
+		return refusal(this.served, version);
 	}
 
 	/**
@@ -1429,8 +1535,8 @@ export class ChordObject implements Target {
 	 */
 	#failed(attempt: Attempt, cause: FailureCause): void {
 		this.#dropKept();
-		const wokenBy = this.#wakes?.during === attempt;
-		if (this.#wakes !== undefined) this.#wakes.during = undefined;
+		const wokenBy = this.#extras?.wakes?.during === attempt;
+		if (this.#extras?.wakes !== undefined) this.#extras.wakes.during = undefined;
 		if (cause.kind === "transient") this.host.backoff.failed(this.identity);
 		else this.host.backoff.delete(this.identity);
 		const failure: Failed = { kind: "failed", cause, retryAt: this.host.backoff.until(this.identity) };
@@ -1445,6 +1551,9 @@ export class ChordObject implements Target {
 		});
 		this.host.ending(this.identity, this.#reported(closing));
 		this.host.report({ kind: "activation_failed", object: this.label, failure: cause });
+		// A holder of a version its provider refuses a member waits for a publication, as a fresh hold does (`hold`); one
+		// of a version it no longer binds sees the failure, as on main.
+		this.#unbindUnfit((holder) => this.#refusedBy(holder));
 		this.#notify();
 		this.#settleFirstOutcome();
 		// Job runs kept it while it activated; failed, they keep it no longer.
@@ -1460,7 +1569,7 @@ export class ChordObject implements Target {
 	#wake(): void {
 		const state = this.#state;
 		// Called by its wakes only.
-		const wakes = this.#wakes!;
+		const wakes = this.#extras!.wakes!;
 		if (state.kind === "activating") {
 			// While parked its dependencies decide (dependency model §3.8).
 			if (!state.attempt.isParked) wakes.during = state.attempt;
@@ -1478,7 +1587,7 @@ export class ChordObject implements Target {
 		const { contributions } = attempt;
 		if (contributions.length === 0) return;
 		const { batch } = this.host;
-		const wakes = this.#wakes;
+		const wakes = this.#extras?.wakes;
 		batch.within(() => {
 			if (wakes !== undefined) {
 				wakes.leaving = true;
@@ -1496,7 +1605,7 @@ export class ChordObject implements Target {
 	 * reference made later never attached to it: it takes nothing from it).
 	 */
 	#stopFollowing(attempt: Attempt): void {
-		if (this.#old === attempt) this.#old = undefined;
+		if (this.#extras?.old === attempt) this.#extras.old = undefined;
 		if (this.#exposed !== attempt || !this.#following) return;
 		this.#following = false;
 		this.#notify();
@@ -1507,7 +1616,7 @@ export class ChordObject implements Target {
 	/** Tells every holder that the state changed: references first follow what it shows now (`followed`). */
 	#notify(): void {
 		this.#wakeGate();
-		const holders = [...this.#holders];
+		const holders = this.#holders.snapshot();
 		// In one batch when some reference's members move (one frame each, a diamond over several sees one change); no
 		// commit at all for references that used none (activation churn).
 		const retarget = (): void => {
@@ -1520,8 +1629,8 @@ export class ChordObject implements Target {
 
 	/** Calls waiting at the gate check the state again. */
 	#wakeGate(): void {
-		this.#changed?.resolve();
-		this.#changed = undefined;
+		this.#extras?.changed?.resolve();
+		if (this.#extras !== undefined) this.#extras.changed = undefined;
 	}
 
 	/**
@@ -1536,26 +1645,31 @@ export class ChordObject implements Target {
 		// A restart's teardown (its old attempt's end) finishes before this one (they share its documents).
 		const previous = this.host.endingOf(this.identity);
 		// Its ending rejects the callers of a restart's old attempt too, at once; that attempt's end closes it.
-		this.#old?.seal(error);
+		this.#extras?.old?.seal(error);
 		this.#dropKept();
-		this.#readiness?.release();
-		this.#readiness = undefined;
-		this.#showsReadiness = undefined;
-		this.#startSuccessor = undefined;
+		this.#extras?.readiness?.release();
+		if (this.#extras !== undefined) this.#extras.readiness = undefined;
+		if (this.#extras !== undefined) this.#extras.showsReadiness = undefined;
+		if (this.#extras !== undefined) this.#extras.startSuccessor = undefined;
 		this.#state = { kind: "ended", ended: { kind: "ended", error } };
 		this.#wakeGate();
-		for (const records of this.#jobs.values()) records.end(error);
-		if (this.#flush !== undefined) clearTimeout(this.#flush.timer);
-		this.#flush = undefined;
+		for (const records of this.#extras?.jobs?.values() ?? NO_JOBS) records.end(error);
+		const flush = this.#extras?.flush;
+		if (flush !== undefined) clearTimeout(flush.timer);
+		if (this.#extras !== undefined) this.#extras.flush = undefined;
 		this.documents.seal();
 		this.#stopLingering();
-		this.#wakes?.stop();
+		this.#extras?.wakes?.stop();
 		this.host.forget(this);
 		// An object of the start barrier's cohort that ends before its first outcome settles it as ended.
 		this.#settleFirstOutcome();
 		// Sealed: its instance stops changing; its references take their last values from it.
 		this.#following = false;
-		const holders = [...this.#holders];
+		// Its attempt's contexts abort before its references end: a call's context links both, and a transaction its
+		// end cancels then finds the attempt's end as what aborted it, not its caller's (ERNDL-1190). The seal below
+		// finishes the attempt's end.
+		if (state.kind === "activating" || state.kind === "live") state.attempt.abandon({ kind: "ended", error });
+		const holders = this.#holders.snapshot();
 		this.#holders.clear();
 		this.host.unreferenced(this, holders, this.#context);
 		// Its type removed: its references wait with their last values, which they take from the instance shown (still
@@ -1629,12 +1743,14 @@ export class ChordObject implements Target {
 			teardown.attempt.releaseReferences();
 		}
 		// Last, as its references: nothing of it is admitted any more.
-		for (const attempt of this.#admissions?.splice(0) ?? []) attempt.releaseAdmission();
+		const admissions = this.#admissions ?? NO_ITEMS;
+		this.#admissions = undefined;
+		for (const attempt of admissions) attempt.releaseAdmission();
 		await this.documents.settled();
 		this.documents.end();
 		this.host.store?.claims.release(this);
-		for (const records of this.#jobs.values()) records.drop();
-		this.#jobs.clear();
+		for (const records of this.#extras?.jobs?.values() ?? NO_JOBS) records.drop();
+		if (this.#extras !== undefined) this.#extras.jobs = undefined;
 		return failures;
 	}
 
@@ -1661,9 +1777,11 @@ export class ChordObject implements Target {
 	#settleFirstOutcome(): void {
 		if (this.#hasFirstOutcome) return;
 		this.#hasFirstOutcome = true;
-		this.#firstOutcome?.resolve();
-		this.#firstOutcome = undefined;
-		for (const holder of this.#holders) holder.dependent?.dependencyMoved();
+		this.#extras?.firstOutcome?.resolve();
+		if (this.#extras !== undefined) this.#extras.firstOutcome = undefined;
+		this.#holders.forEach((holder) => {
+			holder.dependent?.dependencyMoved();
+		});
 	}
 
 	/** The chain of waits from this activation to `target` (see `Target`), through its parked attempt's dependencies. */

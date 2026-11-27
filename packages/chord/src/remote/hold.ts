@@ -13,7 +13,14 @@
 
 import type { TelemetryContext } from "@earendil-works/pi-telemetry";
 import type { Context } from "../context/index.ts";
-import { type VariantData, type VariantNames, variantNames, variantOrder, variantsAt } from "../contracts/internal.ts";
+import {
+	grantedMembers,
+	grantIndexes,
+	type MemberNames,
+	type MembersData,
+	memberOrder,
+	versionAt,
+} from "../contracts/internal.ts";
 import { ChordError, type FailureCause, isChordError, type Principal } from "../data/index.ts";
 import { asChordError } from "../data/internal.ts";
 import { type Encoder, encoder, type Op, PendingOps } from "../delta/index.ts";
@@ -40,12 +47,14 @@ import {
 	type Message,
 	NO_RETIRED,
 	oversized,
-	parsePart,
+	readUtf8,
 	type StateEntry,
 	wireError,
 } from "../link/internal.ts";
+import { appended, NO_ITEMS } from "../lists.ts";
 import { type DeriveSource, Source, type Subscriber } from "../state/internal.ts";
 import { chordMetrics } from "../telemetry.ts";
+import type { WatchCall } from "../watch.ts";
 import type { HostLink } from "./host-link.ts";
 import type { ProviderSide } from "./provider.ts";
 import { RelayedHold } from "./relay.ts";
@@ -61,23 +70,10 @@ type HoldMessage = Extract<Message, { readonly kind: "hold" }>;
 export type HoldRequest = Omit<HoldMessage, "kind" | "origin" | "hold" | "principal" | "incarnation">;
 
 /**
- * A state member a bound hold follows: its index in the bound version, its source and subscription (which feeds this
- * record), its own encoder (R1, path interning) and the ops waiting for a slot of the window.
- */
-type Followed = {
-	readonly index: number;
-	/** Its source (subscribed when it changes, a constant's never). */
-	readonly source: DeriveSource;
-	readonly subscriber: Subscriber;
-	readonly encoder: Encoder;
-	readonly pending: PendingOps;
-};
-
-/**
  * Where a hold stands: `unplaced` in the unbound index until the host's publication places it; `pending` until its
  * object is live (the activation, parking and retries; `told`: the failure its consumer was told, so the next attempt
  * is announced with `loading`); `binding` while its object is live and its `bound` waits for a slot; `bound` with the
- * object's variant and the members it follows.
+ * members its caller was granted and the members it follows.
  */
 type HoldState =
 	| { readonly kind: "unplaced"; readonly request: HoldRequest }
@@ -85,12 +81,12 @@ type HoldState =
 	| { readonly kind: "binding" }
 	| {
 			readonly kind: "bound";
-			/** The bound variant's data at the hold's version. */
-			readonly variant: VariantData;
-			/** The bound version's names of the variant, which the wire's indexes point into. */
-			readonly names: VariantNames;
+			/** The members granted to its caller, at the hold's version. */
+			readonly members: MembersData;
+			/** Their names, which the wire's indexes point into. */
+			readonly names: MemberNames;
 			/** The members it follows, in the order they were subscribed. */
-			readonly followed: Followed[];
+			followed: readonly Followed[];
 			/** The instance it was bound to: it follows it on while it still changes (a restart's open old attempt). */
 			readonly instance: unknown;
 	  }
@@ -106,18 +102,14 @@ type HoldState =
 type Bound = Extract<HoldState, { readonly kind: "bound" }>;
 
 /**
- * What calls need of a binding: its variant's data at the hold's version and the names the wire's indexes point into.
- * Only contract data: kept after an unbind, it keeps no instance and no source.
- */
-type BoundNames = { readonly variant: VariantData; readonly names: VariantNames };
-
-/**
- * What a call is decoded by: the names of a binding (while the hold rebinds after a `loading` its object's gate takes
- * the call by name, design §22), or the failure its consumer was told (the call is refused with it: sent before the
- * consumer learnt of the failure, its indexes are of a binding that is gone).
+ * What a call is decoded by: the names of a binding, the members granted at the hold's version and the names the
+ * wire's indexes point into (while the hold rebinds after a `loading` its object's gate takes the call by name, design
+ * §22; only contract data: kept after an unbind, it keeps no instance and no source), or the failure its consumer was
+ * told (the call is refused with it: sent before the consumer learnt of the failure, its indexes are of a binding that
+ * is gone).
  */
 type Decoding =
-	| { readonly kind: "names"; readonly bound: BoundNames }
+	| { readonly kind: "names"; readonly members: MembersData; readonly names: MemberNames }
 	| { readonly kind: "refused"; readonly error: ChordError };
 
 /**
@@ -126,7 +118,7 @@ type Decoding =
  */
 type Fence = { readonly until: number; readonly before: Decoding };
 
-/** No event taps: a variant without event members, a binding no longer shown live. */
+/** No event taps: a binding without event members, or no longer shown live. */
 const NO_TAPS: readonly (readonly [EventNode, Tap])[] = [];
 
 const PENDING: HoldState = { kind: "pending" };
@@ -143,12 +135,7 @@ const BINDING: HoldState = { kind: "binding" };
  * end, bound or not.
  */
 export class Hold implements Holder, UnboundRequest {
-	readonly kind = "served";
 	readonly id: number;
-	/** A hold is declared by no object on this host. */
-	readonly dependent = undefined;
-	/** Presence lists show every hold. */
-	readonly listed = true;
 	/** Whom the hold acts for: its calls run as it, with its origin's incarnation. */
 	readonly caller: Caller;
 	/** The limits per part of its params and its calls' arguments: its link's, the decoded one smaller when stamped (Q2). */
@@ -167,13 +154,16 @@ export class Hold implements Holder, UnboundRequest {
 	/**
 	 * One fence per `bound` its consumer has not acknowledged, oldest first: A, B, C sent before the first `ack` are two
 	 * fences, and a call sent between B's and C's application is decoded by B's names. Each goes with the `ack` of
-	 * its `bound` (`acknowledged`).
+	 * its `bound` (`acknowledged`). Made by the first rebinding, dropped with the last fence: most holds bind once.
 	 */
-	readonly #fences: Fence[] = [];
+	#fences: Fence[] | undefined;
 	/** The members the current batch changed, with their ops, in order. */
-	#changes: (readonly [Followed, readonly Op[]])[] = [];
-	/** The members that failed since the last message that carried this hold. */
-	#failed: FailedMember[] = [];
+	#changes: readonly (readonly [Followed, readonly Op[]])[] = NO_ITEMS;
+	/**
+	 * The members that failed since the last message that carried this hold: the shared empty list while none did (most
+	 * holds never have one), built by `appended`.
+	 */
+	#failed: readonly FailedMember[] = NO_ITEMS;
 	/** The members whose document was retired since the last message that carried this hold (ORed while it waits). */
 	#retired: readonly number[] = NO_RETIRED;
 	#touched = false;
@@ -181,7 +171,7 @@ export class Hold implements Holder, UnboundRequest {
 	#counted = true;
 	/**
 	 * Its binding's taps on its instance's event members: their events go into the event flush's message; the shared
-	 * empty list for a variant without event members, and once its object no longer shows it live (state may still
+	 * empty list for a binding without event members, and once its object no longer shows it live (state may still
 	 * follow its instance then).
 	 */
 	#taps: readonly (readonly [EventNode, Tap])[] = NO_TAPS;
@@ -193,6 +183,22 @@ export class Hold implements Holder, UnboundRequest {
 		this.limits = limits;
 		provider.link.host.count("references", 1);
 		provider.link.host.metrics.upDownCounter("chord.holds.active").add(1);
+	}
+
+	// Constants of every hold are getters on the class, not fields of each (8 B a field per hold).
+
+	get kind(): "served" {
+		return "served";
+	}
+
+	/** A hold is declared by no object on this host. */
+	get dependent(): undefined {
+		return undefined;
+	}
+
+	/** Presence lists show every hold. */
+	get listed(): true {
+		return true;
 	}
 
 	/** Whether the hold is bound: its members' changes are sent. */
@@ -222,7 +228,7 @@ export class Hold implements Holder, UnboundRequest {
 
 	/**
 	 * What a call arriving now is decoded by: what its consumer had applied when it sent it, which is what the oldest
-	 * `bound` it has not acknowledged replaced (another variant's indexes name other methods), else the latest.
+	 * `bound` it has not acknowledged replaced (another grant's indexes name other methods), else the latest.
 	 */
 	#decoding(): Decoding | undefined {
 		const fences = this.#acknowledge();
@@ -241,9 +247,11 @@ export class Hold implements Holder, UnboundRequest {
 	 * Drops the fences its consumer acknowledged (acks arrive in order: they are the first ones) and returns the rest:
 	 * a hold keeps one fence per `bound` not acknowledged yet, never one per rebinding of its life.
 	 */
-	#acknowledge(): Fence[] {
+	#acknowledge(): readonly Fence[] {
 		const fences = this.#fences;
+		if (fences === undefined) return NO_ITEMS;
 		while (fences.length > 0 && this.#provider.acknowledged(fences[0]!.until)) fences.shift();
+		if (fences.length === 0) this.#fences = undefined;
 		return fences;
 	}
 
@@ -276,6 +284,7 @@ export class Hold implements Holder, UnboundRequest {
 			return;
 		}
 		let served: Serving;
+		let text: string;
 		try {
 			const oversize = oversized(request.params, link.limits.part);
 			if (oversize !== undefined) throw oversize;
@@ -288,7 +297,10 @@ export class Hold implements Holder, UnboundRequest {
 			}
 			let params: unknown;
 			try {
-				params = parsePart(link.openPart(request.params, this.limits, link.context));
+				// Read as text first (what `parsePart` does): the hold keeps it as its params.
+				const json = link.openPart(request.params, this.limits, link.context);
+				text = typeof json === "string" ? json : readUtf8(json);
+				params = JSON.parse(text);
 			} catch (error) {
 				// Past its limits: the hold's \`too_large/part\`. No JSON: a protocol error, reported, and the link closes.
 				if (isChordError(error, "too_large")) throw error;
@@ -305,8 +317,21 @@ export class Hold implements Holder, UnboundRequest {
 			this.#refuse(request, served.cause);
 			return;
 		}
-		this.#request = owned(request);
 		const { object } = served;
+		// Its params as the text they parsed from (strict UTF-8): the same bytes on the wire when it is relayed or placed
+		// again, and owned, no view of the message they came in (which the link's buffers may hold). A copy of the bytes
+		// kept 232 B per hold for a few bytes of JSON. Its type name and fingerprint are its object's contract's strings
+		// where they are equal (the same text: only who owns the memory changes, 64 B per hold), else its own: an object
+		// may still have its old contract while a reload publishes a new one (serving checked the new one).
+		const { contract } = object.served;
+		const { type, fingerprint } = request;
+		// Spread as `owned` did: every field of the request it came with, in its order.
+		this.#request = {
+			...request,
+			type: type === contract.name ? contract.name : type,
+			fingerprint: fingerprint === contract.fingerprint ? contract.fingerprint : fingerprint,
+			params: text,
+		};
 		this.#object = object;
 		object.hold(this);
 		this.moved();
@@ -361,11 +386,11 @@ export class Hold implements Holder, UnboundRequest {
 
 	/** Member `followed` failed with `error`: its failure waits to be sent, replacing one still waiting. */
 	#memberFailed(followed: Followed, error: unknown): void {
-		followed.pending.take();
+		followed.pending?.take();
 		const failure = { member: followed.index, error: wireError(error) };
 		const at = this.#failed.findIndex(({ member }) => member === followed.index);
 		// A new list when one is replaced (rare): a list handed to an entry is never written to.
-		if (at === -1) this.#failed.push(failure);
+		if (at === -1) this.#failed = appended(this.#failed, failure);
 		else this.#failed = this.#failed.map((pending, i) => (i === at ? failure : pending));
 	}
 
@@ -386,8 +411,8 @@ export class Hold implements Holder, UnboundRequest {
 	#unbind(cause: FailureCause | undefined, object: ChordObject): void {
 		const state = this.#state;
 		if (state.kind === "bound") this.#unfollow(state);
-		this.#changes = [];
-		this.#failed = [];
+		this.#changes = NO_ITEMS;
+		this.#failed = NO_ITEMS;
 		this.#retired = NO_RETIRED;
 		this.#touched = false;
 		if (cause !== undefined) {
@@ -455,16 +480,16 @@ export class Hold implements Holder, UnboundRequest {
 	}
 
 	/**
-	 * The method at `index` of the bound variant (while it rebinds, of the names its consumer still has: its object answers
-	 * by name) and whether its result carries byte segments (its schema has a `bytes()` leaf). Throws on an index outside
-	 * the variant (a protocol error); a hold that is not callable has none.
+	 * The method at `index` of the binding's members (while it rebinds, of the names its consumer still has: its object
+	 * answers by name) and whether its result carries byte segments (its schema has a `bytes()` leaf). Throws on an index
+	 * outside them (a protocol error); a hold that is not callable has none.
 	 */
 	method(index: number): { readonly name: string; readonly resultBytes: boolean } {
 		const decoding = this.#decoding();
-		const bound = decoding?.kind === "names" ? decoding.bound : undefined;
+		const bound = decoding?.kind === "names" ? decoding : undefined;
 		const name = bound?.names.methods[index];
 		if (name === undefined) throw new Error(`hold ${this.id}: no method ${index}`);
-		return { name, resultBytes: bound!.variant.methods.get(name)!.result.bytes };
+		return { name, resultBytes: bound!.members.methods.get(name)!.result.bytes };
 	}
 
 	/**
@@ -484,7 +509,9 @@ export class Hold implements Holder, UnboundRequest {
 		const failed: FailedMember[] = [];
 		const { version } = this.contract;
 		const current = version === contract.version;
-		for (const [index, member] of state.names.state.entries()) {
+		const names = state.names.state;
+		for (let index = 0; index < names.length; index++) {
+			const member = names[index]!;
 			// An older version's members are its instance's mapping (its refusals unbound it before: `ChordObject`).
 			const source = current ? object.stateMembers.get(member)! : object.liveMember(member, version);
 			let value: JsonValue;
@@ -506,13 +533,14 @@ export class Hold implements Holder, UnboundRequest {
 			// A constant never changes: nothing to follow.
 			if (source instanceof Source) this.#follow(state, index, source);
 		}
-		// A variant without event members taps nothing (no cost per binding for contracts without events).
+		// A binding without event members taps nothing (no cost per binding for contracts without events).
 		if (state.names.events.length > 0) this.#tapEvents(state, instance, version);
-		this.#changes = [];
-		this.#failed = [];
+		this.#changes = NO_ITEMS;
+		this.#failed = NO_ITEMS;
 		this.#retired = NO_RETIRED;
 		chordMetrics(context.telemetry.metrics).counter("chord.link.encodes").add(1);
-		return { hold: this.id, variant: variantOrder(contract).indexOf(instance.variant!), members, failed };
+		const granted = grantIndexes(versionAt(contract, version), instance.granted);
+		return { hold: this.id, granted, members, failed };
 	}
 
 	/**
@@ -521,16 +549,19 @@ export class Hold implements Holder, UnboundRequest {
 	 */
 	entry(context: Context): StateEntry {
 		const { link } = this.#provider;
-		const members = this.#take().map(([{ index, encoder }, ops]) => ({
-			member: index,
-			ops: link.part(jsonPart(encoder.encode(ops)), context),
+		const members = this.#take().map(([followed, ops]) => ({
+			member: followed.index,
+			ops: link.part(jsonPart(followed.encoder.encode(ops)), context),
 		}));
 		return this.#entry(members, context);
 	}
 
 	/** The window is full: this batch's ops join the members' pending queues (raw, never mutated). */
 	queue(): void {
-		for (const [{ pending }, ops] of this.#take()) pending.push(ops);
+		for (const [followed, ops] of this.#take()) {
+			followed.pending ??= new PendingOps();
+			followed.pending.push(ops);
+		}
 	}
 
 	/**
@@ -541,11 +572,14 @@ export class Hold implements Holder, UnboundRequest {
 		const { link } = this.#provider;
 		const members: StateEntry["members"][number][] = [];
 		// Only a bound hold has pending ops.
-		for (const { index, source, encoder, pending } of (this.#state as Bound).followed) {
-			if (pending.size === 0) continue;
+		for (const followed of (this.#state as Bound).followed) {
+			const { index, source, pending } = followed;
+			if (pending === undefined || pending.size === 0) continue;
 			const taken = pending.take();
 			const ops = taken.kind === "replace" ? [["r", source.value] as const] : taken.ops;
-			if (ops.length > 0) members.push({ member: index, ops: link.part(jsonPart(encoder.encode(ops)), context) });
+			if (ops.length > 0) {
+				members.push({ member: index, ops: link.part(jsonPart(followed.encoder.encode(ops)), context) });
+			}
 		}
 		return this.#entry(members, context);
 	}
@@ -587,20 +621,21 @@ export class Hold implements Holder, UnboundRequest {
 	}
 
 	/**
-	 * The binding: its variant and names at the hold's version, with no member followed yet. What its consumer's calls
-	 * were decoded by so far is fenced until it acknowledged this `bound`, the next of this host's own messages.
+	 * The binding: the members its caller was granted and their names at the hold's version, with no member followed yet.
+	 * What its consumer's calls were decoded by so far is fenced until it acknowledged this `bound`, the next of this
+	 * host's own messages.
 	 */
 	#bindTo(instance: Attempt): Bound {
-		// A live remote object's instance has its variant.
-		const variant = variantsAt(instance.served.contract, this.contract.version).get(instance.variant!)!;
-		const names = variantNames(variant);
-		const state: Bound = { kind: "bound", variant, names, followed: [], instance };
+		const members = grantedMembers(versionAt(instance.served.contract, this.contract.version), instance.granted);
+		const names = memberOrder(members);
+		const state: Bound = { kind: "bound", members, names, followed: NO_ITEMS, instance };
 		const latest = this.#latest;
 		if (latest !== undefined) {
+			this.#fences ??= [];
 			this.#fences.push({ until: this.#provider.nextOwn, before: latest });
 			this.#provider.fenced(this);
 		}
-		this.#latest = { kind: "names", bound: { variant, names } };
+		this.#latest = { kind: "names", members, names };
 		this.#state = state;
 		return state;
 	}
@@ -618,7 +653,7 @@ export class Hold implements Holder, UnboundRequest {
 		this.#taps = NO_TAPS;
 	}
 
-	/** Taps the event members of `state`'s variant (it has some) on `instance` at `version`, from the counter now. */
+	/** Taps the event members of binding `state` (it has some) on `instance` at `version`, from the counter now. */
 	#tapEvents(state: Bound, instance: Attempt, version: number): void {
 		const names = state.names.events;
 		const boundAt = this.#provider.link.host.events.counter;
@@ -640,7 +675,9 @@ export class Hold implements Holder, UnboundRequest {
 	retarget(): void {}
 
 	/** It moves nothing in `retarget`. */
-	readonly following = false;
+	get following(): false {
+		return false;
+	}
 
 	/**
 	 * Its object left it (slice 7b §6): its type was removed (`not_served`) or its provider no longer binds the hold's
@@ -651,8 +688,8 @@ export class Hold implements Holder, UnboundRequest {
 		const state = this.#state;
 		if (state.kind === "released" || this.#object === undefined) return;
 		if (state.kind === "bound") this.#unfollow(state);
-		this.#changes = [];
-		this.#failed = [];
+		this.#changes = NO_ITEMS;
+		this.#failed = NO_ITEMS;
 		this.#retired = NO_RETIRED;
 		this.#touched = false;
 		this.#provider.unbound(this, removal.cause.error);
@@ -667,48 +704,43 @@ export class Hold implements Holder, UnboundRequest {
 	 * consumer stalls); the value after it (a root replacement) replaces the failure. A retirement waits for a value.
 	 */
 	#follow(state: Bound, index: number, source: DeriveSource): void {
-		const followed: Followed = {
-			index,
-			source,
-			subscriber: {
-				advance: (call) => {
-					this.#touch();
-					if (call.kind === "failed") {
-						this.#memberFailed(followed, call.error);
-						return;
-					}
-					this.#memberHealed(index);
-					const { ops, retired } = call;
-					// A retired derive's frame may carry no ops (rule 21): only the flag travels.
-					if (ops.length > 0) this.#changes.push([followed, ops]);
-					// A new list per retirement (rare): the shared empty one is never written to.
-					if (retired && !this.#retired.includes(index)) this.#retired = [...this.#retired, index];
-				},
-				// The member's source ended with its object, which ends this hold.
-				end: () => {},
-				endAfterDelivery: () => {},
-			},
-			encoder: encoder(),
-			pending: new PendingOps(),
-		};
+		const followed = new Followed(this, index, source);
 		// A constant never changes: nothing to subscribe to.
-		if (source instanceof Source) source.subscribe(followed.subscriber);
-		state.followed.push(followed);
+		if (source instanceof Source) source.subscribe(followed);
+		state.followed = appended(state.followed, followed);
+	}
+
+	/** A call of followed member `followed`'s source (its subscription): fed into this hold's batch (`#follow`). */
+	advanced(followed: Followed, call: WatchCall<JsonValue>): void {
+		this.#touch();
+		if (call.kind === "failed") {
+			this.#memberFailed(followed, call.error);
+			return;
+		}
+		const { index } = followed;
+		this.#memberHealed(index);
+		const { ops, retired } = call;
+		// A retired derive's frame may carry no ops (rule 21): only the flag travels.
+		if (ops.length > 0) this.#changes = appended(this.#changes, [followed, ops]);
+		// A new list per retirement (rare): the shared empty one is never written to.
+		if (retired && !this.#retired.includes(index)) this.#retired = [...this.#retired, index];
 	}
 
 	/** Takes the current batch's changes; the hold is untouched again. */
-	#take(): (readonly [Followed, readonly Op[]])[] {
+	#take(): readonly (readonly [Followed, readonly Op[]])[] {
 		const changes = this.#changes;
-		this.#changes = [];
+		this.#changes = NO_ITEMS;
 		this.#touched = false;
 		return changes;
 	}
 
 	/** A state entry with `members` and the failures and retirements since the last one; counts one encode. */
 	#entry(members: StateEntry["members"], context: Context): StateEntry {
-		const failed = this.#failed;
+		// A message's lists are its own (`Message` types them mutable): a fresh empty list, as before, or the hold's own
+		// list built by `appended`, handed off here and never written again (the hold starts from the shared one).
+		const failed = this.#failed.length === 0 ? [] : (this.#failed as FailedMember[]);
 		let retired = this.#retired;
-		this.#failed = [];
+		this.#failed = NO_ITEMS;
 		this.#retired = NO_RETIRED;
 		if (retired.length > 0 && failed.length > 0) {
 			// A failed member's retirement travels with its next value, never with its failure.
@@ -746,7 +778,44 @@ export class Hold implements Holder, UnboundRequest {
 
 /** Stops following every member of a bound hold. */
 function unfollow(state: Bound): void {
-	for (const { source, subscriber } of state.followed) if (source instanceof Source) source.unsubscribe(subscriber);
+	for (const followed of state.followed) if (followed.source instanceof Source) followed.source.unsubscribe(followed);
+}
+
+/**
+ * A state member a bound hold follows: its index in the bound version, its source, and the subscriber of its source
+ * itself (its calls go to its hold: `Hold.advanced`); its own encoder (R1, path interning) and the ops waiting for a
+ * slot of the window, each made by its first use (a fresh encoder has no state; most members never wait). A followed
+ * member cost a subscriber record with three closures, an encoder (a set and a map) and a queue up front, about 0.5 KiB.
+ */
+class Followed implements Subscriber {
+	readonly index: number;
+	/** Its source (subscribed when it changes, a constant's never). */
+	readonly source: DeriveSource;
+	/** The ops waiting for a slot of the window, once some waited. */
+	pending: PendingOps | undefined;
+	readonly #hold: Hold;
+	#encoder: Encoder | undefined;
+
+	constructor(hold: Hold, index: number, source: DeriveSource) {
+		this.#hold = hold;
+		this.index = index;
+		this.source = source;
+	}
+
+	/** Its encoder, made by its first encode. */
+	get encoder(): Encoder {
+		this.#encoder ??= encoder();
+		return this.#encoder;
+	}
+
+	advance(call: WatchCall<JsonValue>): void {
+		this.#hold.advanced(this, call);
+	}
+
+	/** The member's source ended with its object, which ends this hold. */
+	end(): void {}
+
+	endAfterDelivery(): void {}
 }
 
 /** `request` with its params owned, not a view of the message they came in (which the link's buffers may hold). */

@@ -27,7 +27,7 @@ export interface TruncationResult {
 	outputLines: number;
 	/** Number of bytes in the truncated output */
 	outputBytes: number;
-	/** Whether the last line was partially truncated (only for tail truncation edge case) */
+	/** Whether the first output line was partially truncated: an over-long line at the end, possibly followed by blank lines (only for tail truncation) */
 	lastLinePartial: boolean;
 	/** Whether the first line exceeded the byte limit (for head truncation) */
 	firstLineExceedsLimit: boolean;
@@ -82,6 +82,10 @@ function findNonAscii(content: string, from: number): number {
  */
 function copyString(text: string): string {
 	return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
+function isBlankLine(line: string): boolean {
+	return line.trim().length === 0;
 }
 
 /**
@@ -248,6 +252,10 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 	let outputBytesCount = 0;
 	let outputStart = contentEnd;
 	let partialLine: string | undefined;
+	/** How many kept lines come after the partial line. */
+	let partialLineFollowedBy = 0;
+	/** Whether every line kept so far is blank (checked only until one is not). */
+	let keptOnlyBlankLines = true;
 	let truncatedBy: "lines" | "bytes" = "lines";
 
 	let end = contentEnd;
@@ -258,16 +266,22 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 
 		if (outputBytesCount + lineBytes > maxBytes) {
 			truncatedBy = "bytes";
-			// Edge case: if we haven't added ANY lines yet and this line exceeds maxBytes,
-			// take the end of the line (partial)
-			if (outputLines === 0) {
-				partialLine = truncateStringToBytesFromEnd(content.slice(start, end), maxBytes);
-				outputLines = 1;
-				outputBytesCount = Buffer.byteLength(partialLine, "utf-8");
+			// Edge case: if this line exceeds the limit and nothing or only blank lines come after it,
+			// take the end of the line (partial) so the output is not just the blank lines
+			const remainingBytes = maxBytes - outputBytesCount - (outputLines > 0 ? 1 : 0);
+			if (
+				outputLines === 0 ||
+				(keptOnlyBlankLines && remainingBytes > 0 && !isBlankLine(content.slice(start, end)))
+			) {
+				partialLine = truncateStringToBytesFromEnd(content.slice(start, end), remainingBytes);
+				partialLineFollowedBy = outputLines;
+				outputBytesCount += (outputLines > 0 ? 1 : 0) + Buffer.byteLength(partialLine, "utf-8");
+				outputLines++;
 			}
 			break;
 		}
 
+		keptOnlyBlankLines &&= isBlankLine(content.slice(start, end));
 		outputLines++;
 		outputBytesCount += lineBytes;
 		outputStart = start;
@@ -280,7 +294,12 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 	}
 
 	return {
-		content: partialLine ?? copyString(content.slice(outputStart, contentEnd)),
+		content:
+			partialLine === undefined
+				? copyString(content.slice(outputStart, contentEnd))
+				: partialLineFollowedBy === 0
+					? partialLine
+					: `${partialLine}\n${content.slice(outputStart, contentEnd)}`,
 		truncated: true,
 		truncatedBy,
 		totalLines,

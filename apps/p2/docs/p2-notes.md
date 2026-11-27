@@ -320,8 +320,9 @@ Node 26 (`~/.local/bin/node26`).
 
 - **Unit:** `testHost` in `test/p2/helpers.ts` loads facets into a bare host: the server by default, or
   `{ address: Session({ id }), kind: "worker" }`. It serves the base registries of its kind (and, for a server, the
-  `ServerNatives`, with no workers unless `server` gives some). Stubs are `[Contract, membersOrFactory]`; a factory
-  returns a flat shape (`{ variant, ...members }`), gets `self.state(initial)` for an in-memory state member (a
+  `ServerNatives`, with no workers unless `server` gives some). Stubs are `[Contract, membersOrFactory, grants?]`
+  (`grants`: what a contract with grantable members grants, a list or a function of the principal); a factory
+  returns the members, flat, gets `self.state(initial)` for an in-memory state member (a
   `Cell` with `replace`/`change` the test drives) and may return nothing from a method (`null` is sent). Natives a
   facet reads (`harnessOf`, `workerOf`, a plugin's single-native registry) come from `workerFacet({ harness, worker,
   host })` and `nativeFacet(R, value)`. `root(fn)` runs as `principal`; `client(principal)` is a memory-linked client
@@ -341,7 +342,7 @@ Node 26 (`~/.local/bin/node26`).
   Generated test plugins need a `package.json` and may not use top-level await (a facet declares synchronously).
 - **Chord in tests:** tests import Chord only through `test/p2/helpers.ts` and the plugin API (`@p2/app/v1`).
   References are held (`host.hold(T, params, TEST)`; `TEST` is the background context) and awaited with
-  `whenLive(ref)`; `holdIn(host, T, params, variant)` returns one live in `variant`; `failureOf(ref)` waits for a
+  `whenLive(ref)`; `holdWith(host, T, params, ...members)` returns one live with those grantable members; `failureOf(ref)` waits for a
   failure or end (a type nobody serves leaves a hold waiting). Every method call takes a context.
 - **Live state:** `until(watchable, predicate)` follows a state member, derive or registry value until the predicate
   holds; `settled(watchable)` returns a defined value after 25 ms without changes. `expectChord(promise, code)`
@@ -371,10 +372,10 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   generations, logs and notices, relocation and pauses on `stop`/`retry`).
 - **Host stores and files** (per-host stores; laid out as the app kit lays out its hosts, `src/runtime/host-dirs.ts`):
   every host has its own Chord store and files directory, private (directories 0700, stores 0600). The server:
-  `<data>/server/store.sqlite` (outbox off: local-only data, credentials included, never goes to a sync) and
-  `<data>/server/files/`; each session: `<data>/sessions/<id>/store.sqlite` (outbox off until p2 syncs: it records
-  nothing while not connected to a sync; turning it on starts at the current commit, and a first sync uploads an
-  archive) and `<data>/sessions/<id>/files/`.
+  `<data>/server/store.sqlite` and `<data>/server/files/`; each session: `<data>/sessions/<id>/store.sqlite` and
+  `<data>/sessions/<id>/files/`. Every store keeps an outbox only while backup is on (**Backup**): turned on, it
+  starts at the current commit, and the first upload is a full copy. With backup on, the server's store is uploaded
+  too, share-link tokens included (open: whether those tables should stay out of it).
   Projects will be another host kind of the same shape. Both hosts load the app kit's `Files` (`chord.app.files`,
   `filesFacet` from `@earendil-works/chord/app/files`); a session's Durable runs on its store through `StoreStorage`
   under the owner name `p2.durable` (`src/runtime/session-store.ts`), beside `Files`' tables. Plugins reach `Files`
@@ -438,8 +439,13 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   of what it indexed, not session data).
 - **References:** `host.hold(T, params, ctx)` gives a reference at once (loading, live, failed, ended);
   `ctx.get`/`host.get` one once live. UIs use `src/runtime/refs.ts`: `follow` (a value with its current one first),
-  `followRegistry`, `whenLive`, `statusOf`, `liveIn(ref, ...variants)` (`HeldIn`), `UI_LINGER`. A held reference's
-  variant may be `undefined` until it binds, so `inVariant`/`expectVariant` do not narrow it: use `liveIn`.
+  `followRegistry`, `whenLive`, `statusOf`, `live(ref)`, `liveWith(ref, ...members)` and `kept`/`keptWith` (types
+  `RefWith`, `With`), `withHeld`/`withGranted`, `UI_LINGER`. A reference's grantable members have two states:
+  until the reference was first live, every grantable member's handle is there (so a factory can wire a dependency's
+  members before it binds), though nothing is granted yet (`granted` is empty); once it was live, a grantable member
+  is there only while its binding granted it, else `undefined` (also while it loads again or failed: the last
+  binding's grant holds). So test `granted`, never the member's presence: `liveWith`/`keptWith` do (they return
+  `undefined` before the first binding); a worker that knows its grant uses `expectGranted`.
 - **Objects and state:** factories declare state with `defineState` (`defineTypedState` where pi-schema's optional
   fields are not JSON to TypeScript) and change it with `change(fn, ctx)`; derived members are `self.derive`; a
   `self.writable` is exposed through a derive. Natives (a Durable Harness, a database, a socket) are `self.open`
@@ -466,7 +472,41 @@ p2 runs on Chord v2 (`packages/chord`, `docs/design.md` there); the port's notes
   version as the base, verbatim, so old bundles' fingerprints match) and give the provider an `accepts` table mapping
   current state and results back (`Sessions` v3/v4, `Catalog` v2/v3, `SessionTree` v1/v2, `Envs` v1/v2;
   `test/p2/contract-versions.test.ts` binds the released declarations). Without it, old clients wait unbound
-  (`contract_mismatch`) until they reload.
+  (`contract_mismatch`) until they reload. Exception: grantable members replaced variants (Chord slice 15, commit
+  `43bb1900c`), and versions declared with variants cannot be declared any more, so every remote contract restarted
+  as a new base then (version bumped, no `accepts`); clients from before reload once. `Catalog` (local) kept its
+  history.
+
+### Plugins written before grantable members (migration)
+
+Plugins outside `apps/p2/plugins` (a user plugin root, `<P2_DATA_DIR>/plugins`) built against the variant API no
+longer load: `remote(...)` refuses a `variants` key, so the plugin is not served while the rest of p2 starts and runs
+(tried 2026-11-25: the server logged nothing about it at startup; its objects just wait, "is not served here"). No
+compatibility shim (e.g. `withHeld(ref, "owner", action)` taking the old string): the contract itself must change,
+so every such plugin is edited anyway, and a shim would only keep half-ported code alive. Replacements:
+
+| Before | After |
+| --- | --- |
+| `variants: { owner: { state, methods, events } }` (one variant) | `state`, `methods`, `events` at the top of `remote(...)`; bump `version` |
+| several variants (`owner`/`guest`, `reader`/`editor`) | one shape; the members only some callers get are `grantable(schema)` / `grantable(method(...))` |
+| factory returning `{ variant: "x", members: M }` | return `M` |
+| (several variants) factory branches per principal | serve with `{ admit: grantBy((principal, params) => [names]) }`; the factory is `(params, principal, admitted, self)`; a grantable state or event member is returned as a builder `() => watchable`; a branch returns `notGranted` (or `...ungranted([names])`) for the grantable members its principal never gets |
+| `evolve(C, (e) => e.addMethod("owner", "m", A, R))` | `evolve(C, (e) => e.addMethod("m", A, R))` (no variant argument); an `accepts` table is flat: `state: { member: map }` |
+| `liveIn(ref, "owner")` for a one-variant contract | `live(ref)` |
+| `liveIn(ref, "editor")` (a variant with more members) | `liveWith(ref, "member", ...)` (narrows to those members) |
+| `keptIn(ref, ...)` | `kept(ref)` / `keptWith(ref, "member", ...)` |
+| `withHeld(ref, "owner", action)` | `withHeld(ref, action)`; with a variant's members: `withGranted(ref, ["member"], action)` |
+| `expectVariant(ref, "worker")` | `ref` for a one-variant contract; else `expectGranted(ref, "member", ...)` |
+| `ref.variant === "owner"` | `ref.granted.has("member")` (or `liveWith`) |
+| `HeldIn<C, "v">`, `RefIn<C, "v">`, `Held<C>` | `RefWith<C, "member" \| ...>`, `Ref<C>` |
+| `useObject(T, params, { variant: "owner" })` | `liveWith(useObject(T, params), "member")` (or `live(...)`) |
+| `useVariant(ref, v)` (Chord React), `scope.variant(ref)` (Chord TUI) | `useLive(ref)`, `scope.live(ref)` with `granted` |
+| stub `[C, () => ({ variant: "x", ...members })]` (tests) | `[C, () => members, grants?]` (`grants` for a contract with grantable members) |
+
+Find the sites with `grep -rnE "variants:|variant:|liveIn|keptIn|expectVariant|inVariant|useVariant|HeldIn|RefIn|withHeld\([^,]+, \"" <root>`.
+The owner's device root (`/data/data/com.termux/files/home/.pi/p2/plugins`) has `calendar`, `context-reminder` and
+`mail` (2026-11-25); slayer has no user plugins. Migrate them after this merge reaches the device's p2, then
+`reload_plugins`.
 
 ## Radius and port forwards
 
@@ -500,6 +540,16 @@ npm start
   from the relayed requests' shell origin (`radius.json` `shellPage`; one saved in the older `/pi/brains/…` form is
   read in the current one). People a session is shared with by email get `<shell page>/s/<session>`. The shell names
   the organization by its slug once it opens; a kept link names it by ID, which a slug change leaves valid.
+- **Invites** (share links through Radius): without a tunnel host a link's own URL reaches nobody, so copying it
+  (`ShareInvite`, `Shares.invite`) asks Radius for an invite to it (`ShareInviters`, `RadiusBrain.invite`):
+  `<brain origin>/__join#<token>`, which anyone may open for as long as the owner picked when copying (15 minutes, 1
+  hour, 1 day or 7 days; `INVITE_DURATIONS`). Resetting the link withdraws its invites at Radius too
+  (`ShareInviter.withdraw`). Radius keeps only the token's hash (gateway `servers/guests.ts`). Redeeming it gives the
+  browser a guest cookie of Radius naming an admission with a 10-minute lease; the brain gets it as the guest header
+  (`RequestOrigin.relayGuest`), the join page (`/join/radius`) makes the admission ID the guest's ID (no p2 cookie),
+  and the brain renews the leases of guests whose page is open (`Shares.admissions`, every 3 minutes and on change). A
+  guest who left lapses within a lease and needs a new invite; resetting the link or removing the guest ends their
+  access at once as before. Test: `radius.test.ts` ("invites").
 - The worker's root-only `ports` tool has `list/open/close`, fixes owner/peer attribution at its calling assistant
   entry, and denies guest/unattributed turns. It lists every forward and explicitly names all public endpoints,
   asks the model to obtain confirmation before publishing. As in Pi Mobile (67cdb4ca4) it may change or close any
@@ -933,8 +983,33 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   - **Methods:** `create` (one place), `rename`, `locate` (a place becomes the first, replacing that machine's),
     `move` (before another project; null: the end), `archive` (archives every live session of it through
     `SessionOperations.archive`, then marks it with those sessions), `restore` (restores those still archived, then
-    puts the project after the live ones), `remove` (the project and its memberships; no session goes), `assign`
-    (`null` leaves the project; refused for one not live).
+    puts the project after the live ones), `remove` (the project and its memberships; no session goes, its
+    coordinator is archived), `assign` (`null` leaves the project; refused for one not live and for a coordinator
+    leaving its project).
+  - **Coordinators** (owner, 2026-12: a project is a session too, not only a folder): each project may have one
+    coordinator session that starts, steers, stops and archives the project's sessions (sessions, never subagents) and
+    does no work itself. A third table, `project_coordinators` (project → session, index by session; a rename moves the
+    row). `ProjectService` 3 (`evolve` of the released 2, which is still served: `accepts` without mappings, as its
+    members did not change) adds `coordinators` and `open`: the first open of a live project chooses the session ID and
+    joins it to the project in one transaction, then makes its row at the project's default place with the default
+    model, titled "Project coordinator" (no project name: a rename would leave it behind); a failed make (a crash, a
+    missing folder) makes the same session on the next open; later opens restore it when archived. `open`, `archive`,
+    `restore` and `remove` run one at a time (each reads the catalog, waits for session operations, then writes; an
+    open's session made in between would otherwise stay live in an archived or deleted project). It is a member like any
+    other, so archiving and restoring the project archive and restore it. `ProjectCoordinators` (owner) serves the map
+    and `open`; `CoordinatedProject` gives a worker the project its session coordinates as state (null for none or a
+    stale generation). Workers learn whether they are one from their start data (`WorkerInitValues` key
+    `projectCoordinator`); then `worker.ts` sets the main conversation's `tools` and `modelTools` to conversations,
+    codemode and the history tools at each start, holds `CoordinatedProject` and adds the `project-coordinator` prompt
+    section, which names the project as that state says (a rename shows at the next request, no call per request). Any
+    other session clears exactly that tool list at its start: a former coordinator (its project deleted, then the
+    session restored) and a copy of one (`/clone`, `/fork`) get the defaults back. The conversations tool: a
+    coordinator's `create` without a project or cwd starts at its project's default place (its machine, or `env`'s
+    place); with a cwd it starts there; either way the session joins the coordinator's project as it is once the
+    session exists (renamed meanwhile: the new name; deleted: none). Others get "create needs either a project or a
+    cwd". `list` puts a coordinator's own project's sessions first (only 200 are listed). Rollup scripts never see
+    coordinators (as the Familiar). Not the Familiar: that stays separate. The TUI lists coordinators as ordinary
+    sessions. Tests: `project-coordinators.test.ts`, the coordinator case in `ui-sidebar.test.ts`.
   - **Membership** is explicit, never derived from a path (after the import): written by `Projects.assign` (the
     new-session screen's project and a project's "+", once the session exists; the TUI's project rows, before
     `Sessions.create`; the web sidebar's Move to project… and drag and drop) and by copies: the sessions plugin's
@@ -1067,6 +1142,16 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
     after. Tests: `sidebar-model.test.ts`,
     `run-state.test.ts`, `sidebar-settings.test.ts`, `ui-sidebar.test.ts`, the scoped search in `search.test.ts`,
     list links in `foreign-requests.test.ts`.
+  - **A project's row is its coordinator** (`Sidebar.tsx` `GroupItem`, `web.tsx`): the owner's sidebar holds
+    `ProjectCoordinators`; in the built-in Projects rollup only (a rollup made from code may target a project with a
+    group's "+" without the group being it), a project's name opens its coordinator (a link to it while it is live;
+    otherwise `open`, which makes or restores it: the row says "Opening…" meanwhile, one open per project, and the page
+    goes there only if the reader has not navigated since), the chevron after the name (`Toggle`, `.group-toggle`)
+    shows or hides the sessions. The row is selected while the coordinator shows, its folder framed while it works
+    (`IconMarker`), bold with a dot for its unread answer. Live projects' coordinators are left out of every rollup and
+    list page (one restored on its own while its project is archived shows in no project, as any member does then; its
+    `create` without a cwd is refused), and the sections and every owner's list page wait for the map. Delete project… counts the project's sessions without
+    its coordinator and says the coordinator is archived; an open coordinator gives way to the new-session screen first.
   - **Project commands and drag and drop** (`project-commands.tsx`, `sidebar/drag.ts`, owner): a project's group row
     is the command menu's target `project` (hovered or focused; a long press; its ⋯, shown on hover with a fine
     pointer, hidden on touch screens, opens the menu on it, `openCommandMenu`): Rename project… (the query is the new
@@ -1323,9 +1408,10 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
 - **References**: an awaited `ctx.get`/`host.get` is live with its state; UI runtimes hold synchronously
   (`host.hold` in `useObject` and `TuiScope.watch`) and read state through `useReadable` (undefined until hydrated).
   Chord rebinds a held reference by itself (a dropped link, a restarted worker, a reload); the UI never holds one
-  again. Multi-variant references narrow with `liveIn(ref, ...variants)` or `useObject(type, params, { variant })`;
-  a TUI `watch` binds once the reference is live, so its callback narrows on `ref.variant`. Tests use
-  `holdIn(host, type, params, variant)`.
+  again. Grantable members are narrowed with `liveWith(ref, ...members)`; a TUI `watch` binds once the reference is
+  live, so its callback narrows with `liveWith(ref, ...)`. A contract with grantable members is served with
+  `admit: grantBy(principal => [...])`; a factory branch returns `notGranted` (or `...ungranted(names)`) for the
+  grantable members its principal never gets. Tests use `holdWith(host, type, params, ...members)`.
 - **Optimistic UI** (`docs/optimistic-ui.md`): actions show their effect at once (`useOptimisticCall` on the web,
   `scope.optimistic(read, reduce?)` in the terminal, Chord's `TuiScope.optimistic`), long work shows a pending state,
   refusals roll back with the error.
@@ -1342,6 +1428,50 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   (status). A document nobody wrote yet is absent and cannot be followed, so chat mode and artifacts create it empty on
   first follow. A method that writes such a document returns after Durable's commit, by when the follow has the new
   value (`chat-mode.test.ts`). The same holds for p2's own natives: `PromptResources` follows the prompt loads.
+- **Backup** (`plugins/backup`; Chord's decision "Sync serves backup: a full copy after the head, a deleted remote copy
+  starts over"): copies of the server's store and every session's store on a backup remote, so a lost machine loses
+  nothing it uploaded. `P2_BACKUP=radius` (the Radius this server is signed in to, offered by `plugins/radius` through
+  `BackupTargets`) or `P2_BACKUP_DIR=<path>` (a folder); `src/runtime/backup.ts` reads them where the hosts open their
+  stores, the rest is the plugin's. Rules:
+  - **One writer per store:** the server uploads its own store, each session's worker the session's (through the
+    server's `BackupRemote`, in pieces of 1 MiB; only the server holds the remote). Soon after each commit: 200 ms after
+    what a person sent or a finished answer (`isUrgentCommit`), else 5 s; once more as a worker stops. The last seq the
+    backup holds is a bookmark file beside each store (`backup/<target>/`).
+  - **Its own state is files, not the store** (owner, 2026-11-23; a deliberate exception to "everything kept is in
+    the store"): a store's bookmark (`<name>.json`) and account (`<name>.account`) are files in `backup/<target>/`
+    beside it, each replaced whole (a temporary file, then a rename). In the store they would be commits: every upload
+    would commit its own bookmark, the next upload would carry that commit, and the uploader would never be idle; and a
+    restored store would bring the old machine's bookmark with it. Written only by the store's owner, as the store is.
+  - **Outbox only while backup is on:** turning backup off drops what the outbox held; turned on again, the next upload
+    is a full copy of the store after what the backup holds, and the backup goes on in the same history.
+  - **Upload answers:** `created`, or `exists` by this server (an answer lost on the way): go on. The remote holds
+    nothing while the bookmark is past 0: the backup was deleted (on Radius, maybe while this server was offline, so
+    nothing cleared the bookmark): forget the bookmark and upload a full copy from 0. Any other `not_head`, a slot
+    another server took, or a store that lost commits the backup holds: `stopped` (`diverged` or `behind`) until a
+    restart; the commits stay in the outbox. Refusals that retrying cannot fix (400, 403, 413, `protocol_too_old`) stop
+    the same way (`stopped`, `refused`); other failures are `retrying`, with backoff.
+  - **A backup belongs to one account** (owner, 2026-11-23). The case: two people use one machine in turn, person A
+    signs in to Radius, works in a session and backs it up through seq 20; person B signs in instead and continues the
+    same session to 25. Were B's server to upload, the session's history would go on in B's backup, the bookmark would
+    say 25, and when A signs in again A's backup (still at 20) could not continue: `not_head`. So a store's backup
+    belongs to the account of its first upload (`<name>.account` beside its bookmark, `backup/<target>/`; Radius:
+    `<organization ID>/<principal ID>` from Radius's context, `RadiusBrain.account()`). Only a target with accounts has
+    the rule: Radius; a folder has none, so every store is uploaded to it whoever is signed in. Under any other account
+    the store is not uploaded: `paused` (`other_account`), its commits wait in the outbox, and when its account signs in
+    again the next upload goes on from where that backup ended (B's work in A's session lands in A's backup: the
+    session is A's). Sessions first backed up as B are B's the same way. Checked before every upload, since the server
+    may sign in as someone else while it runs. A store whose account file was deleted by hand binds to whoever uploads
+    it next.
+  - **Status** (`BackupStatus`, owner, 2026-11-24): what the owner has to do, the cause a tagged `reason`: `synced`,
+    `uploading`, `retrying` (heals by itself), `paused` (nothing broke, resumes by itself: `off`, `other_account`),
+    `stopped` (needs the owner: `diverged`, `behind`, `refused`). A pause is not an error and is not logged. With
+    backup off, a store backed up before reports `paused` (`off`) with the last sequence its bookmarks hold. Resuming
+    always continues from the bookmark: batches when the outbox still reaches it (`other_account`), else one full copy
+    (`off`: the outbox was dropped).
+  - **Restore** (not built yet) forks: a restored session gets a new session ID and its own backup, so two machines
+    never write one session's history.
+  - **Not in a backup:** file contents (only their index rows), and sessions whose worker never runs after backup is
+    turned on.
 - **Sharing** (`plugins/sharing`): `Shares` (server local; its tables in the server's store, `plugins/sharing/store.ts`:
   links and grants keyed by their session's address (`host(Session)`), guests with a revision; its lists are live
   queries over them), `Presence` (connected
@@ -1594,8 +1724,12 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   `openBrowserOnConfirm: false` (a provider asking clients not to offer opening its page) shows the verification
   address as text instead of the Open link (web), and the TUI offers no "open in browser" for it. No pi-ai changes or custom
   callback URL. API keys and pasted codes pass through the tunnel/relay; use a trusted transport. Once no browser
-  holds the sheet (no reference to its owner's `ProviderLogin` left, `host.references`), its unfinished login is
-  cancelled. Tests use fake providers (login.test.ts and remote-login.test.ts).
+  holds it (no reference to its owner's `ProviderLogin` left, `host.references`) for five minutes, its unfinished login
+  ends ("Login ended: no page of yours was connected…"); a reference coming back (a reconnect, a reload) keeps it. Mobile
+  Safari drops a background tab's socket while the owner is in the provider's tab, so ending at once cancelled every
+  remote browser-callback login before the redirect URL could be pasted. Closing the sheet still cancels at once (the
+  web sheet's cleanup), and a new start by the same owner replaces their own unfinished login (a reloaded page shows it
+  only on that provider's screen). Tests use fake providers (login.test.ts, login-owners.test.ts and remote-login.test.ts).
 - **Web slots**: `SlotList({ prefix })` renders every `prefix:<name>` slot (e.g. `sidebar-actions:settings`); `Sheet` is
   the shared modal with scroll memory (Escape and the scrim close the whole modal stack). Shell-level
   `workspace-panel` docks beside `main`; `workspace-terminal` is an optional terminals-plugin surface.
@@ -1809,7 +1943,10 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   instructions come from `describeNamespace()`. Without code mode, the `mcp` extension's `mcp_servers` section lists
   the conversation's servers with their summaries, as pi's does for `tool_search` servers. Deferred
   tools named by `createMcpToolName` (every tool of a colliding name gets the hash suffix, as in pi), results through
-  `toLlmContent` and `limitMcpContent`, `structuredOutput` only for tools with an output schema. Without code mode,
+  `toMcpModelContent` and `limitMcpContent` (for `tool_search` calls, binary resources and the full text saved in the
+  conversation's environment; resource links name no tool, since p2 has no `read_mcp_resource`),
+  every tool's `structuredOutput` the server's `CallToolResult` without `_meta` (`createMcpResultSchema`), so scripts
+  get it whole as in pi. Without code mode,
   `tool_search` is installed by the worker's registry (`durableRegistry`: once, while code mode is off and any extension
   has a deferred tool the model may call; MCP's and the terminal tool share it). Tests: `mcp.test.ts` (manager and views on a bare host with `test/fixtures/mcp-server.mjs` and
   an HTTP fixture; projects, where sessions work, and an environment through the debug pi-env daemon, skipped without
@@ -2019,7 +2156,8 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   Chord v2 has none), more than 4 MiB unsent output beyond the frame being sent
   terminates it, socket errors never crash the server. Terminal sockets keep their own 1 MiB frames and 8 MiB
   backlog. A provider login belongs to the owner principal that started it: only it sees, answers, cancels or
-  dismisses it, and its leaving (all holds of its Providers sheet gone) ends it; another owner device cannot.
+  dismisses it, and its staying away (no hold of its `ProviderLogin` for five minutes) ends it; another owner device
+  cannot.
 - **Reuse** of apps/mobile: none. Adapted implementations live beside their plugins; shared backend helpers live
   in `src/runtime`, shared browser code in `src/web`. p2 is an independent npm workspace with pinned dependencies.
   `src/web/style.css` is a copy of mobile's stylesheet; terminal and environment styles live beside their plugins.
@@ -2040,9 +2178,14 @@ call, hold, method, relay and activation; nothing is measured or walked for it. 
   contract: a final transcript is `send` (steering while busy), new answers (keys present when voice mode started are
   skipped) stream through `SpeechChunker` (sentences, no code blocks or tables) to `/voice/speak`, played in order.
   While audio plays the microphone is not streamed; pibot's barge-in detector (energy the playback does not explain)
-  only starts streaming it. Owner rule: only words interrupt. The speech service sends interim transcripts
+  only starts streaming it. Its level is relative to the microphone's own noise floor (3.5 times it, at least 0.003, at
+  most pibot's fixed 0.018): a laptop microphone without gain control hears a speaker at arm's length far under 0.018.
+  The microphone runs without the browser's echo canceller while the default output is headphones or earphones (by
+  its label; reopened when the output changes): Chrome's desktop canceller suppresses the speaker while the agent's
+  speech plays. The voice log has the microphone's raw levels (RMS peak and mean, floor, level, residual ratio) about
+  once a second while the agent speaks or someone talks. Owner rule: only words interrupt. The speech service sends interim transcripts
   (sts-server `interim`); the first with a real word (no filler, not the agent's own speech heard back) cuts the speech
   and stops the run at once, also while the agent works silently (`interruption.ts`); a trigger the room never hears as
   words is dropped and the agent goes on. Transcripts without words are never sent; a stop phrase also calls `stop`. A `voice.mode` conversation document turns the `voice` prompt
-  section on (short spoken answers); the switch follows the button. Tests: `voice.test.ts`, `voice-ui.test.ts`
-  (Chromium fake microphone).
+  section on (short spoken answers); the switch follows the button. Tests: `voice.test.ts`, `voice-barge-in.test.ts`,
+  `voice-ui.test.ts` (Chromium fake microphone).

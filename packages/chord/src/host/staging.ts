@@ -9,7 +9,7 @@
 
 import type { Context } from "../context/index.ts";
 import type { Contract, ParamsOf } from "../contracts/index.ts";
-import { contractData } from "../contracts/internal.ts";
+import { contractData, currentVersion, fingerprintOf } from "../contracts/internal.ts";
 import type { Principal } from "../data/index.ts";
 import { bindProvider, checkParams } from "../data/internal.ts";
 import type { AnyDefinition } from "../documents/internal.ts";
@@ -23,9 +23,11 @@ import { tableSqlName } from "../store/sql.ts";
 import type { ChordStore } from "../store/store.ts";
 import type { TableDefinition } from "../store/table.ts";
 import type { Watchable } from "../watch.ts";
-import { type AdmitSelf, refuseAdmittedJob } from "./admission.ts";
+import { type AdmitSelf, type AdmittedValue, refuseAdmittedJob } from "./admission.ts";
 import type { StoreSelf } from "./attempt.ts";
 import { type Facet, type FacetContribution, type ServedEntry, setUp } from "./facet.ts";
+import { followedOver } from "./follow-over.ts";
+import { grantedImplementation } from "./members.ts";
 import type { ChordObject, LocalContract, RemoteContract, Served, ServedAdmission } from "./object.ts";
 import type { Presence } from "./presence.ts";
 import {
@@ -185,18 +187,26 @@ function stageEntry(
 }
 
 /**
- * A served type's admission (slice 14 §2.1; declaration policy): a remote contract that declares an `admission` is
- * served with `admit`, and only such a contract is; anything else refuses the plugin.
+ * A served type's admission (slice 14 §2.1, slice 15 §1.2; declaration policy): a remote contract that declares an
+ * `admission`, grantable members or flags is served with `admit`, and only such a contract is; anything else refuses
+ * the plugin. Its fingerprint covers the admission's schema and the names it may grant: what staging compares.
  */
 function servedAdmission(contract: Contract, admit: unknown): ServedAdmission | undefined {
 	const declared = contractData(contract).admission;
-	if (declared === undefined && admit === undefined) return undefined;
+	const { grants } = currentVersion(contract);
+	const takes = declared !== undefined || grants.length > 0;
+	if (!takes && admit === undefined) return undefined;
 	const { name } = contract;
 	if (contract.kind === "local") throw new Error(`${name}: only a remote type takes an admission (admit)`);
-	if (declared === undefined) throw new Error(`${name}: admit needs the contract to declare its admission`);
-	if (typeof admit !== "function") throw new Error(`${name}: its contract declares an admission: serve it with admit`);
+	if (!takes) throw new Error(`${name}: admit needs an admission, grantable members or flags in the contract`);
+	if (typeof admit !== "function") {
+		throw new Error(
+			`${name}: its contract takes an admission (its admission, grantable members or flags): serve it with admit`,
+		);
+	}
+	const fingerprint = fingerprintOf({ admission: declared?.fingerprint ?? null, grants: [...grants] });
 	// Plugin code: what it returns is checked when an attempt runs it.
-	return { admit: admit as ServedAdmission["admit"], fingerprint: declared.fingerprint };
+	return { admit: admit as ServedAdmission["admit"], fingerprint };
 }
 
 /** What a recorded factory declared: what a reload's fate and checks need, nothing activated. */
@@ -243,7 +253,10 @@ export function recordFactory(object: ChordObject, served: Served, context: Cont
 			admit(object.params, object.principal!, recording.admitSelf());
 			const admitted = object.admitted;
 			if (admitted?.fingerprint === fingerprint) {
-				served.factory(object.params, object.principal!, admitted.value, self);
+				const { value, granted } = admitted.allowed;
+				// An object's decision reads its value against its contract's grants: an `AdmittedValue`.
+				const implementation = served.factory(object.params, object.principal!, value as AdmittedValue, self);
+				grantedImplementation(served.contract, implementation, granted);
 			}
 		}
 	} catch (error) {
@@ -281,6 +294,9 @@ const INERT_TABLE = inert(() => INERT);
 
 /** What `self.queries` returns and each named query of it: what readers take, and `self.query` does not. */
 const INERT_NAMED = inert();
+
+/** A writable's handle: one source `self.follow(over, attach)` takes, as the registry values staging has. */
+const INERT_WRITABLE = inert(() => INERT);
 
 /** A factory's `self` during staging: it records declarations and checks them; it activates nothing. */
 class RecordingSelf {
@@ -421,7 +437,7 @@ class RecordingSelf {
 
 	writable(): never {
 		this.#assertDeclaring("writable");
-		return INERT;
+		return INERT_WRITABLE;
 	}
 
 	events(): never {
@@ -455,8 +471,10 @@ class RecordingSelf {
 		throw new Error(`${this.#object.label}: self.tx runs in calls, not in a factory`);
 	}
 
-	follow(): never {
+	follow(first?: unknown, attach?: unknown): never {
 		this.#assertDeclaring("follow");
+		// Over a changing source: a registry value (the host's own) or a writable; anything else is refused.
+		if (attach !== undefined && first !== INERT_WRITABLE) followedOver(first, this.#object.label);
 		return INERT;
 	}
 

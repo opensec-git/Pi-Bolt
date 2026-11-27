@@ -3,8 +3,11 @@
 
 import type { JsonValue } from "../json.ts";
 
-/** Version of the error table below on links; adding or moving a code or reason bumps it. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * The link protocol's version, announced in `hello`: a peer of another version is refused at its hello. Changing a
+ * message, a wire format or the error table below (adding or moving a code or reason) bumps it.
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** Every code with the reasons it may carry. `invalid` requires a reason; every other code may omit it. */
 export const CHORD_ERROR_REASONS = {
@@ -75,6 +78,24 @@ export type ChordError = ChordErrorClass & ChordErrorJson;
  * instances as a tagged union; this constructor signature does.
  */
 export const ChordError = ChordErrorClass as new (init: ChordErrorJson, options?: ErrorOptions) => ChordError;
+
+/**
+ * A ChordError made where something ends (an object, a reference, a hold, a link) to reject whoever still waits on
+ * it, often nobody: made without a stack. Its stack would name Chord's code that ended the thing, never the caller
+ * the error reaches, and capturing and formatting it was a quarter of the time an object's rebuild takes.
+ */
+export function stackless(init: ChordErrorJson): ChordError {
+	const limit = frames.stackTraceLimit;
+	frames.stackTraceLimit = 0;
+	try {
+		return new ChordError(init);
+	} finally {
+		frames.stackTraceLimit = limit;
+	}
+}
+
+/** V8's count of frames a new error captures (Node, workerd, Chrome); another engine ignores it and captures as ever. */
+const frames: ErrorConstructor & { stackTraceLimit?: number } = Error;
 
 /** Whether `error` is a ChordError, optionally with the given code. */
 export function isChordError<C extends ChordErrorCode = ChordErrorCode>(
