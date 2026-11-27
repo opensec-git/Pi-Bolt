@@ -188,6 +188,7 @@ import { createMermaidMarkdownTransformer } from "./components/mermaid.ts";
 import { ModelSelectorComponent } from "./components/model-selector.ts";
 import {
 	type AuthSelectorProvider,
+	type AuthSelectorStatus,
 	formatAuthSelectorProviderStatus,
 	formatAuthSelectorProviderType,
 	OAuthSelectorComponent,
@@ -218,7 +219,7 @@ import { UserMessageSelectorComponent } from "./components/user-message-selector
 import { editInExternalEditor } from "./external-editor.ts";
 import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
 import { getModelSearchText } from "./model-search.ts";
-import { type BlockedStatus, ProgramStatusReporter } from "./program-status-reporter.ts";
+import { type BlockedStatus, dialogBlockedStatus, ProgramStatusReporter } from "./program-status-reporter.ts";
 import { shareSession } from "./session-share.ts";
 import {
 	getAvailableThemes,
@@ -3254,8 +3255,14 @@ export class InteractiveMode {
 			setHeader: (factory) => this.setExtensionHeader(factory),
 			setTitle: (title) => this.ui.terminal.setTitle(title),
 			custom: (factory, options) => this.showExtensionCustom(factory, options),
-			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
-			setEditorText: (text) => this.editor.setText(text),
+			pasteToEditor: (text) => {
+				this.editor.handleInput(`\x1b[200~${text}\x1b[201~`);
+				this.ui.requestRender();
+			},
+			setEditorText: (text) => {
+				this.editor.setText(text);
+				this.ui.requestRender();
+			},
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
 			editor: (title, prefill) =>
 				this.remoteControl
@@ -3331,7 +3338,6 @@ export class InteractiveMode {
 		title: string,
 		options: string[],
 		opts?: ExtensionUIDialogOptions,
-		blocked: BlockedStatus = { kind: "question", message: title },
 	): Promise<string | undefined> {
 		return new Promise((resolve) => {
 			if (opts?.signal?.aborted) {
@@ -3355,7 +3361,7 @@ export class InteractiveMode {
 				() => finish(undefined),
 				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
 			);
-			this.pushExtensionDialog(selector, blocked);
+			this.pushExtensionDialog(selector, dialogBlockedStatus(opts?.blockedKind ?? "question", title));
 		});
 	}
 
@@ -3367,9 +3373,9 @@ export class InteractiveMode {
 		message: string,
 		opts?: ExtensionUIDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, {
-			kind: "permission",
-			message: title,
+		const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], {
+			...opts,
+			blockedKind: opts?.blockedKind ?? "permission",
 		});
 		return result === "Yes";
 	}
@@ -3415,7 +3421,7 @@ export class InteractiveMode {
 				() => finish(undefined),
 				{ tui: this.ui, timeout: opts?.timeout },
 			);
-			this.pushExtensionDialog(input, { kind: "question", message: title });
+			this.pushExtensionDialog(input, dialogBlockedStatus(opts?.blockedKind ?? "question", title));
 		});
 	}
 
@@ -3445,7 +3451,7 @@ export class InteractiveMode {
 				undefined,
 				this.settingsManager.getExternalEditorCommand(),
 			);
-			this.pushExtensionDialog(editor, { kind: "question", message: title });
+			this.pushExtensionDialog(editor, dialogBlockedStatus("question", title));
 		});
 	}
 
@@ -4545,8 +4551,9 @@ export class InteractiveMode {
 						message.cancelled,
 						message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
 						message.fullOutputPath,
+						message.fullOutputError,
 					);
-					if (this.toolOutputExpanded) component.setExpanded(true);
+					component.setExpanded(this.toolOutputExpanded);
 					return component;
 				});
 				break;
@@ -4701,7 +4708,7 @@ export class InteractiveMode {
 		};
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
-		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
+		const cacheMisses = this.settingsManager.getNotices().cacheMisses
 			? collectCacheMisses(
 					this.sessionManager.getEntries(),
 					this.session.modelRuntime,
@@ -4860,7 +4867,7 @@ export class InteractiveMode {
 	}
 
 	private addCacheWarmingUsage(entry: UsageEntry): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
+		if (!this.settingsManager.getNotices().cacheWarming) return;
 		// Back-to-back warms collapse into one line with the cumulative cost.
 		const previous = this.cacheWarmingNotice;
 		if (previous && this.chatContainer.childFromEnd(0) === previous.component && previous.note === entry.note) {
@@ -4880,7 +4887,7 @@ export class InteractiveMode {
 	 * from persisted summary usage and is not stored as a separate session entry.
 	 */
 	private addCompactionCostNotice(notice: CompactionCostNotice): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
+		if (!this.settingsManager.getNotices().compactionCosts) return;
 
 		const { usage } = notice;
 		const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
@@ -4893,7 +4900,7 @@ export class InteractiveMode {
 	}
 
 	private maybeShowThinkingDropNotice(message: AssistantMessage): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
+		if (!this.settingsManager.getNotices().reasoningDrops) return;
 
 		const dropped = getDroppedReasoning(message);
 		if (!dropped) return;
@@ -4930,7 +4937,7 @@ export class InteractiveMode {
 	 * a model switch, or an idle gap past the cache TTL.
 	 */
 	private maybeShowCacheMissNotice(message: AssistantMessage): void {
-		if (!this.settingsManager.getShowCacheMissNotices()) return;
+		if (!this.settingsManager.getNotices().cacheMisses) return;
 
 		// Entries don't contain `message` yet: message_end fires before persistence.
 		const miss = this.sessionManager.getCacheMiss(message, this.session.modelRuntime);
@@ -5056,6 +5063,7 @@ export class InteractiveMode {
 			await this.ui.terminal.drainInput(1000);
 			this.stop();
 			await flushStdout();
+			killTrackedDetachedChildren();
 			process.exit(0);
 		}
 
@@ -5078,6 +5086,9 @@ export class InteractiveMode {
 		}
 
 		await flushStdout();
+		// dispose() only starts killing a running `!` command, which on Windows loses the race with
+		// exit. After the last await, so it also catches a shell spawned after the abort.
+		killTrackedDetachedChildren();
 		process.exit(0);
 	}
 
@@ -5725,7 +5736,6 @@ export class InteractiveMode {
 					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
 					treeFilterMode: this.settingsManager.getTreeFilterMode(),
 					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
-					showCacheMissNotices: this.settingsManager.getShowCacheMissNotices(),
 					shadedCodeBlocks: this.settingsManager.getShadedCodeBlocks(),
 					defaultProjectTrust: this.settingsManager.getDefaultProjectTrust(),
 					editorPaddingX: this.settingsManager.getEditorPaddingX(),
@@ -5740,6 +5750,7 @@ export class InteractiveMode {
 					fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
 					fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
 					warnings: this.settingsManager.getWarnings(),
+					notices: this.settingsManager.getNotices(),
 				},
 				{
 					onAutoCompactChange: (enabled) => {
@@ -5834,10 +5845,6 @@ export class InteractiveMode {
 						this.settingsManager.setMermaidRenderingMode(mode);
 						this.chatContainer.invalidate();
 						this.ui.requestRender();
-					},
-					onShowCacheMissNoticesChange: (shown) => {
-						this.settingsManager.setShowCacheMissNotices(shown);
-						this.rebuildChatFromMessages();
 					},
 					onShadedCodeBlocksChange: (shaded) => {
 						prepareTranscriptReflow(this.renderer);
@@ -5942,6 +5949,11 @@ export class InteractiveMode {
 					},
 					onWarningsChange: (warnings) => {
 						this.settingsManager.setWarnings(warnings);
+					},
+					onNoticeChange: (key, shown) => {
+						this.settingsManager.setNotice(key, shown);
+						// Cache miss, cache warming and compaction notices are derived when the transcript renders.
+						this.rebuildChatFromMessages();
 					},
 					onCancel: () => {
 						done();
@@ -6678,12 +6690,13 @@ export class InteractiveMode {
 		const options: AuthSelectorProvider[] = [];
 		for (const provider of this.session.modelRuntime.getProviders()) {
 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
-			const status = authStatus.configured
-				? {
-						type: this.session.modelRuntime.isUsingOAuth(provider.id) ? ("oauth" as const) : ("api_key" as const),
-						source: authStatus.label ?? authStatus.source,
-					}
-				: undefined;
+			let status: AuthSelectorStatus | undefined;
+			if (authStatus.configured) {
+				const type = this.session.modelRuntime.isUsingOAuth(provider.id) ? "oauth" : "api_key";
+				status = { kind: "configured", type, source: authStatus.label ?? authStatus.source };
+			} else if (authStatus.source === "stored") {
+				status = { kind: "unresolved" };
+			}
 			const subscription = provider.auth.oauth?.isSubscription === true;
 			if ((!authType || authType === "oauth") && provider.auth.oauth) {
 				options.push({
@@ -6712,13 +6725,13 @@ export class InteractiveMode {
 
 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
 		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
-			.map(({ providerId, type }) => {
+			.map(({ providerId, type }): AuthSelectorProvider => {
 				const provider = this.session.modelRuntime.getProvider(providerId);
 				return {
 					id: providerId,
 					name: provider?.name ?? providerId,
 					authType: type,
-					status: { type, source: "stored credential" },
+					status: { kind: "configured", type, source: "stored credential" },
 					subscription: provider?.auth.oauth?.isSubscription === true,
 				};
 			})
@@ -7925,6 +7938,7 @@ export class InteractiveMode {
 				result.cancelled,
 				result.truncated ? ({ truncated: true, content: result.output } as TruncationResult) : undefined,
 				result.fullOutputPath,
+				result.fullOutputError,
 			);
 
 			// Record the result in session
@@ -7967,6 +7981,7 @@ export class InteractiveMode {
 					result.cancelled,
 					result.truncated ? ({ truncated: true, content: result.output } as TruncationResult) : undefined,
 					result.fullOutputPath,
+					result.fullOutputError,
 				);
 			}
 		} catch (error) {

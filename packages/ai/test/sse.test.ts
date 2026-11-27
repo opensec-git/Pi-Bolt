@@ -4,20 +4,25 @@ import {
 	decodeSseText,
 	iterateSseMessages,
 	type ServerSentEvent,
-	type SseDecoder,
+	SseDecoder,
+	type SseDecoderState,
 } from "../src/utils/sse.ts";
 
 // The Anthropic provider's server-sent event parser moved to utils/sse.ts. Below is the parser as it was in
-// anthropic-messages.ts; the moved one must give the same events for the same bytes, however they are split into reads.
+// anthropic-messages.ts (with Pi 1.6.1's empty-event rule); the moved one must give the same events for the same bytes,
+// however they are split into reads.
 
-interface SseDecoderState {
+interface ReferenceState {
 	event: string | null;
 	data: string[];
 	raw: string[];
 }
 
-function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
+function flushSseEvent(state: ReferenceState): ServerSentEvent | null {
 	if (!state.event && state.data.length === 0) {
+		// Pi 1.6.1: an empty event name and the comment lines of an event without data are dropped.
+		state.event = null;
+		state.raw = [];
 		return null;
 	}
 
@@ -33,7 +38,7 @@ function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
 	return event;
 }
 
-function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
+function decodeSseLine(line: string, state: ReferenceState): ServerSentEvent | null {
 	if (line === "") {
 		return flushSseEvent(state);
 	}
@@ -65,7 +70,7 @@ function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | 
  * every line, and slicing that rest off, made decoding a read quadratic in the number of events it carried. A "\r" at
  * the end of `buffer` waits for the next read unless `final`, since it may be the start of a "\r\n".
  */
-function* decodeSseLines(buffer: string, state: SseDecoderState, final: boolean): Generator<ServerSentEvent, string> {
+function* decodeSseLines(buffer: string, state: ReferenceState, final: boolean): Generator<ServerSentEvent, string> {
 	let lineStart = 0;
 	let carriageReturn = buffer.indexOf("\r");
 	let newline = buffer.indexOf("\n");
@@ -94,7 +99,7 @@ async function* referenceIterateSseMessages(
 ): AsyncGenerator<ServerSentEvent> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
-	const state: SseDecoderState = { event: null, data: [], raw: [] };
+	const state: ReferenceState = { event: null, data: [], raw: [] };
 	let buffer = "";
 
 	try {
@@ -215,7 +220,7 @@ describe("iterateSseMessages matches the parser it replaced", () => {
 		expect([...decodeSseText(original, "rt", false)]).toEqual([]);
 		expect(original.rest).toBe("data: part");
 
-		const restored: SseDecoder = JSON.parse(JSON.stringify(original));
+		const restored: SseDecoderState = JSON.parse(JSON.stringify(original));
 		expect(restored).toEqual({
 			event: "test",
 			data: [],
@@ -284,5 +289,56 @@ describe("iterateSseMessages matches the parser it replaced", () => {
 		const actual = await collect(iterateSseMessages(bodyOf(chunks), { signal: controller.signal }));
 		expect(actual).toEqual(expected);
 		expect(actual).toEqual({ events: [], error: "Request was aborted" });
+	});
+});
+
+function decode(bytes: Uint8Array, chunkSize: number): ServerSentEvent[] {
+	const decoder = new SseDecoder();
+	const events: ServerSentEvent[] = [];
+	for (let i = 0; i < bytes.length; i += chunkSize) events.push(...decoder.push(bytes.subarray(i, i + chunkSize)));
+	events.push(...decoder.end());
+	return events;
+}
+
+describe("SseDecoder", () => {
+	it("gives the same events for every chunking and line ending", () => {
+		for (const separator of ["\n", "\r\n", "\r"]) {
+			const text = [": keepalive", "event: delta", 'data: {"a":', 'data:  "é"}', "", "data: tail"].join(separator);
+			const bytes = new TextEncoder().encode(text);
+			for (let chunkSize = 1; chunkSize <= bytes.length; chunkSize++) {
+				expect(decode(bytes, chunkSize)).toEqual([
+					{
+						event: "delta",
+						data: '{"a":\n "é"}',
+						raw: [": keepalive", "event: delta", 'data: {"a":', 'data:  "é"}'],
+					},
+					{ event: null, data: "tail", raw: ["data: tail"] },
+				]);
+			}
+		}
+	});
+
+	it("does not end an event at a CRLF split across chunks", () => {
+		const decoder = new SseDecoder();
+		const encoder = new TextEncoder();
+		expect(decoder.push(encoder.encode("data: a\r"))).toEqual([]);
+		expect(decoder.push(encoder.encode("\ndata: b\r\n\r\n"))).toEqual([
+			{ event: null, data: "a\nb", raw: ["data: a", "data: b"] },
+		]);
+	});
+
+	it("does not carry an empty event name into the next event", () => {
+		const decoder = new SseDecoder();
+		expect(decoder.push(new TextEncoder().encode("event:\n\ndata: x\n\n"))).toEqual([
+			{ event: null, data: "x", raw: ["data: x"] },
+		]);
+	});
+
+	it("drops comment lines of events without data", () => {
+		const decoder = new SseDecoder();
+		const encoder = new TextEncoder();
+		expect(decoder.push(encoder.encode(": ping\n\ndata: x\n\n"))).toEqual([
+			{ event: null, data: "x", raw: ["data: x"] },
+		]);
 	});
 });

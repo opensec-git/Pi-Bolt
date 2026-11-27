@@ -6,7 +6,7 @@ export interface ServerSentEvent {
 }
 
 /** What a server-sent event decoder keeps between reads. */
-export interface SseDecoder {
+export interface SseDecoderState {
 	event: string | null;
 	data: string[];
 	raw: string[];
@@ -20,11 +20,12 @@ export interface SseDecoder {
 
 // Factory states can keep already-scanned pieces while exposing the same enumerable, writable rest string.
 // Text assigned by a caller must still be scanned, since it can contain line endings.
-const pendingLines = new WeakMap<SseDecoder, { fragments: string[]; assignedRest: string }>();
+const pendingLines = new WeakMap<SseDecoderState, { fragments: string[]; assignedRest: string }>();
 
-export function createSseDecoder(options: { stripLineBom?: boolean } = {}): SseDecoder {
+/** A new decoder state for `decodeSseText`. */
+export function createSseDecoder(options: { stripLineBom?: boolean } = {}): SseDecoderState {
 	const pending = { fragments: [] as string[], assignedRest: "" };
-	const state: SseDecoder = {
+	const state: SseDecoderState = {
 		event: null,
 		data: [],
 		raw: [],
@@ -42,8 +43,11 @@ export function createSseDecoder(options: { stripLineBom?: boolean } = {}): SseD
 	return state;
 }
 
-function flushSseEvent(state: SseDecoder): ServerSentEvent | null {
+function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
 	if (!state.event && state.data.length === 0) {
+		// An empty event name or comment lines of an event without data are not carried into the next event.
+		state.event = null;
+		if (state.raw.length > 0) state.raw = [];
 		return null;
 	}
 
@@ -59,7 +63,7 @@ function flushSseEvent(state: SseDecoder): ServerSentEvent | null {
 	return event;
 }
 
-function decodeSseLine(line: string, state: SseDecoder, fragments: string[]): ServerSentEvent | null {
+function decodeSseLine(line: string, state: SseDecoderState, fragments: string[]): ServerSentEvent | null {
 	if (fragments.length > 0) {
 		fragments.push(line);
 		line = fragments.join("");
@@ -103,7 +107,7 @@ function decodeSseLine(line: string, state: SseDecoder, fragments: string[]): Se
  * With `final` (the end of the stream), the text after the last line end is decoded as a line, and an event that the
  * stream ends without a blank line after is yielded too.
  */
-export function* decodeSseText(state: SseDecoder, text: string, final: boolean): Generator<ServerSentEvent> {
+export function* decodeSseText(state: SseDecoderState, text: string, final: boolean): Generator<ServerSentEvent> {
 	let lineStart = 0;
 	if (state.skipLeadingNewline && text.length > 0) {
 		state.skipLeadingNewline = false;
@@ -155,6 +159,25 @@ export function* decodeSseText(state: SseDecoder, text: string, final: boolean):
 		} else {
 			state.rest = tail;
 		}
+	}
+}
+
+/**
+ * Decodes server-sent events from a UTF-8 byte stream, a push at a time. Lines end with LF, CRLF or CR, and a blank
+ * line ends an event; see `decodeSseText`.
+ */
+export class SseDecoder {
+	private readonly decoder = new TextDecoder();
+	private readonly state = createSseDecoder();
+
+	/** Takes the next bytes and returns the events they complete. */
+	push(bytes: Uint8Array): ServerSentEvent[] {
+		return [...decodeSseText(this.state, this.decoder.decode(bytes, { stream: true }), false)];
+	}
+
+	/** Ends the stream and returns the remaining events, including a last one the stream ended without a blank line. */
+	end(): ServerSentEvent[] {
+		return [...decodeSseText(this.state, this.decoder.decode(), true)];
 	}
 }
 

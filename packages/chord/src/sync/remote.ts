@@ -11,6 +11,14 @@ export type JsonObject = { [key: string]: unknown };
 export const LOG_START: Seq = 0;
 
 /**
+ * The version of the sync rules this client follows: slots created once at the head, each recording its device, and
+ * archive slots. A remote adapter sends it with every request, so a remote that later changes the rules for a session
+ * (a handoff to another device) can refuse writers that do not know them. Raised when the rules change, not when a
+ * body's encoding does (`LOG_VERSION`).
+ */
+export const SYNC_PROTOCOL = 1;
+
+/**
  * A slot of a session's remote history: the batch of outbox commits after `after`, up to `to`, uploaded by `device`. A
  * store creates each slot once and never replaces it, so the device whose upload creates it continues the session from
  * `after`, and a device that finds it taken by another one holds a different history.
@@ -43,12 +51,7 @@ export type PutBatchResult =
 	 * No slot starts at `after`, and the history does not end there: a slot there would branch the chain inside a batch
 	 * or leave a gap. The uploader's history is not the remote's from `after` on.
 	 */
-	| { readonly type: "not_head"; readonly head: Seq }
-	/**
-	 * The upload's `epoch` is not the session's current one: another device was given the right to write the session
-	 * since this one was. Who grants it, and when, is the remote's (RFC 0074's single writer); Chord only reports it.
-	 */
-	| { readonly type: "stale_epoch"; readonly epoch: number };
+	| { readonly type: "not_head"; readonly head: Seq };
 
 /** A session as the remote's listing describes it. */
 export type SessionSummary = {
@@ -80,11 +83,7 @@ export interface SessionSyncStore {
 		device: string,
 		body: SyncBody,
 		context: Context,
-		options?: {
-			readonly archive?: boolean;
-			/** The writer's epoch: a remote that issues epochs refuses a stale one (`stale_epoch`); others ignore it. */
-			readonly epoch?: number;
-		},
+		options?: { readonly archive?: boolean },
 	): Promise<PutBatchResult>;
 	/**
 	 * A batch's body; `undefined` when its slot is folded or absent. The body may hold a file or a connection until it is

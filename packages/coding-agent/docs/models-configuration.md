@@ -34,7 +34,7 @@ Each `models` entry adds a model to the provider. An entry whose `id` matches an
 | `api` | string |  | Overrides the provider api. |
 | `baseUrl` | string |  | Overrides the provider baseUrl. |
 | `reasoning` | boolean | `false` | Whether the model supports thinking. |
-| `thinkingLevelMap` | object |  | Provider value sent for each thinking level. null marks a level unsupported. Levels the model does not map use the provider's default value through high; xhigh and max are unsupported. |
+| `thinkingLevelMap` | object |  | Provider value sent for each thinking level. A string is sent to the provider; null hides the level. Levels left out use the provider's default value for off through high; xhigh and max are opt-in and only offered when mapped to a string. |
 | `input` | `("text" \| "image")[]` | `["text"]` |  |
 | `inputLimits` | [object](#input-limits) |  |  |
 | `cost` | object |  |  |
@@ -64,7 +64,7 @@ Each `modelOverrides` key is the ID of a built-in or extension model. Unknown ID
 |---|---|---|---|
 | `name` | string |  | Display name, also matched by --model patterns. |
 | `reasoning` | boolean |  | Whether the model supports thinking. |
-| `thinkingLevelMap` | object |  | Provider value sent for each thinking level. null marks a level unsupported. Levels the model does not map use the provider's default value through high; xhigh and max are unsupported. |
+| `thinkingLevelMap` | object |  | Provider value sent for each thinking level. A string is sent to the provider; null hides the level. Levels left out use the provider's default value for off through high; xhigh and max are opt-in and only offered when mapped to a string. |
 | `input` | `("text" \| "image")[]` |  |  |
 | `inputLimits` | [object](#input-limits) |  |  |
 | `cost` | object |  |  |
@@ -191,6 +191,14 @@ Also applies to `azure-openai-responses` and `openai-codex-responses`.
 |---|---|---|---|
 | `supportsMidConvoSystemMessages` | boolean | `false` | Whether the exact model accepts system messages after the conversation has started. When false, later system messages are folded into the leading system message. |
 | `supportsStrictMode` | boolean | `false` | Whether the model supports strict (schema-constrained) function tools. |
+
+### `google-generative-ai`
+
+Also applies to `google-vertex`.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `supportsStrictMode` | boolean |  | Whether the model enforces strict tools through Gemini's VALIDATED function-calling mode. Default: true for model IDs containing gemini-3 or a later version, such as gemini-3-pro or vendor-gemini-4-argon, false otherwise. Set true for Gemini 3+ models served under IDs without the version. |
 
 ### `typesafe-system-one`
 

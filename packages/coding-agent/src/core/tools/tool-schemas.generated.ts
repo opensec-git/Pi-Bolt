@@ -18,6 +18,10 @@ export const bashOutputSchema: typeof Source.bashOutputSchema = typeBoxShaped(
 				{ type: "string", description: "Full output, when truncated" },
 				{ "~kind": "String", "~optional": true },
 			),
+			full_output_error: typeBoxShaped(
+				{ type: "string", description: "Why the full output could not be saved, when truncated and saving failed" },
+				{ "~kind": "String", "~optional": true },
+			),
 			exit_code: typeBoxShaped({ type: "number" }, { "~kind": "Number" }),
 			wall_time_seconds: typeBoxShaped({ type: "number" }, { "~kind": "Number" }),
 		},

@@ -174,6 +174,67 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("notices", () => {
+		it("fills in defaults for unset notices", () => {
+			const manager = SettingsManager.inMemory({ notices: { cacheMisses: true } });
+
+			expect(manager.getNotices()).toEqual({ ...SETTINGS_DEFAULTS.notices, cacheMisses: true });
+		});
+
+		it("migrates showCacheMissNotices to every notice and drops it on save", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(settingsPath, JSON.stringify({ showCacheMissNotices: false }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getNotices()).toEqual({
+				cacheMisses: false,
+				cacheWarming: false,
+				compactionCosts: false,
+				reasoningDrops: false,
+			});
+
+			manager.setNotice("reasoningDrops", true);
+			await manager.flush();
+
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual({
+				notices: { cacheMisses: false, cacheWarming: false, compactionCosts: false, reasoningDrops: true },
+			});
+		});
+
+		it("writes only the toggled notice to global settings", async () => {
+			const settingsPath = join(agentDir, "settings.json");
+			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ notices: { cacheMisses: false } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			manager.setNotice("cacheWarming", false);
+			await manager.flush();
+
+			// Neither the project value nor the defaults of the other notices end up in global settings.
+			expect(JSON.parse(readFileSync(settingsPath, "utf-8"))).toEqual({ notices: { cacheWarming: false } });
+			expect(manager.getNotices()).toEqual({
+				...SETTINGS_DEFAULTS.notices,
+				cacheMisses: false,
+				cacheWarming: false,
+			});
+		});
+
+		it("keeps notices already set over the legacy setting", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ showCacheMissNotices: true, notices: { cacheWarming: false } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getNotices()).toEqual({
+				cacheMisses: true,
+				cacheWarming: false,
+				compactionCosts: true,
+				reasoningDrops: true,
+			});
+		});
+	});
+
 	describe("reload", () => {
 		it("should reload global settings from disk", async () => {
 			const settingsPath = join(agentDir, "settings.json");

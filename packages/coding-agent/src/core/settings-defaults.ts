@@ -26,7 +26,6 @@ export const SETTINGS_DEFAULTS = {
 		},
 	},
 	hideThinkingBlock: false,
-	showCacheMissNotices: false,
 	shadedCodeBlocks: false,
 	quietStartup: false,
 	defaultProjectTrust: "ask",
@@ -55,6 +54,12 @@ export const SETTINGS_DEFAULTS = {
 	},
 	warnings: {
 		anthropicExtraUsage: true,
+	},
+	notices: {
+		cacheMisses: false,
+		cacheWarming: false,
+		compactionCosts: false,
+		reasoningDrops: false,
 	},
 	codemode: {
 		mode: "on",

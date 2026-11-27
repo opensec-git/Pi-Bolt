@@ -334,11 +334,6 @@
       "type": "boolean",
       "default": false
     },
-    "showCacheMissNotices": {
-      "type": "boolean",
-      "description": "Show cache cost and provider recovery notices.",
-      "default": false
-    },
     "shadedCodeBlocks": {
       "type": "boolean",
       "description": "Render code blocks on a background instead of between literal ``` fence lines.",
@@ -816,6 +811,31 @@
         }
       }
     },
+    "notices": {
+      "type": "object",
+      "properties": {
+        "cacheMisses": {
+          "type": "boolean",
+          "description": "Show a notice when a response re-bills a significant part of the prompt cache.",
+          "default": false
+        },
+        "cacheWarming": {
+          "type": "boolean",
+          "description": "Show the cost of cache warming requests.",
+          "default": false
+        },
+        "compactionCosts": {
+          "type": "boolean",
+          "description": "Show the cost of compactions and branch summaries.",
+          "default": false
+        },
+        "reasoningDrops": {
+          "type": "boolean",
+          "description": "Show a notice when a provider drops reasoning items from a request.",
+          "default": false
+        }
+      }
+    },
     "codemode": {
       "type": "object",
       "properties": {
@@ -973,6 +993,11 @@
     "websockets": {
       "type": "boolean",
       "description": "Legacy setting migrated to transport.",
+      "deprecated": true
+    },
+    "showCacheMissNotices": {
+      "type": "boolean",
+      "description": "Legacy setting migrated to notices.",
       "deprecated": true
     }
   },

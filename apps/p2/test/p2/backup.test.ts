@@ -3,7 +3,7 @@
 // backup restores into a store equal to the session's. Without backup, stores keep no outbox.
 
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -13,10 +13,11 @@ import { FileSyncStateStore, pullSession } from "@earendil-works/chord/sync";
 import type { ConversationView, LiveState } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT, type Host } from "@p2/app/v1";
 import { Backup } from "../../plugins/backup/contract.ts";
+import { openFolderRemote } from "../../plugins/backup/target.ts";
+import { backupFiles } from "../../plugins/backup/uploader.ts";
 import { Chat } from "../../plugins/chat/contract.ts";
 import { type Session, Sessions } from "../../plugins/sessions/contract.ts";
 import { type P2Server, startServer } from "../../src/hosts/server.ts";
-import { backupFiles, openFolderRemote } from "../../src/runtime/backup.ts";
 import { clientHost, type Fixture, holdIn, localOwner, startFixture, until } from "./helpers.ts";
 
 const answers = (count: number) => (view: ConversationView | null | undefined) =>
@@ -135,7 +136,7 @@ describe("backup to a folder (fake provider)", () => {
 	});
 });
 
-describe("backup turned off and on again (fake provider)", () => {
+describe("backup across restarts (fake provider)", () => {
 	let root: string;
 	let dataDir: string;
 	let workspace: string;
@@ -233,7 +234,20 @@ describe("backup turned off and on again (fake provider)", () => {
 		});
 
 		// Off: the stores open without an outbox (its commits dropped), and the session commits a turn the backup misses.
-		await withServer(false, (_server, owner) => send(owner, session, "while off", 2));
+		await withServer(false, async (server, owner) => {
+			await send(owner, session, "while off", 2);
+			// Backed up before, off now: paused, not nothing; its last backed-up sequence is still known.
+			const backup = await server.host.get(Backup, {}, BACKGROUND_CONTEXT);
+			try {
+				const paused = await until(backup.statuses, (value) => {
+					const status = value?.[name];
+					return status?.state === "paused" && status.reason === "off" && (status.syncedHead ?? 0) >= first;
+				});
+				assert.equal(paused?.server?.state, "paused", "the server's store too");
+			} finally {
+				backup.release();
+			}
+		});
 
 		// On again: the outbox starts at the store's head, past what the backup holds, so the next slot is a full copy
 		// after it (before, uploads failed here and were retried forever).
@@ -253,6 +267,64 @@ describe("backup turned off and on again (fake provider)", () => {
 			await synced(server, name);
 		});
 		await restoresEqual(session, name);
+	});
+
+	/** A new session with one turn backed up; resolves with its ID, its remote name and the backup's head. */
+	const backedUp = async (title: string) => {
+		let session = "";
+		let head = 0;
+		await withServer(true, async (server, owner) => {
+			const sessions = await holdIn(owner, Sessions, {}, "owner");
+			session = (await sessions.create({ cwd: workspace, title }, BACKGROUND_CONTEXT)).id;
+			sessions.release();
+			await send(owner, session, "first", 1);
+			head = await synced(server, `session-${session}`);
+		});
+		return { session, name: `session-${session}`, head };
+	};
+
+	const slotFile = (name: string, after: number) =>
+		join(backupDir, name, "slots", `${String(after).padStart(16, "0")}.json`);
+
+	it("starts over with a full copy when the backup was deleted while the server was off", async () => {
+		const { session, name, head } = await backedUp("Deleted backup");
+		// Deleted on the remote while this server was off: its bookmark still says `head`.
+		rmSync(join(backupDir, name), { recursive: true, force: true });
+		await withServer(true, async (server, owner) => {
+			await send(owner, session, "after the delete", 2);
+			assert.ok((await synced(server, name)) > head);
+		});
+		assert.equal(JSON.parse(readFileSync(slotFile(name, 0), "utf8")).archive, true, "a full copy from the start");
+		await restoresEqual(session, name);
+	});
+
+	it("stops uploading a store whose backup's history is another's, until a restart", async () => {
+		const { session, name, head } = await backedUp("Broken history");
+		// Another machine took the slot after this store's head (a copied data directory, say).
+		mkdirSync(join(backupDir, name, "batches"), { recursive: true });
+		writeFileSync(join(backupDir, name, "batches", `${String(head).padStart(16, "0")}.batch`), "");
+		writeFileSync(slotFile(name, head), JSON.stringify({ after: head, to: head + 5, device: "another-machine" }));
+		await withServer(true, async (server, owner) => {
+			const backup = await server.host.get(Backup, {}, BACKGROUND_CONTEXT);
+			try {
+				await send(owner, session, "after the other machine", 2);
+				const stopped = await until(
+					backup.statuses,
+					(value) => {
+						const status = value?.[name];
+						return status?.state === "stopped" && status.reason === "diverged";
+					},
+					20_000,
+				);
+				// Later commits upload nothing and report nothing.
+				const at = stopped?.[name]?.at;
+				await send(owner, session, "again", 3);
+				await new Promise((resolve) => setTimeout(resolve, 1500));
+				assert.equal(backup.statuses.value?.[name]?.at, at);
+			} finally {
+				backup.release();
+			}
+		});
 	});
 });
 

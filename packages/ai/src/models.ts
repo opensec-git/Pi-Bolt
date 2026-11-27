@@ -1162,29 +1162,47 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 	let baselineModels = Object.getOwnPropertyDescriptor(input, "models")?.get ? undefined : input.models;
 	let dynamicModels: readonly ProviderModel<TApi>[] = [];
 	const fetchModels = input.fetchModels;
-	// The models as they are merged for the dynamic models of the moment: asked for hundreds of times as Pi starts (for every
-	// provider, each time any provider's models change), and merged again only when the dynamic models change. Each caller
-	// gets an array of its own, as before.
+	// Merged once per change of the dynamic models, not per read: getModels() is on hot paths such as Models.getModel()
+	// and is asked for hundreds of times as Pi starts (#12311).
 	let merged:
-		| { dynamic: readonly ProviderModel<TApi>[]; all: ProviderModel<TApi>[]; chat?: Model<TApi>[] }
+		| {
+				dynamic: readonly ProviderModel<TApi>[];
+				all: readonly ProviderModel<TApi>[];
+				chat?: readonly Model<TApi>[];
+		  }
 		| undefined;
 	const mergedModels = () => {
 		if (merged?.dynamic === dynamicModels) return merged;
 		baselineModels ??= input.models;
 		const all = [...baselineModels];
-		for (const model of dynamicModels) {
-			const index = all.findIndex((entry) => getModelType(entry) === getModelType(model) && entry.id === model.id);
-			if (index >= 0) all[index] = model;
-			else all.push(model);
+		if (dynamicModels.length > 0) {
+			const indexByKey = new Map<string, number>();
+			const keyOf = (model: ProviderModel<TApi>) => `${getModelType(model)}\0${model.id}`;
+			all.forEach((model, index) => {
+				const key = keyOf(model);
+				if (!indexByKey.has(key)) indexByKey.set(key, index);
+			});
+			for (const model of dynamicModels) {
+				const key = keyOf(model);
+				const index = indexByKey.get(key);
+				if (index !== undefined) {
+					all[index] = model;
+				} else {
+					indexByKey.set(key, all.length);
+					all.push(model);
+				}
+			}
 		}
 		merged = { dynamic: dynamicModels, all };
 		return merged;
 	};
-	const currentModels = (): readonly ProviderModel<TApi>[] => [...mergedModels().all];
-	const chatModels = (): Model<TApi>[] => {
+	const setDynamicModels = (models: readonly ProviderModel<TApi>[]): void => {
+		dynamicModels = models;
+	};
+	const chatModels = (): readonly Model<TApi>[] => {
 		const models = mergedModels();
 		models.chat ??= models.all.filter((model): model is Model<TApi> => isModelType(model, "chat"));
-		return [...models.chat];
+		return models.chat;
 	};
 	const apiFor = (model: Model<Api>): ProviderStreams | undefined => single ?? byApi?.[model.api];
 
@@ -1214,7 +1232,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 		headers: input.headers,
 		auth: input.auth,
 		getModels: chatModels,
-		getAllModels: currentModels,
+		getAllModels: () => mergedModels().all,
 		refreshModels: fetchModels
 			? async (context) => {
 					if (context.stored) {
@@ -1223,9 +1241,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 							.map((model) => model as ProviderModel<TApi>);
 						if (
 							!(await context.publish({
-								update: () => {
-									dynamicModels = restored;
-								},
+								update: () => setDynamicModels(restored),
 							}))
 						) {
 							return;
@@ -1237,9 +1253,7 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 					const refreshed = fetched.filter(hasKnownModelType);
 					await context.publish({
 						persist: { models: refreshed, checkedAt: Date.now() },
-						update: () => {
-							dynamicModels = refreshed;
-						},
+						update: () => setDynamicModels(refreshed),
 					});
 				}
 			: undefined,

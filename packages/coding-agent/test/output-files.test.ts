@@ -57,7 +57,7 @@ describe("OutputFile", () => {
 		expect(file.opened).toBe(false);
 		expect(file.failed).toBe(true);
 		expect(() => file.write("ignored")).not.toThrow();
-		expect(() => file.close()).toThrow(/EEXIST/);
+		expect(file.close()).toEqual({ kind: "failed", error: expect.stringContaining("EEXIST") });
 		expect(readFileSync(path, "utf-8")).toBe("");
 	});
 });

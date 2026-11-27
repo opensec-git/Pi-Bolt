@@ -669,7 +669,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
 	ttiTrace("settings.loaded");
 
-	// Experimental first-time setup: theme choice and analytics opt-in.
+	// Experimental first-time setup: analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
 	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
 		const { showFirstTimeSetup } = await loadStartupUi();

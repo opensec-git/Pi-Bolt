@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.6.1] - 2026-11-25
+
+### Breaking Changes
+
+- `RolloutHost` is a tagged union: `{ kind: "reloaded", host, report }`, `{ kind: "stopped", host }` or `{ kind: "failed", host, error }` (was `{ host, report }`, `{ host, stopped: true }`, `{ host, error }`). Migration: a rollout step's `reload` returns entries with `kind`; readers switch on `kind` instead of `"report" in entry`. A worker's reply to a reload is `reloaded` (with its report) or `reload_failed` (with its error).
+- `PluginSource` (`installPlugin`, the app kit's `plugins.install`) is tagged: `{ kind: "git", git, ref }` or `{ kind: "npm", npm, version }`. Migration: add the `kind`.
+- `SeriesResult` (`ChordStore.commitSeries`) is tagged: `{ kind: "stored", stored }` or `{ kind: "refused", stored, refused }` (was `{ stored, refused? }`). Migration: read `refused` after checking `result.kind === "refused"`.
+- Sync (experimental): writer epochs are removed. `uploadSession` no longer takes `epoch`, `putBatch` no longer passes one, and neither `PutBatchResult` nor `UploadResult` has `stale_epoch`: no remote issued epochs.
+
+### Added
+
+- Sync (experimental): `uploadSession` reports a remote that holds no history for a session this copy had shared (`not_head` at head 0, the copy past 0) as `{ type: "remote_empty", at }`, apart from `diverged`: the remote's copy was deleted, and the host may forget its sync state and start over with a full copy.
+
+### Fixed
+
+- Fixed sync batches and `importStore` JSONL rescanning an incomplete line on every chunk, which made long lines take time quadratic in their length ([#12224](https://github.com/earendil-works/pi/issues/12224))
+
 ## [1.6.0] - 2026-11-20
 
 ### Breaking Changes
