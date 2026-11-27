@@ -6,7 +6,6 @@
  * Spec: https://www.superlogical.com/rex/docs/build/program-resume
  */
 
-import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 
 /** The command a terminal runs to resume a program. */
@@ -63,7 +62,12 @@ export function formatProgramResumeClear(sender: ProgramResumeSender): string {
 function formatReport(pairs: string[], sender: ProgramResumeSender): string {
 	const body = [`pid=${sender.pid}`, `time=${sender.time}`, ...pairs].join(":");
 	// Plain SHA-256 with the token last, not an HMAC: the spec chose it so shell scripts can report with sha256sum.
-	const mac = createHash("sha256").update(`${body}:${sender.token}`, "utf8").digest("hex");
+	// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+	const mac = process
+		.getBuiltinModule("node:crypto")
+		.createHash("sha256")
+		.update(`${body}:${sender.token}`, "utf8")
+		.digest("hex");
 	return `\x1b]7577;${body}:mac=${mac}\x1b\\`;
 }
 
