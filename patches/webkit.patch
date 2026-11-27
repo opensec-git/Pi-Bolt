@@ -18031,3 +18031,66 @@ index 860441b75b..c574d23ca5 100644
 -- 
 2.53.0
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Fri, 27 Nov 2026 13:57:39 -0600
+Subject: [PATCH] Static heap: half the blocks' reservation on Windows when the
+ whole cannot be had
+
+- Windows: when 8 GB of addresses for the realms' blocks cannot be reserved, 4 GB are, rather
+  than none (which would leave the program without its prebuilt heap).
+- The size of a program realm's block, which StaticHeap::install() takes for a VM, is checked
+  against the one the realm asks for in release builds too.
+---
+ Source/JavaScriptCore/aot/AOTRuntime.cpp |  3 ++-
+ Source/bmalloc/bmalloc/StaticRegion.cpp  | 19 +++++++++++--------
+ 2 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/Source/JavaScriptCore/aot/AOTRuntime.cpp b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+index 851d7ca579..600f2221d8 100644
+--- a/Source/JavaScriptCore/aot/AOTRuntime.cpp
++++ b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+@@ -272,7 +272,8 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+         environmentsSize = roundUpToMultipleOf(WTF::pageSize(), Image::environmentsSize());
+         numberOfFunctions = Image::numberOfFunctionsOfImageWithEnvironments();
+         size = sizeFromInstanceFor(numberOfFunctions);
+-        ASSERT(environmentsSize + size == sizeOfBlockOfProgram());
++        // (The size StaticHeap::install() took the VM's block of.)
++        RELEASE_ASSERT(environmentsSize + size == sizeOfBlockOfProgram());
+ #if OS(WINDOWS)
+         // (Writable up to the room for datas, which is made so as it is used: the region is committed page by page, and 256 MB
+         // of it at once would count against the commit limit, as reserving it does not elsewhere.)
+diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
+index 56c7ee5ced..ff393b2143 100644
+--- a/Source/bmalloc/bmalloc/StaticRegion.cpp
++++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
+@@ -285,15 +285,18 @@ void StaticRegion::initializeLayout()
+     // StaticHeap::allocateBlock()'s blocks: addresses only, committed as they are used. High in the address space, where an
+     // address looks like no small number (the writer of an executable refuses a heap that points to them, and a pair of 32-bit
+     // numbers would otherwise look like an address of theirs).
+-    if (void* blocks = reserveBlocks(defaultSizeOfBlocks, s_layout.magic == StaticRegionLayout::expectedMagic)) {
+-        s_layout.blocksStart = reinterpret_cast<uintptr_t>(blocks);
+-        s_layout.blocksSize = defaultSizeOfBlocks;
+-    } else {
+-        // None (an address space limit): no blocks, rather than whatever the executable's layout says (the program then runs
+-        // without its prebuilt heap: Bun__StaticHeap__map()).
+-        s_layout.blocksStart = 0;
+-        s_layout.blocksSize = 0;
++    // (Half as many if that is all the address space allows; the realms that find no block run without the static heap.)
++    s_layout.blocksStart = 0;
++    s_layout.blocksSize = 0;
++    for (size_t size : { defaultSizeOfBlocks, defaultSizeOfBlocks / 2 }) {
++        if (void* blocks = reserveBlocks(size, s_layout.magic == StaticRegionLayout::expectedMagic)) {
++            s_layout.blocksStart = reinterpret_cast<uintptr_t>(blocks);
++            s_layout.blocksSize = size;
++            break;
++        }
+     }
++    // None (an address space limit): no blocks, rather than whatever the executable's layout says (the program then runs without
++    // its prebuilt heap: Bun__StaticHeap__map()).
+     RELEASE_BASSERT(VirtualProtect(&s_layout, sizeof(s_layout), PAGE_READONLY, &old));
+ }
+ 
+-- 
+2.53.0
+
