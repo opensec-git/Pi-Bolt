@@ -55,6 +55,16 @@ if ! command -v timeout >/dev/null 2>&1; then
 	PATH="$PIBOLT_WORK/bin:$PATH"
 fi
 
+# runtime_is_older BUN: whether the runtime is another engine than this tree's, which a test of what this tree's engine does is
+# skipped for: PIBOLT_RUNTIME_OLDER is set, or the RUNTIME_STAMP beside the runtime is not this tree's (scripts/runtime-stamp.sh).
+# CI tests with the latest release's runtime until a release ships the engine of the commit; the release workflow runs them on it.
+runtime_is_older() {
+	[ -n "${PIBOLT_RUNTIME_OLDER:-}" ] && return 0
+	local stamp
+	stamp="$(dirname "$1")/RUNTIME_STAMP"
+	[ -f "$stamp" ] && [ "$(cat "$stamp")" != "$("$PIBOLT_ROOT/scripts/runtime-stamp.sh" ${PIBOLT_LIBC:+"$PIBOLT_LIBC"})" ]
+}
+
 # sha256 [ARGS]: sha256sum, or shasum -a 256 where there is none (older macOS). Same output.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 

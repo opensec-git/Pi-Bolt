@@ -5,7 +5,8 @@
 #
 # Usage: tests/aot/run.sh [test.mjs...]      (default: every test)
 # Environment: PIBOLT_BUN (the Pi-Bolt runtime), PIBOLT_STABLE_BUN (the reference; default `bun`),
-#              AOT_BUILD_ENV (extra variables for the compile step, e.g. "BUN_JSC_useAOTLoopSplitting=0")
+#              AOT_BUILD_ENV (extra variables for the compile step, e.g. "BUN_JSC_useAOTLoopSplitting=0"),
+#              PIBOLT_RUNTIME_OLDER (the runtime is an older engine: tests of what this tree's engine does are skipped)
 source "$(dirname "$0")/../../scripts/lib/common.sh"
 set +e
 
@@ -21,6 +22,11 @@ tests=("$@")
 status=0
 for t in "${tests[@]}"; do
 	name=${t%.mjs}
+	# Of this tree's engine: the 14th worker of an older one ends the process.
+	if [ "$name" = workers-many ] && runtime_is_older "$BUN"; then
+		echo "SKIP $name: the runtime is an older engine than this tree's"
+		continue
+	fi
 	extra=(); own=""
 	[ "$name" = realms ] && extra=(realms-mod.mjs)
 	[ "$name" = workers ] && extra=(workers-entry.mjs)

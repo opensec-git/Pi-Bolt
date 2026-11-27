@@ -2,7 +2,7 @@
 // with SIGABRT's status, even when a JS listener has SIGABRT: signal-exit has one (Pi loads it with proper-lockfile), and Bun's
 // forwarding of the signal to it replaced the crash handler, so that such a crash ended the process with status 134 and nothing
 // on stderr. A signal that is sent (kill, process.kill()) still goes to the listener.
-// Usage: crash-report measure | crash | crash-unlistened | kill   (compiled ahead of time: tests/runtime/run.sh)
+// Usage: crash-report warm | measure | crash | crash-unlistened | kill   (compiled ahead of time: tests/runtime/run.sh)
 // The crash: realms other than the program's (ShadowRealm) each reserve their compiled code's room for data, and under an address
 // space limit (run.sh: ulimit -v) the engine runs out of it: "Out of address space for a realm's ahead-of-time code".
 import { spawnSync } from "node:child_process";
@@ -28,7 +28,9 @@ async function addRealm() {
 }
 
 await addRealm();
-if (mode === "measure") {
+if (mode === "warm") {
+  // (One realm and out: what the training run records.)
+} else if (mode === "measure") {
   console.log(fs.readFileSync("/proc/self/status", "utf8").match(/VmSize:\s+(\d+)/)[1]);
 } else if (mode === "crash" || mode === "crash-unlistened") {
   const unload = listenAsSignalExitDoes();

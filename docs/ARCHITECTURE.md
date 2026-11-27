@@ -161,9 +161,11 @@ executable format.
 - Worker threads share the static heap. Each realm that runs the program (the main one, and one per worker) has a block of the
   static region for its compiled code's data: 256 MB of addresses, used as it is written to. On Linux and macOS the blocks take the
   end of the region's zero-filled arena (room for 14) and then, once those are in use, the arena that only a build of a heap uses
-  (room for 15 more), which a running program reserves only then, as addresses alone. A worker is given its block when its VM is
-  made; one that finds none left runs without the static heap, from its bytecode or its source, as a worker of a JIT-on build
-  does, and the program goes on.
+  (room for 15 more), which a running program reserves only then, as addresses alone. Every worker is given its block when its VM
+  is made, whatever code it runs, and keeps it while it lives; one that finds none left runs without the static heap, from its
+  bytecode or its source, as a worker of a JIT-on build does, and the program goes on. In a build without the JIT such a worker
+  runs none of the compiled code: its code is interpreted, about half as fast. Under `vm.overcommit_memory=2` a block of the
+  second arena is charged to the commit limit (about 268 MB) when its worker starts; a worker that is refused one runs without it.
 - A crash of the engine is reported when a JavaScript listener has the signal it ends with (signal-exit listens to `SIGABRT` and
   `SIGTRAP`): a failed assertion prints its message, Bun's crash report follows, and the process ends with the signal (status
   134 for `SIGABRT`). A signal that is sent, by `kill` or `process.kill()`, goes to the listeners, as in Node.
