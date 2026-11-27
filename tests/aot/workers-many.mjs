@@ -9,16 +9,22 @@ const alive = 48;
 const cycles = 300;
 const entry = new URL(import.meta.url.endsWith(".mjs") ? "./workers-many-entry.mjs" : "./workers-many-entry.js", import.meta.url).href;
 
+// A worker that fails, at any time, ends the test with its error; one that does not answer, after a minute.
+function fail(message) {
+  console.log("FAIL", message);
+  process.exit(1);
+}
 function start() {
   const worker = new Worker(entry);
-  return new Promise((resolve, reject) => {
+  worker.addEventListener("error", (event) => fail(`a worker: ${event.message}`));
+  return new Promise((resolve) => {
     worker.addEventListener("message", (event) => event.data === "ready" && resolve(worker), { once: true });
-    worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
   });
 }
 function ask(worker, data) {
   return new Promise((resolve) => {
-    worker.addEventListener("message", (event) => resolve(event.data), { once: true });
+    const timer = setTimeout(() => fail(`no answer to ${data.kind}`), 60_000);
+    worker.addEventListener("message", (event) => { clearTimeout(timer); resolve(event.data); }, { once: true });
     worker.postMessage(data);
   });
 }

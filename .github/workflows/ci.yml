@@ -369,6 +369,9 @@ jobs:
         env:
           PI_TELEMETRY: "0"
       - name: Engine tests
+        # (Tests of what the engine in this commit does are skipped while the released runtime is an older engine.)
+        env:
+          PIBOLT_RUNTIME_OLDER: ${{ needs.changes.outputs.runtime_older == 'true' && '1' || '' }}
         run: |
           & tests\aot\run.ps1
           exit $LASTEXITCODE
