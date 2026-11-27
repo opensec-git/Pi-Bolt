@@ -432,6 +432,7 @@
 /[,:]
 /[-+*/=%^~]
 /[-+]
+/[.,!?:;]
 /[/=\\-+!*%<>&|^~?]
 /[0-1]
 /[0-7]
@@ -558,6 +559,7 @@
 /[^\\s,{}[\\]]
 /[^\\w\\s\\*&:<>.]
 /[^\\x20-\\x7e]
+/[^a-zA-Z0-9 ,.!?:;-]
 /[_a-zA-Z]
 /[_a-z][\\w']*|
 /[a-f0-9]
@@ -847,6 +849,7 @@
 /^(?<letters>[a-z]+)(?<digits>[0-9]+)$
 /^([>?]>|[\\w#]+\\(\\w+\\):\\d+:\\d+>|(\\w+-)?\\d+\\.\\d+\\.\\d+(p\\d+)?[^\\d][^>]+>)(?=[ ])|
 /^([^\\n]+(?:\\n(?! {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|1[.)])[ \\t]+[^ \\t\\n]|</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)| *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n| {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>|(?: {4}| {0,3}\u0009)[^\\n]| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|1[.)])[ \\t]|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|\\/?>)|<(?:script|pre|style|textarea|!--)).*(?:\\n|$))*)\\n*|$)|[ \\t]+\\n)[^\\n]+)*)
+/^(\\*{1,2})[a-zA-Z0-9]+(?: [a-zA-Z0-9]+)*\\1$
 /^(\\s*)
 /^(\\s*)?(class|instance)\\b|
 /^(\\s+)(?:```)
@@ -1395,6 +1398,7 @@ m/:
 m/;
 m/=cut
 m/>
+m/[(]|$
 m/[:={\\[(\\n;]
 m/[:={\\[\\n;]
 m/[:\\{(]|$
