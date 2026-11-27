@@ -201,8 +201,8 @@ Stock Bun 1.4.2 for Windows is linked with `/DYNAMICBASE`, `/HIGHENTROPYVA` and 
   `jitMemoryReservationAddress`, `dumpJITMemoryPath`, `diskCachePath`) are off whatever `BUN_JSC_*` says, and `aotImagePath`
   is ignored in every release runtime.
 - **The realms' blocks** (each realm's AOT::Instance and its compiled code's data: 256 MB of addresses each, committed as used) are
-  a 4 GB reservation, room for fifteen realms at once (each worker is one; it was 352 MB, and Pi's image worker ended the
-  process). In a program with a prebuilt heap the reservation is at a random 64 KB-aligned address between 16 and 127 TB (about
+  an 8 GB reservation, room for some thirty realms at once (each worker is one; a worker that finds no room runs without the
+  static heap). In a program with a prebuilt heap the reservation is at a random 64 KB-aligned address between 16 and 127 TB (about
   31 bits); a process that builds a heap keeps it at the top of the address space, where the writer of an executable can tell a
   pointer into it from data.
 - **Not done (open):** compiled code and its stubs call C++ operations through a runtime table, and enter functions through
