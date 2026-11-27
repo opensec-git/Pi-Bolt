@@ -1,0 +1,108 @@
+{"ok": true, "wall_ms": 16.369774006307125, "cpu_ms": 16.308, "peak_mb": 74.3046875, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.2", "round": 0}
+{"ok": true, "wall_ms": 14.653969090431929, "cpu_ms": 14.631, "peak_mb": 73.45703125, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.1", "round": 0}
+{"ok": true, "wall_ms": 16.29401184618473, "cpu_ms": 16.177, "peak_mb": 70.21484375, "peak_own_mb": 9.6, "mode": "headless", "build": "1.3.0", "round": 0}
+{"ok": true, "wall_ms": 15.622481238096952, "cpu_ms": 14.813999999999998, "peak_mb": 73.40234375, "peak_own_mb": 10.1, "mode": "headless", "build": "1.3.1", "round": 1}
+{"ok": true, "wall_ms": 16.11527567729354, "cpu_ms": 16.163999999999998, "peak_mb": 73.80859375, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.2", "round": 1}
+{"ok": true, "wall_ms": 16.348212026059628, "cpu_ms": 16.235, "peak_mb": 70.265625, "peak_own_mb": 9.7, "mode": "headless", "build": "1.3.0", "round": 1}
+{"ok": true, "wall_ms": 15.01101115718484, "cpu_ms": 14.853, "peak_mb": 73.859375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.2", "round": 2}
+{"ok": true, "wall_ms": 15.27406182140112, "cpu_ms": 14.468, "peak_mb": 70.21484375, "peak_own_mb": 9.3, "mode": "headless", "build": "1.3.0", "round": 2}
+{"ok": true, "wall_ms": 15.051440801471472, "cpu_ms": 15.16, "peak_mb": 72.90234375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.1", "round": 2}
+{"ok": true, "wall_ms": 16.260621137917042, "cpu_ms": 16.177999999999997, "peak_mb": 73.40234375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.1", "round": 3}
+{"ok": true, "wall_ms": 15.140112955123186, "cpu_ms": 14.962, "peak_mb": 70.21484375, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.0", "round": 3}
+{"ok": true, "wall_ms": 15.938432421535254, "cpu_ms": 15.387, "peak_mb": 73.80859375, "peak_own_mb": 10.1, "mode": "headless", "build": "1.3.2", "round": 3}
+{"ok": true, "wall_ms": 15.841987915337086, "cpu_ms": 15.760999999999997, "peak_mb": 70.2578125, "peak_own_mb": 9.7, "mode": "headless", "build": "1.3.0", "round": 4}
+{"ok": true, "wall_ms": 16.167972702533007, "cpu_ms": 16.01, "peak_mb": 72.9609375, "peak_own_mb": 9.9, "mode": "headless", "build": "1.3.1", "round": 4}
+{"ok": true, "wall_ms": 15.977569855749607, "cpu_ms": 15.966999999999999, "peak_mb": 74.3515625, "peak_own_mb": 9.6, "mode": "headless", "build": "1.3.2", "round": 4}
+{"ok": true, "wall_ms": 16.512305941432714, "cpu_ms": 16.365, "peak_mb": 70.7109375, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.0", "round": 5}
+{"ok": true, "wall_ms": 15.95123065635562, "cpu_ms": 16.046, "peak_mb": 73.8046875, "peak_own_mb": 9.6, "mode": "headless", "build": "1.3.2", "round": 5}
+{"ok": true, "wall_ms": 16.10037311911583, "cpu_ms": 15.787999999999997, "peak_mb": 72.9375, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.1", "round": 5}
+{"ok": true, "wall_ms": 15.812383964657784, "cpu_ms": 15.777, "peak_mb": 72.90234375, "peak_own_mb": 10.0, "mode": "headless", "build": "1.3.1", "round": 6}
+{"ok": true, "wall_ms": 15.749379992485046, "cpu_ms": 15.606, "peak_mb": 70.21484375, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.0", "round": 6}
+{"ok": true, "wall_ms": 15.499027911573648, "cpu_ms": 15.19, "peak_mb": 73.80859375, "peak_own_mb": 10.3, "mode": "headless", "build": "1.3.2", "round": 6}
+{"ok": true, "wall_ms": 14.330487232655287, "cpu_ms": 14.258999999999999, "peak_mb": 70.265625, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.0", "round": 7}
+{"ok": true, "wall_ms": 14.802259858697653, "cpu_ms": 14.688999999999998, "peak_mb": 73.8125, "peak_own_mb": 9.6, "mode": "headless", "build": "1.3.2", "round": 7}
+{"ok": true, "wall_ms": 16.079291701316833, "cpu_ms": 16.145, "peak_mb": 73.40234375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.1", "round": 7}
+{"ok": true, "wall_ms": 15.97897196188569, "cpu_ms": 15.854, "peak_mb": 73.203125, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.1", "round": 8}
+{"ok": true, "wall_ms": 15.1789509691298, "cpu_ms": 15.127999999999998, "peak_mb": 73.80859375, "peak_own_mb": 10.3, "mode": "headless", "build": "1.3.2", "round": 8}
+{"ok": true, "wall_ms": 15.492137055844069, "cpu_ms": 15.437, "peak_mb": 70.21484375, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.0", "round": 8}
+{"ok": true, "wall_ms": 16.24575024470687, "cpu_ms": 16.13, "peak_mb": 73.80859375, "peak_own_mb": 9.7, "mode": "headless", "build": "1.3.2", "round": 9}
+{"ok": true, "wall_ms": 14.888117089867592, "cpu_ms": 14.714999999999998, "peak_mb": 73.3984375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.1", "round": 9}
+{"ok": true, "wall_ms": 15.67050302401185, "cpu_ms": 15.512, "peak_mb": 70.2109375, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.0", "round": 9}
+{"ok": true, "wall_ms": 14.591495972126722, "cpu_ms": 14.565999999999999, "peak_mb": 74.30859375, "peak_own_mb": 9.4, "mode": "headless", "build": "1.3.2", "round": 10}
+{"ok": true, "wall_ms": 15.810722019523382, "cpu_ms": 16.236, "peak_mb": 70.21484375, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.0", "round": 10}
+{"ok": true, "wall_ms": 14.10469226539135, "cpu_ms": 14.275999999999998, "peak_mb": 72.90234375, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.1", "round": 10}
+{"ok": true, "wall_ms": 14.777803793549538, "cpu_ms": 14.885, "peak_mb": 69.8828125, "peak_own_mb": 9.5, "mode": "headless", "build": "1.3.0", "round": 11}
+{"ok": true, "wall_ms": 15.553367789834738, "cpu_ms": 15.616, "peak_mb": 72.90234375, "peak_own_mb": 10.0, "mode": "headless", "build": "1.3.1", "round": 11}
+{"ok": true, "wall_ms": 15.593278221786022, "cpu_ms": 15.469999999999999, "peak_mb": 73.86328125, "peak_own_mb": 9.8, "mode": "headless", "build": "1.3.2", "round": 11}
+{"wall_ms": 5.62369404360652, "cpu_ms": 4.081247999999999, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 0}
+{"wall_ms": 5.362044088542461, "cpu_ms": 3.974700000000002, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 0}
+{"wall_ms": 5.209867842495441, "cpu_ms": 4.088642999999999, "private_mib": 10.9, "mode": "rpc", "build": "1.3.1", "round": 0}
+{"wall_ms": 5.1970090717077255, "cpu_ms": 4.074259, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 1}
+{"wall_ms": 4.99292416498065, "cpu_ms": 4.081418999999999, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 1}
+{"wall_ms": 5.31062763184309, "cpu_ms": 4.16616, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 1}
+{"wall_ms": 5.331449210643768, "cpu_ms": 4.210415000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 2}
+{"wall_ms": 5.218810867518187, "cpu_ms": 4.170936000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 2}
+{"wall_ms": 5.262154620140791, "cpu_ms": 4.110412999999999, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 2}
+{"wall_ms": 4.945502616465092, "cpu_ms": 3.9680310000000016, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 3}
+{"wall_ms": 5.044790916144848, "cpu_ms": 3.8295139999999996, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 3}
+{"wall_ms": 5.214934702962637, "cpu_ms": 4.052776, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 3}
+{"wall_ms": 5.369634833186865, "cpu_ms": 4.166554999999999, "private_mib": 10.8, "mode": "rpc", "build": "1.3.1", "round": 4}
+{"wall_ms": 5.054204724729061, "cpu_ms": 4.059654, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 4}
+{"wall_ms": 5.203387700021267, "cpu_ms": 4.184325000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 4}
+{"wall_ms": 5.384988151490688, "cpu_ms": 4.140648999999998, "private_mib": 10.9, "mode": "rpc", "build": "1.3.1", "round": 5}
+{"wall_ms": 5.279371049255133, "cpu_ms": 4.187239000000002, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 5}
+{"wall_ms": 5.604914855211973, "cpu_ms": 4.3927260000000015, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 5}
+{"wall_ms": 5.294924136251211, "cpu_ms": 4.108390000000002, "private_mib": 10.9, "mode": "rpc", "build": "1.3.2", "round": 6}
+{"wall_ms": 5.341653246432543, "cpu_ms": 4.108219999999999, "private_mib": 10.7, "mode": "rpc", "build": "1.3.0", "round": 6}
+{"wall_ms": 5.378399044275284, "cpu_ms": 4.211368000000002, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 6}
+{"wall_ms": 5.4432847537100315, "cpu_ms": 4.206196, "private_mib": 10.7, "mode": "rpc", "build": "1.3.0", "round": 7}
+{"wall_ms": 5.354932975023985, "cpu_ms": 4.231723000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 7}
+{"wall_ms": 5.40384603664279, "cpu_ms": 4.233457000000001, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 7}
+{"wall_ms": 5.172601900994778, "cpu_ms": 4.07592, "private_mib": 11.0, "mode": "rpc", "build": "1.3.1", "round": 8}
+{"wall_ms": 5.291098263114691, "cpu_ms": 4.2719439999999995, "private_mib": 11.0, "mode": "rpc", "build": "1.3.2", "round": 8}
+{"wall_ms": 5.39003498852253, "cpu_ms": 4.294619000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 8}
+{"wall_ms": 4.993074107915163, "cpu_ms": 3.9003690000000013, "private_mib": 10.9, "mode": "rpc", "build": "1.3.1", "round": 9}
+{"wall_ms": 5.454681813716888, "cpu_ms": 4.287159000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 9}
+{"wall_ms": 5.172330886125565, "cpu_ms": 4.073027, "private_mib": 10.9, "mode": "rpc", "build": "1.3.2", "round": 9}
+{"wall_ms": 5.247702822089195, "cpu_ms": 4.079645000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 10}
+{"wall_ms": 5.335023161023855, "cpu_ms": 4.100237999999999, "private_mib": 10.9, "mode": "rpc", "build": "1.3.1", "round": 10}
+{"wall_ms": 5.150829907506704, "cpu_ms": 4.055791000000001, "private_mib": 10.8, "mode": "rpc", "build": "1.3.2", "round": 10}
+{"wall_ms": 5.218460224568844, "cpu_ms": 4.322683, "private_mib": 10.9, "mode": "rpc", "build": "1.3.2", "round": 11}
+{"wall_ms": 5.686105694621801, "cpu_ms": 4.380359, "private_mib": 10.9, "mode": "rpc", "build": "1.3.1", "round": 11}
+{"wall_ms": 5.477325059473515, "cpu_ms": 4.245736999999998, "private_mib": 10.8, "mode": "rpc", "build": "1.3.0", "round": 11}
+{"wall_ms": 12.316659092903137, "cpu_ms": 13.072270999999997, "private_mib": 15.0, "mode": "tui", "build": "1.3.0", "round": 0}
+{"wall_ms": 10.298785287886858, "cpu_ms": 10.977539999999998, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 0}
+{"wall_ms": 12.249658815562725, "cpu_ms": 13.081514000000002, "private_mib": 14.9, "mode": "tui", "build": "1.3.2", "round": 0}
+{"wall_ms": 10.552001651376486, "cpu_ms": 11.292912000000001, "private_mib": 14.7, "mode": "tui", "build": "1.3.2", "round": 1}
+{"wall_ms": 12.204803060740232, "cpu_ms": 12.883962, "private_mib": 15.0, "mode": "tui", "build": "1.3.0", "round": 1}
+{"wall_ms": 10.410541202872992, "cpu_ms": 11.141653000000002, "private_mib": 14.9, "mode": "tui", "build": "1.3.1", "round": 1}
+{"wall_ms": 10.529257822781801, "cpu_ms": 11.263138000000001, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 2}
+{"wall_ms": 10.92560775578022, "cpu_ms": 11.630108, "private_mib": 14.9, "mode": "tui", "build": "1.3.2", "round": 2}
+{"wall_ms": 12.186585925519466, "cpu_ms": 12.813073, "private_mib": 15.0, "mode": "tui", "build": "1.3.0", "round": 2}
+{"wall_ms": 10.965075809508562, "cpu_ms": 11.639814999999999, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 3}
+{"wall_ms": 12.70286412909627, "cpu_ms": 13.550305000000002, "private_mib": 15.3, "mode": "tui", "build": "1.3.0", "round": 3}
+{"wall_ms": 10.920319706201553, "cpu_ms": 11.659892, "private_mib": 14.9, "mode": "tui", "build": "1.3.2", "round": 3}
+{"wall_ms": 11.720892041921616, "cpu_ms": 12.409447, "private_mib": 14.7, "mode": "tui", "build": "1.3.2", "round": 4}
+{"wall_ms": 11.187697760760784, "cpu_ms": 11.928314999999998, "private_mib": 14.8, "mode": "tui", "build": "1.3.1", "round": 4}
+{"wall_ms": 12.676265090703964, "cpu_ms": 13.388904, "private_mib": 15.0, "mode": "tui", "build": "1.3.0", "round": 4}
+{"wall_ms": 11.506012175232172, "cpu_ms": 12.298431, "private_mib": 15.2, "mode": "tui", "build": "1.3.0", "round": 5}
+{"wall_ms": 11.68973557651043, "cpu_ms": 12.270817999999998, "private_mib": 14.9, "mode": "tui", "build": "1.3.2", "round": 5}
+{"wall_ms": 10.994930751621723, "cpu_ms": 11.506162999999997, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 5}
+{"wall_ms": 11.808803305029869, "cpu_ms": 12.608347, "private_mib": 15.2, "mode": "tui", "build": "1.3.0", "round": 6}
+{"wall_ms": 11.262099258601665, "cpu_ms": 11.652863, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 6}
+{"wall_ms": 10.171915870159864, "cpu_ms": 11.191460000000001, "private_mib": 15.0, "mode": "tui", "build": "1.3.2", "round": 6}
+{"wall_ms": 10.948071721941233, "cpu_ms": 11.153625, "private_mib": 14.7, "mode": "tui", "build": "1.3.2", "round": 7}
+{"wall_ms": 11.738006956875324, "cpu_ms": 12.671609, "private_mib": 15.2, "mode": "tui", "build": "1.3.0", "round": 7}
+{"wall_ms": 11.587444227188826, "cpu_ms": 11.749699000000001, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 7}
+{"wall_ms": 10.497821029275656, "cpu_ms": 11.137010999999998, "private_mib": 15.0, "mode": "tui", "build": "1.3.1", "round": 8}
+{"wall_ms": 11.962661985307932, "cpu_ms": 12.960304, "private_mib": 15.0, "mode": "tui", "build": "1.3.0", "round": 8}
+{"wall_ms": 11.49414386600256, "cpu_ms": 11.486334, "private_mib": 14.7, "mode": "tui", "build": "1.3.2", "round": 8}
+{"wall_ms": 11.340254917740822, "cpu_ms": 12.169415, "private_mib": 15.2, "mode": "tui", "build": "1.3.0", "round": 9}
+{"wall_ms": 11.31640886887908, "cpu_ms": 11.415783999999999, "private_mib": 15.0, "mode": "tui", "build": "1.3.2", "round": 9}
+{"wall_ms": 10.839559137821198, "cpu_ms": 11.120316000000003, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 9}
+{"wall_ms": 11.155970860272646, "cpu_ms": 11.238491, "private_mib": 14.7, "mode": "tui", "build": "1.3.2", "round": 10}
+{"wall_ms": 10.876425076276064, "cpu_ms": 11.494845999999999, "private_mib": 14.7, "mode": "tui", "build": "1.3.1", "round": 10}
+{"wall_ms": 11.716234963387251, "cpu_ms": 12.565062000000001, "private_mib": 15.2, "mode": "tui", "build": "1.3.0", "round": 10}
+{"wall_ms": 11.273935902863741, "cpu_ms": 12.044771999999998, "private_mib": 14.9, "mode": "tui", "build": "1.3.1", "round": 11}
+{"wall_ms": 11.527733877301216, "cpu_ms": 12.109137999999998, "private_mib": 15.0, "mode": "tui", "build": "1.3.2", "round": 11}
+{"wall_ms": 11.708833742886782, "cpu_ms": 12.897038000000002, "private_mib": 15.1, "mode": "tui", "build": "1.3.0", "round": 11}

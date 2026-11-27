@@ -1,0 +1,36 @@
+=== 2026-11-28 03:02:29 load 3.28 6.00 4.93
+=== 2026-11-28 03:02:29 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-28 03:02:30 load 3.26 5.95 4.92
+=== 2026-11-28 03:02:30 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-28 03:02:39 load 3.40 5.93 4.92
+=== 2026-11-28 03:02:39 session: 101 interactive tool prompts over HTTPS, 6 rounds, rotating order
+=== 2026-11-28 03:04:08 load 3.44 5.28 4.77
+=== 2026-11-28 03:04:08 restored: 6,000 restored messages in RPC, 2 rounds per rotation
+=== 2026-11-28 03:04:15 load 3.54 5.24 4.76
+=== 2026-11-28 03:04:15 idle: post-answer idle CPU and memory, 4 rounds of 15 s per rotation
+=== 2026-11-28 03:14:37 load 1.46 1.98 3.08
+=== 2026-11-28 03:14:37 special: get_entries / get_session_stats on 12,000 entries, 2 rounds per rotation
+=== 2026-11-28 03:14:38 special: tree search, linear and branched, 2 rounds per rotation
+=== 2026-11-28 03:15:10 special: 8 Mi and 32 Mi nested edit preview, 6 pairs per rotation
+=== 2026-11-28 03:15:22 load 1.66 1.97 3.02
+=== 2026-11-28 03:15:22 grep: 7 searches with the grep tool over packages/ of 08b1fb342 (git archive), 12 rounds
+=== 2026-11-28 03:15:50 load 2.31 2.11 3.04
+=== 2026-11-28 03:15:50 codemode: 4 and 20 codemode calls at once, PI_CODEMODE_MAX_WORKERS=51, 6 rounds
+=== 2026-11-28 03:16:51 load 15.74 5.59 4.25
+=== 2026-11-28 03:16:51 standard: benchmark.py, blank home, 4 runs per rotation
+=== 2026-11-28 03:17:17 standard: benchmark.py, realistic home, 4 runs per rotation
+=== 2026-11-28 03:17:43 standard: benchmark.py, extensions home, 4 runs per rotation
+=== 2026-11-28 03:18:12 standard: 60,000-character answer, order 1 of 6
+=== 2026-11-28 03:21:38 standard: 60,000-character answer, order 2 of 6
+=== 2026-11-28 03:25:03 standard: 60,000-character answer, order 3 of 6
+=== 2026-11-28 03:28:28 standard: 60,000-character answer, order 4 of 6
+=== 2026-11-28 03:31:53 standard: 60,000-character answer, order 5 of 6
+=== 2026-11-28 03:35:19 standard: 60,000-character answer, order 6 of 6
+=== 2026-11-28 03:38:46 standard: resuming a 2,292-entry session in fullscreen, order 1 of 6
+=== 2026-11-28 03:38:55 standard: resuming a 2,292-entry session in fullscreen, order 2 of 6
+=== 2026-11-28 03:39:04 standard: resuming a 2,292-entry session in fullscreen, order 3 of 6
+=== 2026-11-28 03:39:14 standard: resuming a 2,292-entry session in fullscreen, order 4 of 6
+=== 2026-11-28 03:39:23 standard: resuming a 2,292-entry session in fullscreen, order 5 of 6
+=== 2026-11-28 03:39:33 standard: resuming a 2,292-entry session in fullscreen, order 6 of 6
+=== 2026-11-28 03:39:42 load 2.01 1.94 2.34
+=== 2026-11-28 03:39:42 done

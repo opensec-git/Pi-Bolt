@@ -1,0 +1,108 @@
+{"ok": true, "wall_ms": 15.858583006775007, "cpu_ms": 12.23, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.3, "cycles_m": 53.7, "mode": "headless", "build": "1.3.2", "round": 0}
+{"ok": true, "wall_ms": 16.060750000178814, "cpu_ms": 12.395, "peak_mb": 42.375, "peak_fp_mb": 13.3, "instr_m": 132.2, "cycles_m": 54.6, "mode": "headless", "build": "1.3.1", "round": 0}
+{"ok": true, "wall_ms": 15.912333998130634, "cpu_ms": 12.479000000000001, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 54.8, "mode": "headless", "build": "1.3.0", "round": 0}
+{"ok": true, "wall_ms": 16.132125005242415, "cpu_ms": 12.416, "peak_mb": 42.390625, "peak_fp_mb": 13.3, "instr_m": 132.4, "cycles_m": 54.5, "mode": "headless", "build": "1.3.1", "round": 1}
+{"ok": true, "wall_ms": 16.006459001800977, "cpu_ms": 12.319999999999999, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.4, "cycles_m": 54.2, "mode": "headless", "build": "1.3.2", "round": 1}
+{"ok": true, "wall_ms": 15.824667003471404, "cpu_ms": 12.167, "peak_mb": 41.53125, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 53.4, "mode": "headless", "build": "1.3.0", "round": 1}
+{"ok": true, "wall_ms": 15.96274999610614, "cpu_ms": 12.365, "peak_mb": 42.5, "peak_fp_mb": 13.3, "instr_m": 132.3, "cycles_m": 54.2, "mode": "headless", "build": "1.3.2", "round": 2}
+{"ok": true, "wall_ms": 15.944875005516224, "cpu_ms": 12.337999999999997, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.6, "cycles_m": 54.2, "mode": "headless", "build": "1.3.0", "round": 2}
+{"ok": true, "wall_ms": 15.574958000797778, "cpu_ms": 12.087999999999997, "peak_mb": 42.359375, "peak_fp_mb": 13.4, "instr_m": 132.2, "cycles_m": 53.2, "mode": "headless", "build": "1.3.1", "round": 2}
+{"ok": true, "wall_ms": 15.755290995002724, "cpu_ms": 12.108, "peak_mb": 42.390625, "peak_fp_mb": 13.3, "instr_m": 132.5, "cycles_m": 53.1, "mode": "headless", "build": "1.3.1", "round": 3}
+{"ok": true, "wall_ms": 15.709457991761155, "cpu_ms": 12.193, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.5, "cycles_m": 53.6, "mode": "headless", "build": "1.3.0", "round": 3}
+{"ok": true, "wall_ms": 15.78012500249315, "cpu_ms": 12.142, "peak_mb": 42.484375, "peak_fp_mb": 13.4, "instr_m": 132.2, "cycles_m": 53.4, "mode": "headless", "build": "1.3.2", "round": 3}
+{"ok": true, "wall_ms": 15.980374999344349, "cpu_ms": 12.235, "peak_mb": 41.53125, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 53.7, "mode": "headless", "build": "1.3.0", "round": 4}
+{"ok": true, "wall_ms": 15.746624994790182, "cpu_ms": 12.235, "peak_mb": 42.390625, "peak_fp_mb": 13.3, "instr_m": 132.2, "cycles_m": 53.9, "mode": "headless", "build": "1.3.1", "round": 4}
+{"ok": true, "wall_ms": 15.95637499121949, "cpu_ms": 12.301, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.2, "cycles_m": 53.8, "mode": "headless", "build": "1.3.2", "round": 4}
+{"ok": true, "wall_ms": 15.61958399543073, "cpu_ms": 12.167000000000002, "peak_mb": 41.578125, "peak_fp_mb": 12.9, "instr_m": 131.8, "cycles_m": 53.6, "mode": "headless", "build": "1.3.0", "round": 5}
+{"ok": true, "wall_ms": 15.820208995137364, "cpu_ms": 12.283999999999999, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.3, "cycles_m": 54.1, "mode": "headless", "build": "1.3.2", "round": 5}
+{"ok": true, "wall_ms": 16.08166600635741, "cpu_ms": 12.402, "peak_mb": 42.390625, "peak_fp_mb": 13.3, "instr_m": 132.6, "cycles_m": 54.6, "mode": "headless", "build": "1.3.1", "round": 5}
+{"ok": true, "wall_ms": 15.567667011055164, "cpu_ms": 11.955, "peak_mb": 42.375, "peak_fp_mb": 13.3, "instr_m": 132.3, "cycles_m": 52.5, "mode": "headless", "build": "1.3.1", "round": 6}
+{"ok": true, "wall_ms": 15.916207994450815, "cpu_ms": 12.171999999999999, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.8, "cycles_m": 53.6, "mode": "headless", "build": "1.3.0", "round": 6}
+{"ok": true, "wall_ms": 15.701124997576699, "cpu_ms": 12.215, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.2, "cycles_m": 53.7, "mode": "headless", "build": "1.3.2", "round": 6}
+{"ok": true, "wall_ms": 15.642250000382774, "cpu_ms": 12.021, "peak_mb": 41.53125, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 53.0, "mode": "headless", "build": "1.3.0", "round": 7}
+{"ok": true, "wall_ms": 17.2660829994129, "cpu_ms": 13.767, "peak_mb": 42.515625, "peak_fp_mb": 13.4, "instr_m": 132.1, "cycles_m": 58.5, "mode": "headless", "build": "1.3.2", "round": 7}
+{"ok": true, "wall_ms": 17.261124987271614, "cpu_ms": 13.651, "peak_mb": 42.375, "peak_fp_mb": 13.3, "instr_m": 132.0, "cycles_m": 57.8, "mode": "headless", "build": "1.3.1", "round": 7}
+{"ok": true, "wall_ms": 16.070209007011726, "cpu_ms": 12.386999999999999, "peak_mb": 42.4375, "peak_fp_mb": 13.4, "instr_m": 131.9, "cycles_m": 53.8, "mode": "headless", "build": "1.3.1", "round": 8}
+{"ok": true, "wall_ms": 15.923458995530382, "cpu_ms": 12.306, "peak_mb": 42.515625, "peak_fp_mb": 13.3, "instr_m": 132.3, "cycles_m": 54.1, "mode": "headless", "build": "1.3.2", "round": 8}
+{"ok": true, "wall_ms": 16.132292003021576, "cpu_ms": 12.403999999999998, "peak_mb": 41.5, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 54.3, "mode": "headless", "build": "1.3.0", "round": 8}
+{"ok": true, "wall_ms": 15.562333006528206, "cpu_ms": 11.983999999999998, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.1, "cycles_m": 52.7, "mode": "headless", "build": "1.3.2", "round": 9}
+{"ok": true, "wall_ms": 16.121249995194376, "cpu_ms": 12.479000000000001, "peak_mb": 42.390625, "peak_fp_mb": 13.3, "instr_m": 132.2, "cycles_m": 54.7, "mode": "headless", "build": "1.3.1", "round": 9}
+{"ok": true, "wall_ms": 16.112041004817, "cpu_ms": 12.371, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.8, "cycles_m": 54.0, "mode": "headless", "build": "1.3.0", "round": 9}
+{"ok": true, "wall_ms": 15.585832996293902, "cpu_ms": 12.381, "peak_mb": 42.515625, "peak_fp_mb": 13.3, "instr_m": 132.2, "cycles_m": 54.1, "mode": "headless", "build": "1.3.2", "round": 10}
+{"ok": true, "wall_ms": 15.634625000529923, "cpu_ms": 12.174999999999999, "peak_mb": 41.515625, "peak_fp_mb": 12.9, "instr_m": 131.7, "cycles_m": 53.5, "mode": "headless", "build": "1.3.0", "round": 10}
+{"ok": true, "wall_ms": 15.935540999635123, "cpu_ms": 12.373, "peak_mb": 42.40625, "peak_fp_mb": 13.4, "instr_m": 132.4, "cycles_m": 54.1, "mode": "headless", "build": "1.3.1", "round": 10}
+{"ok": true, "wall_ms": 15.928124994388781, "cpu_ms": 12.263, "peak_mb": 41.53125, "peak_fp_mb": 12.9, "instr_m": 131.5, "cycles_m": 53.4, "mode": "headless", "build": "1.3.0", "round": 11}
+{"ok": true, "wall_ms": 15.825875001610257, "cpu_ms": 12.221, "peak_mb": 42.375, "peak_fp_mb": 13.3, "instr_m": 132.4, "cycles_m": 53.7, "mode": "headless", "build": "1.3.1", "round": 11}
+{"ok": true, "wall_ms": 15.811666991794482, "cpu_ms": 12.268999999999998, "peak_mb": 42.53125, "peak_fp_mb": 13.4, "instr_m": 132.1, "cycles_m": 53.8, "mode": "headless", "build": "1.3.2", "round": 11}
+{"wall_ms": 3.05987500178162, "cpu_ms": 2.1266250000000007, "private_mib": 14.0, "instr_m": 23.72, "mode": "rpc", "build": "1.3.0", "round": 0}
+{"wall_ms": 3.033959001186304, "cpu_ms": 2.0658749999999984, "private_mib": 14.0, "instr_m": 23.78, "mode": "rpc", "build": "1.3.2", "round": 0}
+{"wall_ms": 3.034749999642372, "cpu_ms": 2.065083333333332, "private_mib": 14.0, "instr_m": 23.48, "mode": "rpc", "build": "1.3.1", "round": 0}
+{"wall_ms": 2.9972500051371753, "cpu_ms": 2.035041666666668, "private_mib": 14.0, "instr_m": 23.77, "mode": "rpc", "build": "1.3.0", "round": 1}
+{"wall_ms": 3.119958011666313, "cpu_ms": 2.103208333333333, "private_mib": 14.0, "instr_m": 23.67, "mode": "rpc", "build": "1.3.1", "round": 1}
+{"wall_ms": 3.1163329986156896, "cpu_ms": 2.139333333333335, "private_mib": 14.0, "instr_m": 23.66, "mode": "rpc", "build": "1.3.2", "round": 1}
+{"wall_ms": 3.1687499867985025, "cpu_ms": 2.1836249999999993, "private_mib": 14.0, "instr_m": 23.71, "mode": "rpc", "build": "1.3.2", "round": 2}
+{"wall_ms": 3.1186249980237335, "cpu_ms": 2.1194999999999986, "private_mib": 14.0, "instr_m": 23.62, "mode": "rpc", "build": "1.3.0", "round": 2}
+{"wall_ms": 3.071875005844049, "cpu_ms": 2.087624999999999, "private_mib": 14.0, "instr_m": 23.61, "mode": "rpc", "build": "1.3.1", "round": 2}
+{"wall_ms": 3.040042007341981, "cpu_ms": 2.085416666666669, "private_mib": 14.0, "instr_m": 23.68, "mode": "rpc", "build": "1.3.2", "round": 3}
+{"wall_ms": 3.0412909982260317, "cpu_ms": 2.043125, "private_mib": 14.0, "instr_m": 23.47, "mode": "rpc", "build": "1.3.1", "round": 3}
+{"wall_ms": 3.0226249946281314, "cpu_ms": 2.0478749999999994, "private_mib": 14.0, "instr_m": 23.65, "mode": "rpc", "build": "1.3.0", "round": 3}
+{"wall_ms": 3.0112090025795624, "cpu_ms": 2.012083333333333, "private_mib": 14.0, "instr_m": 23.6, "mode": "rpc", "build": "1.3.1", "round": 4}
+{"wall_ms": 3.0295839969767258, "cpu_ms": 2.0427083333333336, "private_mib": 14.0, "instr_m": 23.55, "mode": "rpc", "build": "1.3.0", "round": 4}
+{"wall_ms": 3.011875000083819, "cpu_ms": 2.06625, "private_mib": 14.0, "instr_m": 23.74, "mode": "rpc", "build": "1.3.2", "round": 4}
+{"wall_ms": 3.0146249919198453, "cpu_ms": 2.0116250000000004, "private_mib": 14.0, "instr_m": 23.54, "mode": "rpc", "build": "1.3.1", "round": 5}
+{"wall_ms": 3.0565000051865354, "cpu_ms": 2.0355833333333333, "private_mib": 14.0, "instr_m": 23.61, "mode": "rpc", "build": "1.3.2", "round": 5}
+{"wall_ms": 3.13316700339783, "cpu_ms": 2.1345833333333317, "private_mib": 14.1, "instr_m": 23.54, "mode": "rpc", "build": "1.3.0", "round": 5}
+{"wall_ms": 3.0892909999238327, "cpu_ms": 2.1135833333333345, "private_mib": 14.0, "instr_m": 23.8, "mode": "rpc", "build": "1.3.2", "round": 6}
+{"wall_ms": 3.0735000036656857, "cpu_ms": 2.0792916666666663, "private_mib": 14.0, "instr_m": 23.62, "mode": "rpc", "build": "1.3.0", "round": 6}
+{"wall_ms": 3.0800829990766943, "cpu_ms": 2.068833333333334, "private_mib": 14.0, "instr_m": 23.49, "mode": "rpc", "build": "1.3.1", "round": 6}
+{"wall_ms": 3.1386670016217977, "cpu_ms": 2.1429166666666646, "private_mib": 14.0, "instr_m": 23.63, "mode": "rpc", "build": "1.3.0", "round": 7}
+{"wall_ms": 3.1521249911747873, "cpu_ms": 2.1634166666666665, "private_mib": 14.0, "instr_m": 23.76, "mode": "rpc", "build": "1.3.2", "round": 7}
+{"wall_ms": 3.129208998871036, "cpu_ms": 2.081666666666667, "private_mib": 14.0, "instr_m": 23.49, "mode": "rpc", "build": "1.3.1", "round": 7}
+{"wall_ms": 3.0894579977029935, "cpu_ms": 2.1485833333333346, "private_mib": 14.0, "instr_m": 23.67, "mode": "rpc", "build": "1.3.1", "round": 8}
+{"wall_ms": 3.1041250040289015, "cpu_ms": 2.1084583333333313, "private_mib": 13.9, "instr_m": 23.72, "mode": "rpc", "build": "1.3.2", "round": 8}
+{"wall_ms": 2.9389580013230443, "cpu_ms": 2.014916666666668, "private_mib": 14.1, "instr_m": 23.59, "mode": "rpc", "build": "1.3.0", "round": 8}
+{"wall_ms": 3.0049170018173754, "cpu_ms": 1.998875, "private_mib": 14.0, "instr_m": 23.59, "mode": "rpc", "build": "1.3.1", "round": 9}
+{"wall_ms": 3.039667004486546, "cpu_ms": 2.0718333333333305, "private_mib": 14.0, "instr_m": 23.68, "mode": "rpc", "build": "1.3.0", "round": 9}
+{"wall_ms": 3.078875000937842, "cpu_ms": 2.1329166666666666, "private_mib": 14.0, "instr_m": 23.67, "mode": "rpc", "build": "1.3.2", "round": 9}
+{"wall_ms": 3.0103339959168807, "cpu_ms": 2.115291666666666, "private_mib": 14.0, "instr_m": 23.66, "mode": "rpc", "build": "1.3.0", "round": 10}
+{"wall_ms": 3.070708000450395, "cpu_ms": 2.066958333333334, "private_mib": 14.0, "instr_m": 23.49, "mode": "rpc", "build": "1.3.1", "round": 10}
+{"wall_ms": 3.087709003011696, "cpu_ms": 2.1558333333333337, "private_mib": 14.0, "instr_m": 23.71, "mode": "rpc", "build": "1.3.2", "round": 10}
+{"wall_ms": 3.0148329969961196, "cpu_ms": 2.0258333333333347, "private_mib": 14.0, "instr_m": 23.76, "mode": "rpc", "build": "1.3.2", "round": 11}
+{"wall_ms": 3.156042002956383, "cpu_ms": 2.256208333333335, "private_mib": 14.1, "instr_m": 23.71, "mode": "rpc", "build": "1.3.1", "round": 11}
+{"wall_ms": 3.041624993784353, "cpu_ms": 2.0696666666666648, "private_mib": 14.0, "instr_m": 23.56, "mode": "rpc", "build": "1.3.0", "round": 11}
+{"wall_ms": 15.138292001211084, "cpu_ms": 15.269625000000001, "private_mib": 18.6, "instr_m": 87.51, "mode": "tui", "build": "1.3.0", "round": 0}
+{"wall_ms": 14.368917007232085, "cpu_ms": 14.625249999999998, "private_mib": 17.8, "instr_m": 83.17, "mode": "tui", "build": "1.3.1", "round": 0}
+{"wall_ms": 14.944833004847169, "cpu_ms": 15.020750000000003, "private_mib": 17.8, "instr_m": 83.09, "mode": "tui", "build": "1.3.2", "round": 0}
+{"wall_ms": 14.434249998885207, "cpu_ms": 14.608, "private_mib": 17.9, "instr_m": 82.91, "mode": "tui", "build": "1.3.2", "round": 1}
+{"wall_ms": 15.568125003483146, "cpu_ms": 15.829791666666669, "private_mib": 18.6, "instr_m": 87.62, "mode": "tui", "build": "1.3.0", "round": 1}
+{"wall_ms": 13.94366699969396, "cpu_ms": 14.018083333333333, "private_mib": 17.8, "instr_m": 83.21, "mode": "tui", "build": "1.3.1", "round": 1}
+{"wall_ms": 14.297540998086333, "cpu_ms": 14.380291666666661, "private_mib": 17.8, "instr_m": 83.19, "mode": "tui", "build": "1.3.1", "round": 2}
+{"wall_ms": 14.516541006742045, "cpu_ms": 14.648499999999999, "private_mib": 17.9, "instr_m": 83.03, "mode": "tui", "build": "1.3.2", "round": 2}
+{"wall_ms": 15.515459002926946, "cpu_ms": 15.751249999999995, "private_mib": 18.6, "instr_m": 87.61, "mode": "tui", "build": "1.3.0", "round": 2}
+{"wall_ms": 12.300540998694487, "cpu_ms": 12.238499999999998, "private_mib": 17.8, "instr_m": 82.99, "mode": "tui", "build": "1.3.1", "round": 3}
+{"wall_ms": 15.706958001828752, "cpu_ms": 15.953291666666669, "private_mib": 18.6, "instr_m": 87.5, "mode": "tui", "build": "1.3.0", "round": 3}
+{"wall_ms": 11.624875012785196, "cpu_ms": 11.650291666666668, "private_mib": 17.8, "instr_m": 83.0, "mode": "tui", "build": "1.3.2", "round": 3}
+{"wall_ms": 14.879125010338612, "cpu_ms": 14.814208333333333, "private_mib": 17.8, "instr_m": 83.11, "mode": "tui", "build": "1.3.2", "round": 4}
+{"wall_ms": 13.55037500616163, "cpu_ms": 13.613666666666667, "private_mib": 17.8, "instr_m": 83.13, "mode": "tui", "build": "1.3.1", "round": 4}
+{"wall_ms": 15.208500000881031, "cpu_ms": 15.361416666666667, "private_mib": 18.5, "instr_m": 87.47, "mode": "tui", "build": "1.3.0", "round": 4}
+{"wall_ms": 12.082542001735419, "cpu_ms": 11.96995833333333, "private_mib": 18.5, "instr_m": 87.55, "mode": "tui", "build": "1.3.0", "round": 5}
+{"wall_ms": 14.229417007300071, "cpu_ms": 14.320625, "private_mib": 17.9, "instr_m": 82.9, "mode": "tui", "build": "1.3.2", "round": 5}
+{"wall_ms": 13.895374999265186, "cpu_ms": 14.033999999999999, "private_mib": 17.8, "instr_m": 83.06, "mode": "tui", "build": "1.3.1", "round": 5}
+{"wall_ms": 14.28254198981449, "cpu_ms": 14.320166666666665, "private_mib": 18.4, "instr_m": 87.28, "mode": "tui", "build": "1.3.0", "round": 6}
+{"wall_ms": 14.748583009350114, "cpu_ms": 15.20891666666667, "private_mib": 17.8, "instr_m": 83.09, "mode": "tui", "build": "1.3.1", "round": 6}
+{"wall_ms": 14.73637500021141, "cpu_ms": 14.960458333333335, "private_mib": 17.8, "instr_m": 83.04, "mode": "tui", "build": "1.3.2", "round": 6}
+{"wall_ms": 14.082291003433056, "cpu_ms": 14.127208333333332, "private_mib": 17.8, "instr_m": 83.02, "mode": "tui", "build": "1.3.2", "round": 7}
+{"wall_ms": 15.321416998631321, "cpu_ms": 15.509000000000004, "private_mib": 18.5, "instr_m": 87.43, "mode": "tui", "build": "1.3.0", "round": 7}
+{"wall_ms": 14.502250007353723, "cpu_ms": 14.520124999999997, "private_mib": 17.8, "instr_m": 83.14, "mode": "tui", "build": "1.3.1", "round": 7}
+{"wall_ms": 14.003332995343953, "cpu_ms": 14.204000000000004, "private_mib": 18.0, "instr_m": 83.34, "mode": "tui", "build": "1.3.1", "round": 8}
+{"wall_ms": 15.70033399912063, "cpu_ms": 16.043291666666665, "private_mib": 18.5, "instr_m": 87.38, "mode": "tui", "build": "1.3.0", "round": 8}
+{"wall_ms": 14.828207989921793, "cpu_ms": 14.855958333333334, "private_mib": 17.9, "instr_m": 82.98, "mode": "tui", "build": "1.3.2", "round": 8}
+{"wall_ms": 15.309541995520703, "cpu_ms": 15.588833333333326, "private_mib": 18.5, "instr_m": 87.53, "mode": "tui", "build": "1.3.0", "round": 9}
+{"wall_ms": 15.083249993040226, "cpu_ms": 15.251333333333331, "private_mib": 17.9, "instr_m": 83.0, "mode": "tui", "build": "1.3.2", "round": 9}
+{"wall_ms": 15.150457998970523, "cpu_ms": 15.092833333333324, "private_mib": 17.8, "instr_m": 83.15, "mode": "tui", "build": "1.3.1", "round": 9}
+{"wall_ms": 14.688084003864788, "cpu_ms": 14.70154166666666, "private_mib": 17.8, "instr_m": 83.06, "mode": "tui", "build": "1.3.2", "round": 10}
+{"wall_ms": 15.000416999100707, "cpu_ms": 15.19808333333333, "private_mib": 17.8, "instr_m": 83.19, "mode": "tui", "build": "1.3.1", "round": 10}
+{"wall_ms": 14.652665995527059, "cpu_ms": 14.834416666666662, "private_mib": 18.6, "instr_m": 87.59, "mode": "tui", "build": "1.3.0", "round": 10}
+{"wall_ms": 14.241500000935048, "cpu_ms": 14.240833333333327, "private_mib": 17.7, "instr_m": 83.08, "mode": "tui", "build": "1.3.1", "round": 11}
+{"wall_ms": 13.833791992510669, "cpu_ms": 13.863458333333327, "private_mib": 17.8, "instr_m": 82.86, "mode": "tui", "build": "1.3.2", "round": 11}
+{"wall_ms": 15.446999997948296, "cpu_ms": 15.721, "private_mib": 18.4, "instr_m": 87.47, "mode": "tui", "build": "1.3.0", "round": 11}
