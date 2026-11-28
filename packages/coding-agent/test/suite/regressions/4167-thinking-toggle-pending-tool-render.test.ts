@@ -35,6 +35,7 @@ type RenderSessionItems = (
 
 type RenderSessionContextThis = {
 	pendingTools: Map<string, ToolExecutionComponent>;
+	clearPendingTools(): void;
 	chatContainer: Container;
 	footer: { invalidate(): void };
 	programStatus: { handleEvent(): void };
@@ -87,6 +88,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		maybeShowAssistantDiagnostics: vi.fn(),
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
+		clearPendingTools: (InteractiveMode.prototype as unknown as { clearPendingTools: () => void }).clearPendingTools,
 		addMessageToChat(message: AgentMessage) {
 			chatContainer.addChild(new Text(message.role, 0, 0));
 		},
