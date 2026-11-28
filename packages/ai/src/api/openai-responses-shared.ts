@@ -474,7 +474,8 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 							out.push({
 								type: "function_call",
 								...replayedCall,
-								arguments: JSON.stringify(toolCall.arguments),
+								// The text the model sent, when serializing the parsed arguments would differ from it (#12444).
+								arguments: toolCall.rawArguments ?? JSON.stringify(toolCall.arguments),
 							});
 						}
 					}
@@ -856,7 +857,14 @@ export async function processResponsesStream<TApi extends Api>(
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall" && slot.input.kind === "json") {
 				if (item.arguments) slot.input.arguments.replaceFor(slot.block, item.arguments);
-				Object.assign(slot.block, slot.input.arguments.finish());
+				const finished = slot.input.arguments.finish();
+				Object.assign(slot.block, finished);
+				// Keep the exact text for replay when it does not serialize back the same (#12444). Malformed or empty
+				// text keeps the old replay of the parsed (empty) arguments.
+				const text = slot.input.arguments.text;
+				if (finished.argumentsError === undefined && text.trim() && text !== JSON.stringify(finished.arguments)) {
+					slot.block.rawArguments = text;
+				}
 				if (item.namespace !== undefined) slot.block.namespace = item.namespace;
 				unfinishedToolCalls.delete(slot.block);
 				stream.push({
