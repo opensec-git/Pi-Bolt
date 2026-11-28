@@ -1068,7 +1068,12 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 	websocketSessionCache.clear();
 }
 
-registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
+// An ended session also drops its debug stats and transport fallback state: kept, they add one entry per session for
+// the life of the process (review claim A3).
+registerSessionResourceCleanup((sessionId) => {
+	closeOpenAICodexWebSocketSessions(sessionId);
+	resetOpenAICodexWebSocketDebugStats(sessionId);
+});
 
 function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
 	const state = sessionId ? websocketSseFallbackSessions.get(sessionId) : undefined;

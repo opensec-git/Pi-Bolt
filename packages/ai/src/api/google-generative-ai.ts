@@ -65,7 +65,8 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 	context: TranscriptContext,
 	options?: GoogleOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	// The internal delta options, as every other provider passes them (review claim A2).
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {
