@@ -63,6 +63,8 @@ import { WheelScrollAccelerator, type WheelScrollLines } from "./wheel-scroll.ts
 
 const ENTER_ALT_SCREEN = "\x1b[?1049h";
 const EXIT_ALT_SCREEN = "\x1b[?1049l";
+// What applyLineResets() appends to a row; cutting the row to the width drops it.
+const ROW_RESET = "\x1b[0m\x1b]8;;\x07";
 const DISABLE_AUTOWRAP = "\x1b[?7l";
 const ENABLE_AUTOWRAP = "\x1b[?7h";
 const ENABLE_BUTTON_MOTION_MOUSE = "\x1b[?1000h\x1b[?1002h\x1b[?1004h\x1b[?1006h";
@@ -557,7 +559,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				}
 				output.append(row > 0 ? "\r\n\r\x1b[2K" : "\r\x1b[2K");
 				output.append(
-					isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true),
+					isImageLine(line) || visibleWidth(line) <= width
+						? line
+						: // Claim T3: close the cut row's color and hyperlink.
+							sliceByColumn(line, 0, width, true) + ROW_RESET,
 				);
 			}
 			output.append(`\x1b[0m${ENABLE_AUTOWRAP}\r\n\x1b[?25h${END_SYNCHRONIZED_OUTPUT}`);
@@ -2096,7 +2101,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			}
 			const finished = this.applyLineResets([line])[0]!;
 			if (isImageLine(finished)) imageRows.add(finished);
-			else if (visibleWidth(finished) > width) return sliceByColumn(finished, 0, width, true);
+			// Claim T3: the cut drops the row's closing reset; without it the color and hyperlink carry into the next row.
+			else if (visibleWidth(finished) > width) return sliceByColumn(finished, 0, width, true) + ROW_RESET;
 			return finished;
 		});
 
