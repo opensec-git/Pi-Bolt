@@ -336,6 +336,48 @@ describe("AgentSession codemode tool", () => {
 		expect(toolResults).toHaveLength(1);
 	});
 
+	// Upstream PR #12623: every update copied every row, so a script looping over ~1,700 calls ran out of memory.
+	it("bounds the rows and updates of a script that loops over calls, and returns every result to it", async () => {
+		const harness = await setup();
+		const total = NESTED_CALL_LIMITS.maxCalls * 3;
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("codemode", {
+						code: `
+							let echoed = 0;
+							let last = "";
+							for (let i = 0; i < ${total}; i++) {
+								last = await tools.echo({ text: String(i) });
+								if (last === "echo: " + i) echoed++;
+							}
+							return { echoed, last };
+						`,
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		const result = codemodeResult(harness);
+		expect(result.isError).toBe(false);
+		// Calls past the list's limit still run and return their results to the script.
+		expect(resultText(result)).toBe(JSON.stringify({ echoed: total, last: `echo: ${total - 1}` }));
+		const details = result.details as unknown as CodemodeToolDetails;
+		expect(details.calls).toHaveLength(NESTED_CALL_LIMITS.maxCalls);
+		expect(details.omittedCalls).toBe(total - NESTED_CALL_LIMITS.maxCalls);
+		// Updates and the rows each one copies depend on the limit, not on how many calls the script makes.
+		const updates = harness
+			.eventsOfType("tool_execution_update")
+			.filter((event) => event.toolCallId === result.toolCallId);
+		expect(updates).toHaveLength(2 * NESTED_CALL_LIMITS.maxCalls + 2);
+		const rows = updates.map((event) => (event.partialResult.details as CodemodeToolDetails).calls.length);
+		expect(Math.max(...rows)).toBe(NESTED_CALL_LIMITS.maxCalls);
+	});
+
 	it("routes nested calls through extension hooks", async () => {
 		const harness = await setup([
 			(pi) => {
