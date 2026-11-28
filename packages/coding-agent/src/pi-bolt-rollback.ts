@@ -4,12 +4,16 @@
  * The installers keep the build an update replaces beside the new one, as <folder>.previous (install.sh renames it there;
  * install.ps1 copies it there first, since Windows does not let a running executable's folder be renamed). A rollback swaps
  * the two, so running it again goes forward again. It downloads nothing: both builds were checked when they were installed.
+ * A rollback to an older release keeps automatic updates from installing the one it went back from again (only a newer one);
+ * going forward again, or `pi-bolt update`, ends that.
  */
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { PIBOLT, PIBOLT_INSTALL_URL, piBoltInstallDir, piBoltInstallMethod, piBoltPackageManager } from "./pi-bolt.ts";
+import { setSkippedRelease } from "./pi-bolt-auto-update.ts";
 import { chalk } from "./utils/lazy-packages.ts";
+import { isNewerPackageVersion } from "./utils/version-check.ts";
 
 /** "Pi-Bolt 0.9.0 (Pi 1.2.0), linux-x64, JIT off, built ..." and what is compiled in, from a build's pi-bolt.txt. */
 function describe(folder: string): string {
@@ -20,6 +24,15 @@ function describe(folder: string): string {
 		return extensions ? `${name} with ${extensions} compiled in` : name;
 	} catch {
 		return folder;
+	}
+}
+
+/** The release of the build in `folder` ("0.9.0" from its pi-bolt.txt), or undefined. */
+function releaseOf(folder: string): string | undefined {
+	try {
+		return /^Pi-Bolt (\d+\.\d+\.\d+)/.exec(readFileSync(join(folder, "pi-bolt.txt"), "utf8"))?.[1];
+	} catch {
+		return undefined;
 	}
 }
 
@@ -106,6 +119,8 @@ export function rollBackInstallation(
 	}
 	const from = describe(current);
 	const to = describe(previous);
+	const fromRelease = releaseOf(current);
+	const toRelease = releaseOf(previous);
 	if (platform === "win32") {
 		swapFolderContents(current, previous);
 	} else {
@@ -119,6 +134,9 @@ export function rollBackInstallation(
 		}
 		renameSync(swap, previous);
 	}
+	// (Back to an older release: automatic updates leave the newer one alone. Forward, or the same release: nothing is skipped.)
+	const back = fromRelease && toRelease && isNewerPackageVersion(fromRelease, toRelease);
+	setSkippedRelease(dirname(current), back ? fromRelease : undefined);
 	return { from, to };
 }
 

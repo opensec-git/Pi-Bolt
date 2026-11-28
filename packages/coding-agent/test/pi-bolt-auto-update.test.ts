@@ -479,6 +479,33 @@ chmod +x "$dir/pi"
 		},
 	);
 
+	// hunt-install-9: after `pi-bolt update --rollback`, an automatic update installed the release rolled back from again.
+	it.skipIf(process.platform === "win32")(
+		"leaves the release a rollback went back from alone, and installs a newer one",
+		async () => {
+			writeFileSync(autoUpdatePaths(installDir).skip, "1.0.3\n");
+			await handlePackageCommand(["update", "--background"]);
+			expect(readAutoUpdateRecord(installDir)?.result).toEqual({ kind: "skipped", version: "1.0.3" });
+			expect(readFileSync(join(buildDir, "pi"), "utf8")).toBe("");
+			expect(requests).toEqual(["/opensec-git/Pi-Bolt/releases/latest"]);
+			releaseVersion = "1.0.4";
+			writeAutoUpdateRecord(installDir, { checkedAt: 0 });
+			await handlePackageCommand(["update", "--background"]);
+			expect(readAutoUpdateRecord(installDir)?.result).toEqual({ kind: "installed", version: "1.0.4" });
+			expect(existsSync(autoUpdatePaths(installDir).skip)).toBe(false);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"pi-bolt update installs the release a rollback went back from, and ends the skip",
+		async () => {
+			writeFileSync(autoUpdatePaths(installDir).skip, "1.0.3\n");
+			await handlePackageCommand(["update", "--self"]);
+			expect(readFileSync(join(buildDir, "pi"), "utf8")).toContain("Pi-Bolt 1.0.3");
+			expect(existsSync(autoUpdatePaths(installDir).skip)).toBe(false);
+		},
+	);
+
 	it("two Pi-Bolts starting at the same moment: the second does nothing when the first was done before it took the lock", async () => {
 		const first = { checkedAt: Date.now() - 1000, result: { kind: "current" as const, version: "1.0.2" } };
 		writeAutoUpdateRecord(installDir, first);

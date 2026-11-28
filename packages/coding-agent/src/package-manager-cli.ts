@@ -61,6 +61,8 @@ import {
 	type AutoUpdateResult,
 	autoUpdatePaths,
 	readAutoUpdateRecord,
+	setSkippedRelease,
+	skipsRelease,
 	startedRecently,
 	writeAutoUpdateRecord,
 } from "./pi-bolt-auto-update.ts";
@@ -918,6 +920,9 @@ async function runPiBoltSelfUpdate(version: string, options: { reinstall?: boole
 		console.error(chalk.red(`You can run the installer yourself: ${PIBOLT_INSTALL_COMMAND}`));
 		return false;
 	}
+	// (An update to the latest release ends what a rollback kept automatic updates from installing; the reinstall of
+	// `pi-bolt compile --off` does not.)
+	if (!options.reinstall && runningFrom) setSkippedRelease(runningFrom, undefined);
 	console.log(
 		chalk.green(
 			options.reinstall
@@ -986,6 +991,8 @@ async function backgroundUpdate(currentVersion: string, installDir: string): Pro
 	const latest = await getLatestPiRelease(currentVersion, { retry: true });
 	if (!latest) return { kind: "failed", reason: "the latest release could not be found" };
 	if (!isNewerPackageVersion(latest.version, currentVersion)) return { kind: "current", version: currentVersion };
+	// (The release `pi-bolt update --rollback` went back from stays rolled back: only a newer one is installed.)
+	if (skipsRelease(installDir, latest.version)) return { kind: "skipped", version: latest.version };
 	// (Extensions compiled into this build load from their files in the new one: an update compiles nothing.)
 	const compiledBefore =
 		buildHasCompiledExtensions(dirname(process.execPath)) && existsSync(join(installDir, "compile.json"));
@@ -1034,6 +1041,7 @@ async function runPiBoltWindowsUpdate(
 		console.error(chalk.red(`You can run the installer yourself: ${PIBOLT_INSTALL_COMMAND}`));
 		return false;
 	}
+	if (!options.reinstall) setSkippedRelease(installDir, undefined);
 	console.log(
 		chalk.green(
 			options.reinstall

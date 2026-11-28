@@ -232,7 +232,9 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
   on. An interactive session of an installation the installer made then looks for a new release on its channel after it has
   started, at most once a day, and installs it in the background with the same checks as <code>pi-bolt update</code>. Like
   <code>pi-bolt update</code>, it compiles nothing: extensions <code>pi-bolt compile</code> compiled in load from their files
-  until it compiles them in again. The session goes on; the new release starts next time,
+  until it compiles them in again. After <code>pi-bolt update --rollback</code> it leaves the release you went back from alone
+  and installs only a newer one; <code>pi-bolt update</code> installs the latest and ends that. The session goes on; the new
+  release starts next time,
   and the session shows one line when it is installed, or the reason when it could not be (the output is in
   <code>~/.pi-bolt/auto-update.log</code>). <code>pi-bolt -p</code>, RPC and ACP never update, nor does an installation that npm,
   Homebrew, Scoop or mise manage. <code>PIBOLT_NO_AUTO_UPDATE=1</code> turns automatic updates off whatever the setting says, as
