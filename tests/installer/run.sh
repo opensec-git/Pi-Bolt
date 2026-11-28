@@ -16,7 +16,12 @@
 #     through a tar that reads it itself; with PIBOLT_SOURCE=npm (whose package is a .tar.xz) the installer says why it cannot;
 #     an xz that fails after tar ended well is a failed unpack, and the .tar.gz is installed instead; where that cannot be
 #     downloaded either, nothing is installed and nothing is left; a write that fails as it unpacks (a full disk) is said, and
-#     no .tar.gz is downloaded; stopped as it unpacks, it leaves neither xz nor tar running, nor any of the download;
+#     no .tar.gz is downloaded; stopped as it unpacks (TERM, or a hangup with each POSIX shell installed), it leaves neither xz
+#     nor tar running, nor any of the download; the error of a write that fails as bsdtar unpacks says that write;
+#   - a download in one part is renamed into place, not copied (a disk with room for it once);
+#   - a download that stops part of the way, the connection left open, is given up and tried again;
+#   - a PIBOLT_BIN_DIR with a trailing slash that is on PATH is taken for the folder on PATH; a relative one is made absolute;
+#   - uninstall uninstalls the remote control service of this installation, and leaves another Pi-Bolt's;
 #   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature;
 #   - the Paseo step (tests/installer/paseo.py) with each of sh, dash and BusyBox's sh that is installed.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
@@ -209,6 +214,33 @@ if grep -q '^extracting' "$WORK/stopped.log" && ! installed && [ -z "$left" ] &&
 	[ -z "$still" ] || kill $still 2>/dev/null || true
 fi
 
+# (The same with a hangup, as a closed terminal or a dropped SSH connection sends, with each POSIX shell installed: dash, the sh
+# of Debian and Ubuntu, runs no EXIT trap when a signal it does not trap ends it, and left the download in the installation's
+# folder, which nothing removed afterwards.) hunt-install-1
+for shell in sh dash "busybox sh"; do
+	command -v "${shell%% *}" >/dev/null 2>&1 || continue
+	rm -rf "${WORK:?}/home" && mkdir -p "$WORK/home"
+	# shellcheck disable=SC2086 # "busybox sh" is two words
+	env HOME="$WORK/home" SHELL=/bin/sh PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port/good" PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+		PIBOLT_YES=1 PIBOLT_INSTALL="$WORK/home/inst" PIBOLT_BIN_DIR="$WORK/home/bin" PATH="$WORK/slowxz:$PATH" \
+		$shell "$ROOT/install.sh" </dev/null >"$WORK/hangup.log" 2>&1 &
+	installer=$!
+	for _ in $(seq 600); do grep -q '^extracting' "$WORK/hangup.log" && break; sleep 0.1; done
+	sleep 1
+	kill -HUP "$installer" 2>/dev/null || true
+	wait "$installer" 2>/dev/null || true
+	sleep 0.5
+	left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 -name '.download.*' 2>/dev/null)
+	still=$(pgrep -f "$WORK/home/inst" || true)
+	if grep -q '^extracting' "$WORK/hangup.log" && ! installed && [ -z "$left" ] && [ -z "$still" ]; then
+		pass "a hangup while it unpacks ($shell): nothing of the download left"; else
+		fail "a hangup while it unpacks ($shell): nothing of the download left"
+		cat "$WORK/hangup.log"; printf 'left: %s\nrunning: %s\n' "$left" "$still"
+		# shellcheck disable=SC2086 # process IDs
+		[ -z "$still" ] || kill $still 2>/dev/null || true
+	fi
+done
+
 # (OpenSSL 1.1 as openssl, OpenSSL 3 as openssl3: openssl3 checks the signature.) #323
 real_ssl=""
 for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
@@ -234,6 +266,104 @@ if [ -n "$line" ]; then
 else
 	fail "PIBOLT_BIN_DIR stays a folder name (no PATH line)"; printf '%s\n' "$out"
 fi
+
+# (A PIBOLT_BIN_DIR with a trailing slash that is on PATH is taken for the folder on PATH, and a relative one is made absolute:
+# the line given for the shell's configuration would otherwise put a folder relative to wherever a command runs on PATH.)
+# hunt-install-4
+out=$(install good PIBOLT_BIN_DIR="$WORK/home/bin/" PATH="$WORK/home/bin:$PATH")
+if installed && grep -q "Run it with: pi-bolt\$" <<<"$out" && ! grep -q "not on your PATH" <<<"$out"; then
+	pass "PIBOLT_BIN_DIR with a trailing slash, on PATH: taken for the folder on PATH"; else
+	fail "PIBOLT_BIN_DIR with a trailing slash, on PATH: taken for the folder on PATH"; printf '%s\n' "$out"; fi
+out=$(cd "$WORK" && install good PIBOLT_BIN_DIR=relative-bin)
+if [ -L "$WORK/relative-bin/pi-bolt" ] && grep -Eq '^  export PATH="/[^"]*/relative-bin:\$PATH"$' <<<"$out"; then
+	pass "a relative PIBOLT_BIN_DIR: made absolute"; else
+	fail "a relative PIBOLT_BIN_DIR: made absolute"; printf '%s\n' "$out"; fi
+rm -rf "${WORK:?}/relative-bin"
+
+# (A disk with room for the download once: the download, in one part, is renamed into place, not copied, which on such a disk
+# was cut short and said to be a corrupt download.) hunt-install-2
+stub fullcopy cat "for a; do case \"\$a\" in */part.*) echo 'cat: stdout: No space left on device' >&2; exit 1 ;; esac; done
+exec '$(command -v cat)' \"\$@\""
+out=$(install good PATH="$WORK/fullcopy:$PATH")
+if installed && ! grep -q "checksum mismatch" <<<"$out"; then pass "the download is not copied as it is put together"; else
+	fail "the download is not copied as it is put together"; printf '%s\n' "$out"; fi
+# (bsdtar, macOS's tar, ends what it says with "Error exit delayed from previous errors": the error says the write that failed.)
+stub bsdtar-full tar "if [ \"\$1\" = --version ]; then echo 'bsdtar 3.5.3 - libarchive 3.7.4 zlib/1.2.12 liblzma/5.4.3'; exit 0; fi
+echo \"$NAME/pi-bin: Can't create '$NAME/pi-bin': No space left on device\" >&2
+echo 'tar: Error exit delayed from previous errors.' >&2; exit 1"
+out=$(install good PATH="$WORK/bsdtar-full:$PATH")
+if ! installed && grep -q "could not extract $NAME.tar.xz: .*No space left on device" <<<"$out"; then
+	pass "a full disk as bsdtar unpacks: the error says the write that failed"; else
+	fail "a full disk as bsdtar unpacks: the error says the write that failed"; printf '%s\n' "$out"; fi
+
+# (A server that stops sending the archive part of the way, and keeps the connection open: the download is given up after a
+# while with nothing received, and tried again, rather than waited for as long as the server keeps it open.) hunt-install-3
+cat >"$WORK/stall.py" <<'PY'
+import http.server, os, sys, time
+root, port = sys.argv[1], int(sys.argv[2])
+stalled = set()
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=root, **kwargs)
+    def log_message(self, *args):
+        pass
+    def do_GET(self):
+        path = self.translate_path(self.path)
+        if ".tar." in path and path not in stalled and os.path.isfile(path):
+            stalled.add(path)
+            size = os.path.getsize(path)
+            self.send_response(200)
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with open(path, "rb") as archive:
+                self.wfile.write(archive.read(size // 2))
+            self.wfile.flush()
+            time.sleep(600)
+            return
+        super().do_GET()
+http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+PY
+stall_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 "$WORK/stall.py" "$WORK" "$stall_port" >/dev/null 2>&1 &
+stall_server=$!
+for _ in $(seq 50); do curl -fs "http://127.0.0.1:$stall_port/good/SHA256SUMS" >/dev/null && break; sleep 0.1; done
+rm -rf "${WORK:?}/home" && mkdir -p "$WORK/home"
+env HOME="$WORK/home" SHELL=/bin/sh PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$stall_port/good" PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+	PIBOLT_YES=1 PIBOLT_INSTALL="$WORK/home/inst" PIBOLT_BIN_DIR="$WORK/home/bin" sh "$ROOT/install.sh" </dev/null >"$WORK/stall.log" 2>&1 &
+installer=$!
+for _ in $(seq 1200); do kill -0 "$installer" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$installer" 2>/dev/null; then
+	kill -TERM "$installer" 2>/dev/null || true
+	fail "a download that stops part of the way: given up and tried again (still waiting after 120 s)"; cat "$WORK/stall.log"
+elif installed; then pass "a download that stops part of the way: given up and tried again"; else
+	fail "a download that stops part of the way: given up and tried again"; cat "$WORK/stall.log"; fi
+wait "$installer" 2>/dev/null || true
+kill "$stall_server" 2>/dev/null || true
+
+# (Uninstall: the remote control service that runs this installation's executable is uninstalled with it, by that executable;
+# one that runs another Pi-Bolt is left alone. The installer's functions, without its main body.) hunt-install-7
+svc="$WORK/svc"
+case "$(uname -s)" in Darwin) platform=darwin unit="$svc/home/Library/LaunchAgents/in.opensec.pi-bolt.remote-control.plist" ;;
+*) platform=linux unit="$svc/home/.config/systemd/user/pi-bolt-remote-control.service" ;; esac
+# uninstall_with PROGRAM: the installer's uninstall, with a service that runs PROGRAM; what the build's executable was asked in
+# $svc/calls.
+uninstall_with() {
+	rm -rf "$svc" && mkdir -p "$svc/inst/$NAME" "$svc/bin" "$(dirname "$unit")"
+	printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/calls"\n' "$svc" >"$svc/inst/$NAME/pi" && chmod 755 "$svc/inst/$NAME/pi"
+	printf '<string>%s</string>\nExecStart="%s" "service" "run"\n' "$1" "$1" >"$unit"
+	{
+		sed '/^main "\$@"$/d' install.sh
+		printf '%s\n' 'set -eu' setup_style 'TERMUX=""' "INSTALL='$svc/inst'" "BIN_DIR='$svc/bin'" "NAME='$NAME'" "PLATFORM=$platform" uninstall
+	} >"$svc/uninstall.sh"
+	env -u XDG_CONFIG_HOME HOME="$svc/home" sh "$svc/uninstall.sh" </dev/null >/dev/null 2>&1 || true
+}
+uninstall_with "$svc/inst/$NAME/pi"
+if grep -qx "service uninstall" "$svc/calls" 2>/dev/null && [ ! -e "$svc/inst/$NAME" ]; then
+	pass "uninstall: this installation's remote control service is uninstalled"; else
+	fail "uninstall: this installation's remote control service is uninstalled"; cat "$svc/calls" 2>/dev/null; fi
+uninstall_with "$WORK/elsewhere/pi"
+if [ ! -e "$svc/calls" ] && [ ! -e "$svc/inst/$NAME" ]; then pass "uninstall: another Pi-Bolt's remote control service is left alone"; else
+	fail "uninstall: another Pi-Bolt's remote control service is left alone"; cat "$svc/calls" 2>/dev/null; fi
 
 inst="$WORK/home/inst"
 out=$(install good)
