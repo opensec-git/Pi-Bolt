@@ -1,6 +1,7 @@
 import { convertImageBytesToPng } from "./image-convert.ts";
 import { formatDimensionNote, type ImageResizeOptions, resizeImage } from "./image-resize.ts";
 import { resolveImageResizeOptions } from "./image-resize-core.ts";
+import { detectSupportedImageMimeType } from "./mime.ts";
 
 export interface ProcessImageOptions {
 	/** Whether to resize images to inline provider limits. Default: true */
@@ -47,10 +48,28 @@ function normalizeSupportedImageMimeType(mimeType: string): string | null {
 	}
 }
 
+/** Whether `bytes` start with the signature of `mimeType`, for variants the detector does not accept (APNG, JPEG-LS). */
+function hasSignatureOf(bytes: Uint8Array, mimeType: string): boolean {
+	if (mimeType === "image/png")
+		return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+	if (mimeType === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+	return false;
+}
+
+/**
+ * The image as an inline type, taken from its bytes rather than the declared type: providers reject an image whose
+ * declared type does not match its bytes, and the image then fails every later request of the session (upstream
+ * #12239). Bytes of no supported type are converted, or the image is dropped.
+ */
 async function normalizeImage(bytes: Uint8Array, mimeType: string): Promise<NormalizedImage | null> {
-	const normalizedMimeType = normalizeSupportedImageMimeType(mimeType);
-	if (normalizedMimeType) {
-		return { bytes, mimeType: normalizedMimeType };
+	const detectedMimeType = detectSupportedImageMimeType(bytes);
+	const inlineMimeType = detectedMimeType ? normalizeSupportedImageMimeType(detectedMimeType) : null;
+	if (inlineMimeType) {
+		return { bytes, mimeType: inlineMimeType };
+	}
+	const declaredMimeType = normalizeSupportedImageMimeType(mimeType);
+	if (!detectedMimeType && declaredMimeType && hasSignatureOf(bytes, declaredMimeType)) {
+		return { bytes, mimeType: declaredMimeType };
 	}
 
 	const pngBytes = await convertImageBytesToPng(bytes);
@@ -61,7 +80,7 @@ async function normalizeImage(bytes: Uint8Array, mimeType: string): Promise<Norm
 	return {
 		bytes: pngBytes,
 		mimeType: "image/png",
-		convertedFrom: baseMimeType(mimeType),
+		convertedFrom: detectedMimeType ?? baseMimeType(mimeType),
 	};
 }
 
