@@ -960,7 +960,14 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 		const files = readdirSync(resolvedSessionDir)
 			.filter((file) => file.endsWith(".jsonl"))
 			.map((file) => join(resolvedSessionDir, file))
-			.map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+			.flatMap((path) => {
+				// One entry that cannot be read (a dangling symlink, a file deleted since readdir) must not hide the others.
+				try {
+					return [{ path, mtime: statSync(path).mtimeMs }];
+				} catch {
+					return [];
+				}
+			})
 			.sort((a, b) => b.mtime - a.mtime);
 
 		for (const { path } of files) {
