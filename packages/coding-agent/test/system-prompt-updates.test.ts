@@ -70,6 +70,65 @@ describe("system prompt updates", () => {
 		}
 	});
 
+	// #12547: a tool that registers late (after an await in session_start, or an MCP server) was appended to the active
+	// order on resume or reload. The prompt's <tools> section then changed order, a new system message was recorded and
+	// the next request missed the prompt cache.
+	test("keeps the transcript's tool order when a tool registers late on resume", async () => {
+		const tool = (name: string) => ({
+			name,
+			label: name,
+			description: `${name} description`,
+			promptSnippet: `${name} prompt snippet`,
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text" as const, text: name }], details: {} }),
+		});
+		const first = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool(tool("late_tool"));
+					pi.registerTool(tool("early_tool"));
+				},
+			],
+			initialActiveToolNames: ["late_tool", "early_tool"],
+		});
+		try {
+			first.setResponses([fauxAssistantMessage("first")]);
+			await first.session.prompt("one");
+			const declared = getCurrentSystemMessage(first.session.messages)?.toolsAdded?.map((value) => value.name);
+			expect(declared).toEqual(["late_tool", "early_tool"]);
+		} catch (error) {
+			first.cleanup();
+			throw error;
+		}
+
+		// The resumed session registers early_tool at load and late_tool later.
+		let late: Parameters<ExtensionFactory>[0] | undefined;
+		const second = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerTool(tool("early_tool"));
+					late = pi;
+				},
+			],
+			sessionManager: first.sessionManager,
+		});
+		try {
+			// As createAgentSession does on resume, the agent starts from the transcript.
+			second.session.agent.state.messages = [...first.session.messages];
+			late?.registerTool(tool("late_tool"));
+			expect(second.session.getActiveToolNames()).toEqual(["late_tool", "early_tool"]);
+			second.setResponses([fauxAssistantMessage("second")]);
+			await second.session.prompt("two");
+			// The second harness runs in another directory, so only its cwd section may change.
+			const updates = second.session.messages.filter((message) => message.role === "system").slice(1);
+			expect(updates.map((message) => Object.keys(message.sections ?? {}))).toEqual([["cwd"]]);
+			expect(updates.map((message) => [message.toolsAdded, message.toolsRemoved])).toEqual([[undefined, undefined]]);
+		} finally {
+			second.cleanup();
+			first.cleanup();
+		}
+	});
+
 	test("opens a transcript without a system message and declares the prompt on the first request", async () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "pi-system-prompt-migration-"));
 		try {

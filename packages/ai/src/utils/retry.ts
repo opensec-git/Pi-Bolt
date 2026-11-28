@@ -75,6 +75,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"unable to forward upstream",
 	// Other gateway upstream failures relayed as `response.failed` error codes (#10920).
 	"upstream.?request.?failed",
+	// "upstream_error: upstream SSE stream failed" (#12605).
+	"upstream.?sse.?stream.?failed",
 	"upstream_stream_read_error",
 	"stream was interrupted",
 	"http/?2 stream failed",
@@ -129,6 +131,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Mistral's `finish_reason: "error"` for a transient server failure; see `mapChatStopReason`
 	// in mistral-conversations.ts (#10487).
 	"provider stopped with: error",
+	// Gemini's MALFORMED_RESPONSE and MALFORMED_FUNCTION_CALL finish reasons from google-generative-ai and
+	// google-vertex, which the OpenRouter path already retries (#12407, #12622).
+	"provider stopped with: malformed_(?:response|function_call)",
 	// OpenRouter: "Provider returned an empty response", and its wrapper for a provider that
 	// gave up, e.g. "Upstream error from Relace: The model stopped before completing the response."
 	"returned an empty response",
@@ -168,6 +173,13 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"subscription_sharing_usage_unavailable",
 	"subscription_sharing_user_unavailable",
 ]);
+
+/**
+ * DashScope (Alibaba Model Studio) reports its per-second and per-minute token throttle as HTTP 429 with the code
+ * `insufficient_quota`, which elsewhere means exhausted billing (#10656). Its own wording and code for the throttle
+ * are retried. "Free allocated quota exceeded" (the free tier used up) is not the throttle and stays final.
+ */
+const DASHSCOPE_THROTTLE_ERROR_PATTERN = /Throttling\.AllocationQuota|(?<!free )allocated quota exceeded/i;
 
 /**
  * Retry policy: bounded attempts with exponential backoff (`baseDelayMs * 2^(attempt-1)`).
@@ -324,6 +336,7 @@ export async function retryAssistantCall(
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
 	if (message.stopReason !== "error" || !message.errorMessage) return false;
 	const errorMessage = message.errorMessage;
+	if (DASHSCOPE_THROTTLE_ERROR_PATTERN.test(errorMessage)) return true;
 	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return false;
 	return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
 }

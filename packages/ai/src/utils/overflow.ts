@@ -21,6 +21,8 @@ import type { AssistantMessage } from "../types.ts";
  * - OpenRouter/Poolside: "Input length X exceeds the maximum allowed input length of Y tokens."
  * - Together AI: "The input (X tokens) is longer than the model's context length (Y tokens)."
  * - llama.cpp: "the request exceeds the available context size, try increasing it"
+ * - llama.cpp: "Context size has been exceeded." (the KV cache filled up while decoding)
+ * - opencode-go: "decoded body exceeds 50331648 bytes" (request byte-size limit, sent as HTTP 400)
  * - LM Studio: "tokens to keep from the initial prompt is greater than the context length"
  * - GitHub Copilot: "prompt token count of X exceeds the limit of Y"
  * - GitHub Copilot: 'github-copilot API error (413): {"message":"failed to parse request","code":""}'
@@ -52,6 +54,8 @@ const OVERFLOW_PATTERNS = [
 	/input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
 	/exceeds the limit of \d+/i, // GitHub Copilot
 	/exceeds the available context size/i, // llama.cpp server
+	/context size has been exceeded/i, // llama.cpp server, KV cache full during decode (#10885)
+	/body exceeds [\d,]+ bytes/i, // opencode-go request byte-size limit, sent as HTTP 400 (#12625)
 	/greater than the context length/i, // LM Studio
 	/context window exceeds limit/i, // MiniMax
 	/exceeded model token limit/i, // Kimi For Coding
@@ -83,6 +87,11 @@ const NON_OVERFLOW_PATTERNS = [
 	/^(Throttling error|Service unavailable):/i, // AWS Bedrock non-overflow errors (human-readable prefixes from formatBedrockError)
 	/rate limit/i, // Generic rate limiting
 	/too many requests/i, // Generic HTTP 429 style
+	// A rate or quota limit whose text also says "too many tokens" or "token limit exceeded" (#12382): HTTP 429, quota
+	// error codes, and per-minute or per-day token and request limits.
+	/^(?:[\w -]+ API error \(429\):|429(?:\s|:|$))/i,
+	/(?<![a-z0-9_])(?:insufficient_quota|quota_exceeded|usage_limit_reached)(?![a-z0-9_])/i,
+	/(?<![a-z0-9_])(?:tokens? per (?:minute|day)|[tr]p[md])(?![a-z0-9_])/i,
 ];
 
 /**

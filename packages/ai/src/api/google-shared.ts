@@ -201,12 +201,15 @@ export function retainThoughtSignature(existing: string | undefined, incoming: s
 	return existing;
 }
 
-// Thought signatures must be base64 for Google APIs (TYPE_BYTES).
-const base64SignaturePattern = /^[A-Za-z0-9+/]+={0,2}$/;
+// Thought signatures must be base64 for Google APIs (TYPE_BYTES). The proto3 JSON mapping of bytes accepts standard
+// and URL-safe base64, padded or not, and some Gemini hosts return the URL-safe form (#12637).
+const base64SignaturePattern = /^[A-Za-z0-9+/_-]+={0,2}$/;
 
 function isValidThoughtSignature(signature: string | undefined): boolean {
 	if (!signature) return false;
-	if (signature.length % 4 !== 0) return false;
+	// Padded: a whole number of 4-character groups. Unpadded: a last group of 2 or 3 characters, never 1.
+	const remainder = signature.length % 4;
+	if (remainder === 1 || (remainder !== 0 && signature.endsWith("="))) return false;
 	return base64SignaturePattern.test(signature);
 }
 
@@ -460,7 +463,37 @@ export function convertMessages<T extends GoogleApiType>(
 		}
 	}
 
+	if ((getGeminiMajorVersion(model.id) ?? 0) >= 4) signUnsignedActiveSteps(contents);
 	return contents;
+}
+
+// Google's documented value for a function call that Gemini did not sign (one made by another model).
+// See: https://ai.google.dev/gemini-api/docs/thought-signatures
+const SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
+
+/**
+ * Gemini 4 rejects a request whose current turn (everything after the last user message that is not only function
+ * responses) has a step whose first function call carries no thought signature, as after a switch from another model
+ * mid tool loop (#12420). Puts Google's skip value on that first call; parallel siblings stay unsigned, as Gemini
+ * sends them. Gemini 3 is left alone: Vertex rejected the value there (#4032).
+ *
+ * Runs on the converted contents, so the request cache's reused conversions are never changed: a content it signs is
+ * replaced by a copy.
+ */
+function signUnsignedActiveSteps(contents: Content[]): void {
+	for (let index = contents.length - 1; index >= 0; index--) {
+		const content = contents[index];
+		const parts = content.parts ?? [];
+		if (content.role === "user") {
+			if (parts.some((part) => !part.functionResponse)) return;
+			continue;
+		}
+		const first = parts.findIndex((part) => part.functionCall);
+		if (first === -1 || parts[first].thoughtSignature) continue;
+		const signed = [...parts];
+		signed[first] = { ...parts[first], thoughtSignature: SKIP_THOUGHT_SIGNATURE };
+		contents[index] = { ...content, parts: signed };
+	}
 }
 
 const JSON_SCHEMA_META_DECLARATIONS = new Set([

@@ -1825,12 +1825,21 @@ export class AgentSession {
 	 * requests (see {@link _installHiddenDeclarationsProjection}).
 	 *
 	 * The active tools are a set: tools that stay active keep their current order and newly active
-	 * ones are appended, so reordering the same names does not change the prompt (#11495).
+	 * ones are appended, so reordering the same names does not change the prompt (#11495). Tools the
+	 * transcript already declares come first, in its order: a resume or reload that registers them in
+	 * another order, such as a tool registered late by an extension, then renders the same prompt and
+	 * keeps the prompt cache (#12547).
 	 */
 	private _applyToolLoadout(toolNames: string[]): AgentTool[] {
 		const requested = new Set(toolNames);
 		const kept = this.getActiveToolNames().filter((name) => requested.has(name));
-		const tools = [...new Set([...kept, ...requested])].flatMap((name) => {
+		const transcriptOrder = new Map(
+			getCurrentTools(this.agent.state.messages).map((tool, index) => [tool.name, index]),
+		);
+		const rank = (name: string) => transcriptOrder.get(name) ?? transcriptOrder.size;
+		// Array.prototype.sort is stable: tools of equal rank keep the active-then-requested order.
+		const ordered = [...new Set([...kept, ...requested])].sort((a, b) => rank(a) - rank(b));
+		const tools = ordered.flatMap((name) => {
 			const tool = this._toolRegistry.get(name);
 			return tool && this._getToolExposure(name) !== "hidden" && this._isActivatable(name) ? [tool] : [];
 		});

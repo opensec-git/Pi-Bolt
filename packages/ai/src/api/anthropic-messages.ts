@@ -37,6 +37,7 @@ import type {
 	Tool,
 	ToolResultMessage,
 } from "../types.ts";
+import { combineAbortSignals } from "../utils/abort-signals.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
@@ -774,6 +775,51 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"content_block_stop",
 ]);
 
+// api.anthropic.com finishes the prompt before it sends the response headers, so message_start follows them at once.
+const ANTHROPIC_FIRST_EVENT_TIMEOUT_MS = 60_000;
+
+/**
+ * Fails a request whose response sends no message event within a deadline after its headers. Subscription requests
+ * can get a 200 followed only by `ping` events, for minutes (#10019). Pings are bytes, so the HTTP idle timeout never
+ * fires, and the turn hangs without a retry. The deadline is the request timeout (the HTTP idle timeout by default),
+ * at most 60 s on api.anthropic.com. Only the time before the first message event counts: later gaps, such as
+ * thinking that is not streamed, stay with the HTTP idle timeout.
+ */
+function firstEventWatchdog(model: Model<"anthropic-messages">, timeoutMs: number | undefined) {
+	const configured = timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : undefined;
+	const deadlineMs = hostMatches(hostOf(model.baseUrl), "api.anthropic.com")
+		? Math.min(configured ?? ANTHROPIC_FIRST_EVENT_TIMEOUT_MS, ANTHROPIC_FIRST_EVENT_TIMEOUT_MS)
+		: configured;
+	const controller = deadlineMs === undefined ? undefined : new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	return {
+		/** Aborts the request when the watchdog fires; undefined when there is no deadline. */
+		signal: controller?.signal,
+		/** Starts the deadline once the response headers arrived. */
+		start(): void {
+			if (!controller || deadlineMs === undefined) return;
+			timer = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, deadlineMs);
+		},
+		/** Ends the watch: a message event arrived, or the request finished. */
+		stop(): void {
+			clearTimeout(timer);
+			timer = undefined;
+		},
+		/** The error to report instead of the abort it caused, once the watchdog fired. */
+		error(): Error | undefined {
+			return timedOut
+				? new Error(
+						`Anthropic sent no message events for ${(deadlineMs ?? 0) / 1000} s after the response headers (timed out)`,
+					)
+				: undefined;
+		},
+	};
+}
+
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
@@ -845,6 +891,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 		};
 
 		let cache: RequestCacheRun | undefined;
+		const firstEvent = firstEventWatchdog(model, options?.timeoutMs);
+		let releaseRequestSignal: (() => void) | undefined;
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -887,8 +935,10 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				client = created.client;
 				isOAuth = created.isOAuthToken;
 			}
+			const requestSignal = combineAbortSignals([options?.signal, firstEvent.signal]);
+			releaseRequestSignal = requestSignal.cleanup;
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				...(requestSignal.signal ? { signal: requestSignal.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
@@ -965,7 +1015,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				return open === undefined ? undefined : { ...open, block: output.content[open.contentIndex]! };
 			};
 
+			firstEvent.start();
 			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+				firstEvent.stop();
 				await options?.onProviderStreamEvent?.(event, model);
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
@@ -1186,7 +1238,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
-		} catch (error) {
+		} catch (caught) {
+			const error = firstEvent.error() ?? caught;
 			cache?.end();
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? withCauseDetail(error) : JSON.stringify(error);
@@ -1194,6 +1247,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			if (retryAfterMs !== undefined) output.retryAfterMs = retryAfterMs;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			firstEvent.stop();
+			releaseRequestSignal?.();
 		}
 	})();
 
