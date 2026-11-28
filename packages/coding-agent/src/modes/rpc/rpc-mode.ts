@@ -865,6 +865,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			await waitForRawStdoutBackpressure();
 			return;
 		}
+		// (`null` would fail reading the command's id, also in the error response.)
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+			output(error(undefined, "parse", "Failed to parse command: not a JSON object"));
+			await waitForRawStdoutBackpressure();
+			return;
+		}
 
 		// Handle extension UI responses
 		if (
