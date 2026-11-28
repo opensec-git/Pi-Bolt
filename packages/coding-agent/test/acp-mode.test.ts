@@ -469,6 +469,39 @@ describe("ACP mode", () => {
 		expect(await prompt).toEqual({ stopReason: "cancelled" });
 	});
 
+	// hunt-e2e-3: a cancel that arrives before the prompt starts running was cleared by runPrompt(), so the prompt ran
+	// to the end and its tools ran.
+	it("cancels a prompt whose cancel arrives right after it", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const prompt = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[tools] write the notes" }],
+		});
+		client.notify("session/cancel", { sessionId });
+		expect(await prompt).toEqual({ stopReason: "cancelled" });
+		expect(client.updatesOf("tool_call")).toHaveLength(0);
+	});
+
+	// hunt-e2e-3: a prompt queued behind a running one ran after the cancel.
+	it("cancels a prompt queued behind the running one", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const running = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[slow] wait" }],
+		});
+		const queued = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[tools] write the notes" }],
+		});
+		await new Promise((r) => setTimeout(r, 500));
+		client.notify("session/cancel", { sessionId });
+		expect(await running).toEqual({ stopReason: "cancelled" });
+		expect(await queued).toEqual({ stopReason: "cancelled" });
+		expect(client.updatesOf("tool_call")).toHaveLength(0);
+	});
+
 	it("loads a session from an earlier process and replays it", async () => {
 		const first = await startClient();
 		const { sessionId } = await first.client.request<SessionResponse>("session/new", {
