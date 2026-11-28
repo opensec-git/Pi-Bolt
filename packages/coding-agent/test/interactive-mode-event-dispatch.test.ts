@@ -114,6 +114,7 @@ describe("InteractiveMode end-of-turn frames", () => {
 		connectionWarmer: undefined;
 		streamingComponent: undefined;
 		pendingTools: Map<string, unknown>;
+		clearPendingTools(): void;
 		settingsManager: { getShowTerminalProgress(): boolean };
 		clearStatusIndicator(): void;
 		idleCollector: undefined;
@@ -132,6 +133,7 @@ describe("InteractiveMode end-of-turn frames", () => {
 			connectionWarmer: undefined,
 			streamingComponent: undefined,
 			pendingTools: new Map(),
+			clearPendingTools: Reflect.get(InteractiveMode.prototype, "clearPendingTools") as () => void,
 			settingsManager: { getShowTerminalProgress: () => false },
 			clearStatusIndicator: () => {},
 			idleCollector: undefined,
@@ -155,6 +157,16 @@ describe("InteractiveMode end-of-turn frames", () => {
 		});
 		expect(host.ui.requestRender).toHaveBeenCalledTimes(1);
 		expect(host.ui.requestImmediateRender).not.toHaveBeenCalled();
+	});
+
+	// Claim T5: a tool row that gets no final result stops its elapsed-time timer.
+	test("disposes the tool rows still waiting for a result at agent_end", () => {
+		const host = createFrameHost();
+		const row = { dispose: vi.fn() };
+		host.pendingTools.set("call-1", row);
+		handleEvent.call(host, { type: "agent_end", messages: [], willRetry: false });
+		expect(row.dispose).toHaveBeenCalledTimes(1);
+		expect(host.pendingTools.size).toBe(0);
 	});
 
 	test("draws agent_end at once", () => {

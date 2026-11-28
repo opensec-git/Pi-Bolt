@@ -4143,11 +4143,70 @@ describe("Editor component", () => {
 			const pasteB = bigPaste("beta");
 			editor.handleInput(`\x1b[200~${pasteA}\x1b[201~`); // #1 = A
 			editor.handleInput(`\x1b[200~${pasteB}\x1b[201~`); // #2 = B
-			editor.handleInput("\x15"); // Ctrl+U clears the line, registry stays
+			// Forward Delete removes both markers and keeps the registry. Ctrl+U would put the markers into the kill
+			// ring, and a kill-ring marker keeps its registry entry (upstream #10351).
+			editor.handleInput("\x01"); // Ctrl+A
+			editor.handleInput("\x1b[3~"); // Delete marker #1
+			editor.handleInput("\x1b[3~"); // Delete marker #2
 			for (const ch of "[paste #1][paste #2]") editor.handleInput(ch);
 			editor.handleInput("\x1b[D"); // left over marker #2
 			editor.handleInput("\x7f"); // delete marker #1, renumber #2 -> #1
 			assert.strictEqual(editor.getText(), "[paste #1]");
+			editor.handleInput("\r");
+			assert.strictEqual(submitted, pasteB);
+		});
+
+		// Regression tests for upstream #10351
+		it("keeps the paste content when one of two markers for the same paste is deleted", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = (t) => {
+				submitted = t;
+			};
+
+			const paste = bigPaste("alpha");
+			editor.handleInput(`\x1b[200~${paste}\x1b[201~`); // #1
+			editor.handleInput("\x15"); // Ctrl+U kills the marker
+			editor.handleInput("\x19"); // Ctrl+Y
+			editor.handleInput("\x19"); // Ctrl+Y: the text has two markers for #1
+			editor.handleInput("\x7f"); // delete the second marker
+			assert.match(editor.getText(), /^\[paste #1 \+\d+ lines\]$/);
+			editor.handleInput("\r");
+			assert.strictEqual(submitted, paste);
+		});
+
+		it("keeps the paste content of a deleted marker that the kill ring still holds", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = (t) => {
+				submitted = t;
+			};
+
+			const paste = bigPaste("alpha");
+			editor.handleInput(`\x1b[200~${paste}\x1b[201~`); // #1
+			editor.handleInput("\x15"); // Ctrl+U kills the marker
+			editor.handleInput("\x19"); // Ctrl+Y
+			editor.handleInput("\x7f"); // delete the marker; the kill ring still holds it
+			editor.handleInput("\x19"); // Ctrl+Y
+			editor.handleInput("\r");
+			assert.strictEqual(submitted, paste);
+		});
+
+		it("does not renumber over a higher marker that the kill ring holds", () => {
+			const editor = new Editor(createTestTUI(), defaultEditorTheme);
+			let submitted = "";
+			editor.onSubmit = (t) => {
+				submitted = t;
+			};
+
+			const pasteA = bigPaste("alpha");
+			const pasteB = bigPaste("beta");
+			editor.handleInput(`\x1b[200~${pasteA}\x1b[201~`); // #1 = A
+			editor.handleInput(`\x1b[200~${pasteB}\x1b[201~`); // #2 = B, cursor at end
+			editor.handleInput("\x1b[D"); // left over marker #2
+			editor.handleInput("\x0b"); // Ctrl+K kills marker #2
+			editor.handleInput("\x7f"); // delete marker #1
+			editor.handleInput("\x19"); // Ctrl+Y brings marker #2 back
 			editor.handleInput("\r");
 			assert.strictEqual(submitted, pasteB);
 		});

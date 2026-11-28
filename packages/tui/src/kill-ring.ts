@@ -40,6 +40,11 @@ export class KillRing {
 		}
 	}
 
+	/** Whether any entry satisfies `predicate`. */
+	some(predicate: (entry: string) => boolean): boolean {
+		return this.ring.some(predicate);
+	}
+
 	get length(): number {
 		return this.ring.length;
 	}

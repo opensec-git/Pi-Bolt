@@ -909,6 +909,15 @@ export class Container implements Component {
 		return this.ownChildren();
 	}
 
+	/**
+	 * The children, read-only, for a walk over the tree (the TUI's mount check). Unlike `children`, reading them reports
+	 * no change: the container keeps reporting its changes, and a subclass that builds children on demand need not
+	 * build them.
+	 */
+	childComponents(): readonly Component[] {
+		return this.ownChildren();
+	}
+
 	protected replaceChildAt(index: number, component: Component): void {
 		this.ownChildren()[index] = component;
 		this.noteChildrenUsed();
@@ -1432,6 +1441,8 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderTimer: NodeJS.Timeout | undefined;
 	/** The timer of requestRenderWithin(), until a frame is drawn: that frame draws the changes it was set for. */
 	private deferredRenderTimer: NodeJS.Timeout | undefined;
+	/** When the deferredRenderTimer fires (renderClock()): a call with an earlier deadline starts a shorter timer. */
+	private deferredRenderDeadline = 0;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	/** How long the last frame took to draw (FRAME_SPACING_FACTOR). */
@@ -1696,7 +1707,9 @@ export abstract class TuiBase extends Container implements TUI {
 	private containsComponent(root: Component, target: Component): boolean {
 		if (root === target) return true;
 		if (!(root instanceof Container)) return false;
-		return root.children.some((child) => this.containsComponent(child, target));
+		// Claim T1: `children` would mark every walked container as exposed (rendered again on every frame) and build
+		// the whole fullscreen transcript.
+		return root.childComponents().some((child) => this.containsComponent(child, target));
 	}
 
 	/**
@@ -2056,7 +2069,14 @@ export abstract class TuiBase extends Container implements TUI {
 		// would otherwise reuse their output and drop the change. (A frame asked for already draws the change, and so does
 		// one asked for within the time already.)
 		this.contentChanged = true;
-		if (this.renderRequested || this.deferredRenderTimer) return;
+		if (this.renderRequested) return;
+		const deadline = renderClock() + delayMs;
+		if (this.deferredRenderTimer) {
+			// Claim T4: a pending longer timer must not hold back a change asked for within a shorter time.
+			if (deadline >= this.deferredRenderDeadline) return;
+			clearTimeout(this.deferredRenderTimer);
+		}
+		this.deferredRenderDeadline = deadline;
 		this.deferredRenderTimer = setTimeout(() => {
 			this.deferredRenderTimer = undefined;
 			this.requestRender();

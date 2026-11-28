@@ -21,7 +21,11 @@ import type { ToolDefinition, ToolRenderContext, ToolRenderers } from "../../../
 /** What this component needs from a tool: how to draw it, without executing it. */
 export type { ToolRenderers };
 
-import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import {
+	formatToolCallWithArgs,
+	getTextOutput as getRenderedTextOutput,
+	stopToolTimer,
+} from "../../../core/tools/render-utils.ts";
 import { renderersMayHighlight } from "../../../core/tools/renderers/highlighting.ts";
 import { formatTextPreview } from "../../../core/tools/renderers/text-preview.ts";
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
@@ -428,6 +432,14 @@ export class ToolExecutionComponent extends Container {
 		reportRenderChange(this);
 		this.ui.requestRender();
 		return true;
+	}
+
+	/**
+	 * Stop what keeps this row asking for frames once it gets no final result: it left the transcript, or its run
+	 * ended (claim T5). The elapsed time stays as it was.
+	 */
+	dispose(): void {
+		stopToolTimer(this.rendererState);
 	}
 
 	markExecutionStarted(): void {
