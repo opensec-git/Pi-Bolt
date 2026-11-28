@@ -328,6 +328,9 @@ export function createShellToolDefinition(
 		parameters: bashSchema,
 		outputSchema: bashOutputSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		// A command can change any file, so calls before it finish first and calls after it see its effects
+		// (upstream #11950).
+		executionMode: "sequential",
 		async execute(
 			_toolCallId,
 			{ command, timeout }: { command: string; timeout?: number },

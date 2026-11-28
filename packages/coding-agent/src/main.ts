@@ -65,33 +65,11 @@ import { PIBOLT } from "./pi-bolt.ts";
 import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { getStdinFirstDataTimeoutMs, readPipedStdin } from "./utils/piped-stdin.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${COMMAND_NAME} -ne".`;
-
-/**
- * Read all content from piped stdin.
- * Returns undefined if stdin is a TTY (interactive terminal).
- */
-async function readPipedStdin(): Promise<string | undefined> {
-	// If stdin is a TTY, we're running interactively - don't read stdin
-	if (process.stdin.isTTY) {
-		return undefined;
-	}
-
-	return new Promise((resolve) => {
-		let data = "";
-		process.stdin.setEncoding("utf8");
-		process.stdin.on("data", (chunk) => {
-			data += chunk;
-		});
-		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
-		});
-		process.stdin.resume();
-	});
-}
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
@@ -1003,7 +981,11 @@ export async function main(cliArgs: string[], options?: MainOptions) {
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	let stdinContent: string | undefined;
 	if (appMode !== "rpc") {
-		stdinContent = await readPipedStdin();
+		// With a prompt argument, an open pipe that never sends data must not block the run (upstream #10415).
+		stdinContent = await readPipedStdin(
+			process.stdin,
+			parsed.messages.length > 0 || parsed.fileArgs.length > 0 ? getStdinFirstDataTimeoutMs() : 0,
+		);
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
 		}

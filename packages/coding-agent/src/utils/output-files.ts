@@ -1,11 +1,11 @@
 /**
  * Output files: files pi writes so the model can use output it was not shown in full, such as the
  * full text of truncated tool output, binary MCP resources, and images shown by codemode scripts.
- * Every output file is created here, so where they are stored can change in one place. Today they
- * go to the OS temp directory.
+ * Every output file is created here, so where they are stored can change in one place. They go to a
+ * directory of this process inside the OS temp directory.
  */
 
-import { closeSync, openSync, rmSync, writeSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,12 +17,71 @@ const OUTPUT_FILE_MODE = 0o600;
  * Bytes an output file keeps. A command that prints without end (`yes`, a log follower, a runaway loop) would
  * otherwise fill the disk: the output file is written as fast as the command prints, until the disk is full.
  */
-export const MAX_OUTPUT_FILE_BYTES = 1024 * 1024 * 1024;
+export const MAX_OUTPUT_FILE_BYTES = 256 * 1024 * 1024;
+
+const OUTPUT_DIR_PREFIX = "pi-output-";
+/** Output directories of ended processes are removed once they are this old. */
+const STALE_OUTPUT_DIR_MS = 24 * 60 * 60 * 1000;
+
+/** This process's output directory, per temp directory (the temp directory can change, as in tests). */
+let outputDir: { base: string; dir: string } | undefined;
+
+/**
+ * This process's output directory: `<tmp>/pi-output-<pid>-<random>`, readable only by the user. Output files are
+ * not directly in the temp directory, so a command that reads `$TMPDIR/pi-bash-*` or `$TMPDIR/*` does not read the
+ * file its own output is being written to, which grew without end (upstream #12516). Falls back to the temp
+ * directory itself when the directory cannot be created; creating the file then reports why.
+ */
+function getOutputDir(): string {
+	const base = tmpdir();
+	if (outputDir?.base === base) return outputDir.dir;
+	let dir: string;
+	try {
+		dir = mkdtempSync(join(base, `${OUTPUT_DIR_PREFIX}${process.pid}-`));
+	} catch {
+		return base;
+	}
+	outputDir = { base, dir };
+	removeStaleOutputDirs(base, dir);
+	return dir;
+}
+
+/** Remove output directories of processes that ended more than a day ago. Best effort. */
+function removeStaleOutputDirs(base: string, own: string): void {
+	let names: string[];
+	try {
+		names = readdirSync(base);
+	} catch {
+		return;
+	}
+	const now = Date.now();
+	for (const name of names) {
+		if (!name.startsWith(OUTPUT_DIR_PREFIX)) continue;
+		const pid = Number(name.slice(OUTPUT_DIR_PREFIX.length).split("-")[0]);
+		const path = join(base, name);
+		if (!Number.isInteger(pid) || path === own || isProcessAlive(pid)) continue;
+		try {
+			if (now - statSync(path).mtimeMs < STALE_OUTPUT_DIR_MS) continue;
+			rmSync(path, { recursive: true, force: true });
+		} catch {
+			// Another user's directory, or removed meanwhile.
+		}
+	}
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
 
 /** A new, unused path: `<dir>/<prefix>-<random hex><extension>`. `extension` includes the dot. */
 function createOutputFilePath(prefix: string, extension: string): string {
 	return join(
-		tmpdir(),
+		getOutputDir(),
 		`${prefix}-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}${extension}`,
 	);
 }

@@ -50,6 +50,8 @@ export function createWriteToolDefinition(
 		promptGuidelines: [...writeToolSystemPromptContribution.guidelines],
 		parameters: writeSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		// Later calls of the same message see the written file (upstream #11950).
+		executionMode: "sequential",
 		async execute(
 			_toolCallId,
 			{ path, content }: { path: string; content: string },

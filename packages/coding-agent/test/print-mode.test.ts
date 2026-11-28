@@ -190,6 +190,62 @@ describe("runPrintMode", () => {
 		expect(process.listenerCount("SIGTERM")).toBe(listenersBefore);
 	});
 
+	// upstream #12238: a stdio MCP server's descendant that kept its pipes open made disposal wait forever, so `pi -p`
+	// hung after its answer and ignored the first SIGTERM.
+	it("exits when the final disposal does not finish", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+			runtimeHost.dispose.mockImplementation(() => new Promise<void>(() => {}));
+
+			const run = runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+				mode: "text",
+				initialMessage: "Say done",
+			});
+			await vi.waitFor(() => expect(runtimeHost.dispose).toHaveBeenCalledTimes(1));
+			await vi.advanceTimersByTimeAsync(5_000);
+			await run;
+			expect(exitSpy).toHaveBeenCalledWith(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("exits on the first SIGTERM when disposal does not finish", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+			vi.spyOn(console, "error").mockImplementation(() => {});
+			const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+			let finishPrompt = () => {};
+			runtimeHost.session.prompt.mockImplementation(
+				() =>
+					new Promise<void>((resolve) => {
+						finishPrompt = resolve;
+					}),
+			);
+			runtimeHost.dispose.mockImplementation(() => new Promise<void>(() => {}));
+
+			const run = runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+				mode: "text",
+				initialMessage: "Say done",
+			});
+			await vi.waitFor(() => expect(runtimeHost.session.prompt).toHaveBeenCalledTimes(1));
+			process.emit("SIGTERM");
+			expect(exitSpy).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(exitSpy).toHaveBeenCalledWith(143);
+
+			finishPrompt();
+			await vi.advanceTimersByTimeAsync(5_000);
+			await run;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// Windows emits SIGHUP when the console window is closed. pi used to listen for it only on POSIX,
 	// so closing the window skipped session_shutdown and left the bash tool's processes running.
 	it("disposes and exits on SIGHUP on Windows", async () => {

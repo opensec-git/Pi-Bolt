@@ -235,6 +235,12 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 const EARLY_TOOL_NAMES: ReadonlySet<string> = new Set(PIBOLT ? ["read", "ls", "grep", "find"] : ["read", "ls"]);
 
 /**
+ * Built-in tools that declare `executionMode: "sequential"` so that the calls of one assistant message see their
+ * effects (upstream #11950). Nested calls of a script do not need it: the script orders them.
+ */
+const MESSAGE_ORDERED_TOOL_NAMES: ReadonlySet<string> = new Set(["bash", "powershell", "write", "edit"]);
+
+/**
  * Extensions whose `tool_call` handlers let calls of the tools in EARLY_TOOL_NAMES through unchanged. The built-in MCP
  * extension's handler waits only for MCP servers that the called tool reaches (MCP tools, codemode, tool_search); ACP
  * mode's blocks only tools that read-only mode does not keep, and it keeps these.
@@ -488,6 +494,8 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
+	/** Calls of abort(), so a prompt can tell that an abort came while it was checked. */
+	private _abortCount = 0;
 	private _agentRunAbortRequested = false;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
@@ -508,6 +516,12 @@ export class AgentSession {
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	/** Overflow recovery steps taken since the last user message or successful response */
 	private _overflowRecoveryAttempts = 0;
+	/**
+	 * Session whose latest threshold auto-compaction failed. Threshold compaction then waits for the next user
+	 * prompt, a successful manual or overflow compaction, or a session change, instead of failing again before every
+	 * turn (upstream #12483, #12242). The overflow path is not affected.
+	 */
+	private _thresholdCompactionFailedFor: SessionManager | undefined;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -584,6 +598,8 @@ export class AgentSession {
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	/** `execute` of the registered built-in tools whose calls may start before the model's message ends. */
 	private _earlyToolExecutes = new WeakSet<AgentTool["execute"]>();
+	/** `execute` of the registered built-in tools that are sequential only to order the calls of one message. */
+	private _messageOrderedExecutes = new WeakSet<AgentTool["execute"]>();
 	/** Created on the first `ctx.executeTool()` call. */
 	private _nestedToolCalls: NestedToolCallRunner | undefined;
 	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
@@ -894,8 +910,13 @@ export class AgentSession {
 		options: ExecuteToolOptions,
 	): Promise<AgentToolCallOutcome> {
 		this._nestedToolCalls ??= new NestedToolCallRunner({
-			getTools: () => this._getCallableTools(),
-			isSequential: () => this.agent.toolExecution === "sequential",
+			isExclusive: (name) => {
+				if (this.agent.toolExecution === "sequential") return true;
+				const tool = this._getCallableTools().find((candidate) => candidate.name === name);
+				// Built-in bash, write and edit are sequential to keep the order of one message's calls (upstream
+				// #11950). A script orders its nested calls itself, so they still run in parallel there.
+				return tool?.executionMode === "sequential" && !this._messageOrderedExecutes.has(tool.execute);
+			},
 			runToolCall: (toolCall, parentId, signal, onUpdate) => {
 				const assistantMessage = this._findLastAssistantMessage();
 				if (!assistantMessage) {
@@ -1610,11 +1631,13 @@ export class AgentSession {
 	subscribe(listener: AgentSessionEventListener): () => void {
 		this._eventListeners.push(listener);
 
-		// Return unsubscribe function for this specific listener
+		// Return unsubscribe function for this specific listener. It replaces the array instead of splicing it: an
+		// _emit() in progress iterates the old one, so a listener that unsubscribes itself does not make the next
+		// listener miss the event (claim A5), as with Node's EventEmitter.
 		return () => {
 			const index = this._eventListeners.indexOf(listener);
 			if (index !== -1) {
-				this._eventListeners.splice(index, 1);
+				this._eventListeners = this._eventListeners.toSpliced(index, 1);
 			}
 		};
 	}
@@ -2179,6 +2202,8 @@ export class AgentSession {
 	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
 		// The starting message is sent below, so do not call agent.continue() here.
+		// New user input may retry a threshold compaction that failed earlier (upstream #12483).
+		if (trigger.messageType !== "custom") this._thresholdCompactionFailedFor = undefined;
 		const lastAssistant = this._findLastAssistantMessage();
 		if (lastAssistant) {
 			await this._checkCompaction(lastAssistant, false);
@@ -2369,13 +2394,34 @@ export class AgentSession {
 		// Reserve the context through async input hooks and auth checks so tree navigation cannot
 		// start meanwhile (#9154). _startRun marks the run active synchronously, so there is no gap.
 		this._promptPreflightCount++;
+		const abortsBefore = this._abortCount;
 		let trigger: BeforeAgentStartTrigger | undefined;
 		try {
 			trigger = await this._preparePrompt(text, options);
 		} finally {
 			this._promptPreflightCount--;
 		}
-		if (trigger) await this._startRun(trigger, () => preflightResult?.("started"));
+		if (!trigger) return;
+		// An abort while the prompt was checked (input handlers, credential check) found no run to abort: it cancels
+		// the prompt (RPC abort, the interactive Esc).
+		if (this._abortCount !== abortsBefore) {
+			preflightResult?.("handled");
+			return;
+		}
+		// Another prompt may have started while this one was checked (claim A8). Checked again here, in the same
+		// synchronous step as _startRun() marking the run active, so two prompts cannot both start.
+		if (this.isStreaming && trigger.messageType === "user") {
+			if (!options?.streamingBehavior) {
+				throw new Error(
+					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+				);
+			}
+			if (options.streamingBehavior === "followUp") await this._queueFollowUp(trigger.prompt, trigger.images);
+			else await this._queueSteer(trigger.prompt, trigger.images);
+			preflightResult?.("queued");
+			return;
+		}
+		await this._startRun(trigger, () => preflightResult?.("started"));
 	}
 
 	/**
@@ -2783,6 +2829,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._abortCount++;
 		if (this._isAgentRunActive) {
 			this._agentRunAbortRequested = true;
 		}
@@ -3217,6 +3264,7 @@ export class AgentSession {
 				usage,
 				details,
 			};
+			this._thresholdCompactionFailedFor = undefined;
 			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
 			this._clearManualCompactionState();
 			this._emit({
@@ -3523,7 +3571,9 @@ export class AgentSession {
 		let cancelledByExtension = false;
 
 		try {
-			if (!model) {
+			// After a failed threshold compaction, do not send another summary request before every turn
+			// (upstream #12483): the error was shown once, and the next user message retries.
+			if (!model || (reason === "threshold" && this._thresholdCompactionFailedFor === this.sessionManager)) {
 				return false;
 			}
 
@@ -3627,6 +3677,7 @@ export class AgentSession {
 				usage,
 				details,
 			};
+			this._thresholdCompactionFailedFor = undefined;
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) return true;
@@ -3637,6 +3688,7 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "compaction failed";
 			const aborted = abortController?.signal.aborted === true || cancelledByExtension;
+			if (started && !aborted && reason === "threshold") this._thresholdCompactionFailedFor = this.sessionManager;
 			if (started) {
 				const errorMessage = aborted
 					? undefined
@@ -3928,6 +3980,7 @@ export class AgentSession {
 			[...this._toolRegistry.keys()].filter((name) => this._isActivatedOnRegistration(name)),
 		);
 		const previousActiveToolNames = this.getActiveToolNames();
+		const previousDeclarable = new Set([...this._toolRegistry.keys()].filter((name) => this._isDeclarable(name)));
 		const allowedTools = this._allowedTools;
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
@@ -3992,13 +4045,16 @@ export class AgentSession {
 		}
 		this._toolRegistry = toolRegistry;
 		const earlyToolExecutes = new WeakSet<AgentTool["execute"]>();
+		const messageOrderedExecutes = new WeakSet<AgentTool["execute"]>();
 		if (!this._baseToolsOverride) {
 			for (const tool of wrappedBuiltInTools) {
-				if (EARLY_TOOL_NAMES.has(tool.name) && toolRegistry.get(tool.name) === tool)
-					earlyToolExecutes.add(tool.execute);
+				if (toolRegistry.get(tool.name) !== tool) continue;
+				if (EARLY_TOOL_NAMES.has(tool.name)) earlyToolExecutes.add(tool.execute);
+				if (MESSAGE_ORDERED_TOOL_NAMES.has(tool.name)) messageOrderedExecutes.add(tool.execute);
 			}
 		}
 		this._earlyToolExecutes = earlyToolExecutes;
+		this._messageOrderedExecutes = messageOrderedExecutes;
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
@@ -4007,8 +4063,14 @@ export class AgentSession {
 		if (allowedTools) {
 			for (const toolName of this._toolRegistry.keys()) {
 				// Naming or matching a tool activates it even when it is not active by default. MCP tools
-				// kept registered without being named stay inactive.
-				if (allowedTools(toolName) && this._isDeclarable(toolName)) {
+				// kept registered without being named stay inactive. A later refresh (a tool registered at
+				// runtime) activates only tools that are new, so a tool an extension turned off stays off
+				// (upstream #12399).
+				if (
+					allowedTools(toolName) &&
+					this._isDeclarable(toolName) &&
+					(options?.activeToolNames !== undefined || !previousDeclarable.has(toolName))
+				) {
 					nextActiveToolNames.push(toolName);
 				}
 			}

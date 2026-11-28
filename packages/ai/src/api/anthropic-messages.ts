@@ -2,6 +2,7 @@ import type { Hash } from "node:crypto";
 import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
 import type {
 	BetaInputTransformation,
+	BetaIterationsUsage,
 	BetaStopReason,
 	BetaTool,
 	BetaCacheControlEphemeral as CacheControlEphemeral,
@@ -1041,6 +1042,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
+						iterationContextTokens(event.message.usage.iterations) ??
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(usageModel, output.usage);
 				} else if (event.type === "content_block_start") {
@@ -1194,6 +1196,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					}
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
+						iterationContextTokens(event.usage?.iterations) ??
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(usageModel, output.usage);
 					if (isOpenRouterModel(model) && event.usage) {
@@ -1330,6 +1333,27 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 		thinkingBudgetTokens: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
 	} satisfies AnthropicOptions);
 };
+
+/**
+ * Context size of a response from its usage iterations. After a server-tool loop the top-level usage fields are sums
+ * over the loop's sampling iterations, which count the context once per iteration; the context is the last sampling
+ * iteration's (upstream #12293). Undefined without iterations. The top-level fields stay the billed sums for cost.
+ */
+function iterationContextTokens(iterations: BetaIterationsUsage | null | undefined): number | undefined {
+	if (!iterations) return undefined;
+	for (let i = iterations.length - 1; i >= 0; i--) {
+		const iteration = iterations[i];
+		if (iteration.type === "message" || iteration.type === "fallback_message") {
+			return (
+				iteration.input_tokens +
+				iteration.output_tokens +
+				iteration.cache_read_input_tokens +
+				iteration.cache_creation_input_tokens
+			);
+		}
+	}
+	return undefined;
+}
 
 function isOAuthToken(apiKey: string): boolean {
 	return apiKey.includes("sk-ant-oat");
