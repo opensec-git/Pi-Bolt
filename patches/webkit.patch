@@ -18094,3 +18094,169 @@ index 56c7ee5ced..ff393b2143 100644
 -- 
 2.53.0
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sat, 28 Nov 2026 00:28:46 -0600
+Subject: [PATCH] Static heap: workers under an address space limit leave room
+ for one another
+
+A VM that found no block of the static region (StaticHeap::install()) runs no code of the image:
+findInImage() turns it down. But linking each module of the program asked its realm's Instance
+for a place for the module's environment (CyclicModuleRecord::initializeEnvironment()), and
+Instance::ensure() made one for the realm: 256 MB of addresses for datas that nothing would
+use. Under an address space limit (ulimit -v) the reservation failed and ended the process,
+"Out of address space for a realm's ahead-of-time code", with 30 to 40 workers at 10 to 16 GB.
+
+- AOT::runsCodeOfImage(VM&): whether a VM's realms may run the image's code (not a VM that does
+  not use the static heap the image came with). findInImage() and the environment's place go by
+  it; a worker without a block makes no Instance and reserves nothing for one.
+- Linux: the blocks after the first (4 GB of addresses at once, StaticRegion::reserveMoreBlocks())
+  are reserved only when an address space limit leaves as much room again besides them. Taking
+  the last of the room for blocks left the workers themselves none (a crash in the next
+  allocation, with 51 workers at 16 GB); workers past the first blocks now run without the static
+  heap instead.
+- Realms that run the image's code (ShadowRealm, a worker's own realms) still reserve their room
+  as before.
+---
+ Source/JavaScriptCore/aot/AOTImage.cpp        | 12 +++++--
+ Source/JavaScriptCore/aot/AOTImage.h          |  4 +++
+ Source/JavaScriptCore/aot/AOTRuntime.cpp      |  1 +
+ .../runtime/CyclicModuleRecord.cpp            |  3 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       | 36 +++++++++++++++++++
+ 5 files changed, 52 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/aot/AOTImage.cpp b/Source/JavaScriptCore/aot/AOTImage.cpp
+index 6597b2d34e..528683ba11 100644
+--- a/Source/JavaScriptCore/aot/AOTImage.cpp
++++ b/Source/JavaScriptCore/aot/AOTImage.cpp
+@@ -2030,6 +2030,14 @@ bool moduleIsLinkedAsCompiled(JSScope* scope)
+     return record && record->isLinkedAsInImage(scope->globalObject());
+ }
+ 
++// An image that came with a static heap was built for the VMs that use the heap: what the heap holds of each function (its
++// FunctionInfo, environments, constants) is what the code goes by. Another VM in the process (a worker thread without a block) runs
++// its own code.
++bool runsCodeOfImage(VM& vm)
++{
++    return !StaticHeap::isMapped() || StaticHeap::isUsedBy(vm);
++}
++
+ ImageCode findInImage(ScriptExecutable* executable, CodeSpecializationKind kind, UnlinkedCodeBlock* unlinkedCodeBlock, JSScope* scope)
+ {
+     if (!Options::useAOT())
+@@ -2043,9 +2051,7 @@ ImageCode findInImage(ScriptExecutable* executable, CodeSpecializationKind kind,
+     });
+     if (!Image::hasAny())
+         return { };
+-    // An image that came with a static heap was built for the VM that uses the heap: what the heap holds of each function (its
+-    // FunctionInfo, environments, constants) is what the code goes by. Another VM in the process (a worker thread) runs its own code.
+-    if (StaticHeap::isMapped() && !StaticHeap::isUsedBy(executable->vm()))
++    if (!runsCodeOfImage(executable->vm()))
+         return { };
+ 
+     Image* image = nullptr;
+diff --git a/Source/JavaScriptCore/aot/AOTImage.h b/Source/JavaScriptCore/aot/AOTImage.h
+index 451019f649..a7e3ae1b9a 100644
+--- a/Source/JavaScriptCore/aot/AOTImage.h
++++ b/Source/JavaScriptCore/aot/AOTImage.h
+@@ -351,6 +351,10 @@ JS_EXPORT_PRIVATE void collectQuotes(CompiledFunctionInfo&, UnlinkedCodeBlock*,
+ // `text` is the source containing the function, if known. The function's own source starts at sourceOffset.
+ JS_EXPORT_PRIVATE void collectConstructSites(CompiledFunctionInfo&, UnlinkedCodeBlock*, StringView text = { }, unsigned sourceOffset = 0);
+ ImageCode findInImage(ScriptExecutable*, CodeSpecializationKind, UnlinkedCodeBlock*, JSScope*);
++// Whether the VM's realms may run code of an image. Not those of a VM that does not use the static heap the image came with (a
++// worker that found no block of the static region, StaticHeap::install()): such a VM runs its code from the bytecode or the source,
++// and makes no Instance, whose room for datas it would reserve for nothing.
++bool runsCodeOfImage(VM&);
+ // Whether the module containing `scope` is linked the way it was at compile time, so that code with
+ // ImageFunction::usesStaticImports may run.
+ bool moduleIsLinkedAsCompiled(JSScope*);
+diff --git a/Source/JavaScriptCore/aot/AOTRuntime.cpp b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+index 600f2221d8..4a469ef9d1 100644
+--- a/Source/JavaScriptCore/aot/AOTRuntime.cpp
++++ b/Source/JavaScriptCore/aot/AOTRuntime.cpp
+@@ -287,6 +287,7 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+         // the image with code, so that image's count is enough; and the room for datas is only address space until it is used
+         // (commitDatasThrough()): a realm costs what its code touches, not the 400 MB that committing all of it would count
+         // against an address space limit or strict overcommit.
++        ASSERT(runsCodeOfImage(vm));
+         Image* image = Image::withCode();
+         numberOfFunctions = image ? image->header().numberOfFunctions : maxFunctions;
+         size = sizeFromInstanceFor(numberOfFunctions);
+diff --git a/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp b/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
+index 16a64d2446..d065c9ebb6 100644
+--- a/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
++++ b/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
+@@ -235,7 +235,8 @@ void CyclicModuleRecord::initializeEnvironment(JSGlobalObject* globalObject, Ref
+         // Code that was compiled with the whole program in front of it finds the variables of a module without looking for the
+         // module: see AOT::Instance::placeForEnvironment().
+         void* place = nullptr;
+-        if (isPrelinked() && AOT::Image::environmentsSize()) {
++        // (Not in a VM that runs no compiled code: it has no place for them, and asking its realm's Instance for one would make it.)
++        if (isPrelinked() && AOT::Image::environmentsSize() && AOT::runsCodeOfImage(vm)) {
+             AOT::ImageEnvironment environment = AOT::Image::environmentOf(prelinkedIndex());
+             if (environment.distance && environment.size == JSModuleEnvironment::allocationSize(symbolTable, jsModule->importSlotCount())) {
+                 place = AOT::Instance::ensure(globalObject).placeForEnvironment(environment);
+diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
+index ff393b2143..d6350b82de 100644
+--- a/Source/bmalloc/bmalloc/StaticRegion.cpp
++++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
+@@ -17,6 +17,11 @@
+ #else
+ #include <sys/mman.h>
+ #endif
++#if BOS(LINUX)
++#include <fcntl.h>
++#include <sys/resource.h>
++#include <unistd.h>
++#endif
+ 
+ #if BUSE(MIMALLOC)
+ #include "mimalloc.h"
+@@ -519,6 +524,31 @@ size_t StaticRegion::sizeOfMoreBlocks()
+     return s_sizeOfMoreBlocks.load(std::memory_order_acquire);
+ }
+ 
++#if BOS(LINUX)
++// Whether the address space limit (RLIMIT_AS, ulimit -v), if there is one, leaves room for `size` more addresses and as many again
++// besides. The realms the blocks are for need addresses of their own too (some 70 MB a worker), and so does whatever else the
++// program does: blocks that took the last of the room would leave the next worker, or the next allocation, none. A worker that
++// finds no block runs without the static heap, and takes no more room than that.
++static bool addressSpaceLimitLeavesRoomFor(size_t size)
++{
++    struct rlimit limit;
++    if (getrlimit(RLIMIT_AS, &limit) || limit.rlim_cur == RLIM_INFINITY)
++        return true;
++    // (What the process has mapped, in pages: the first field. Not known, the blocks are not reserved.)
++    int fd = open("/proc/self/statm", O_RDONLY | O_CLOEXEC);
++    if (fd < 0)
++        return false;
++    char text[64] = { };
++    ssize_t length = read(fd, text, sizeof(text) - 1);
++    close(fd);
++    if (length <= 0)
++        return false;
++    size_t used = static_cast<size_t>(strtoull(text, nullptr, 10)) * static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    size_t room = static_cast<size_t>(limit.rlim_cur);
++    return used <= room && size <= (room - used) / 2;
++}
++#endif
++
+ bool StaticRegion::reserveMoreBlocks()
+ {
+     // (Called with JSC::StaticHeap's lock of the blocks held: one thread at a time.)
+@@ -526,6 +556,12 @@ bool StaticRegion::reserveMoreBlocks()
+         return true;
+     if (s_isBuilding || s_moreBlocksWereRefused)
+         return false;
++#if BOS(LINUX)
++    if (!addressSpaceLimitLeavesRoomFor(arenaReservation)) {
++        s_moreBlocksWereRefused = true;
++        return false;
++    }
++#endif
+     // Addresses only: nothing is charged for them, not even under vm.overcommit_memory=2, until a block is made writable. Only when
+     // the first blocks are taken, so that a program with fewer realms reserves no more than before (RLIMIT_AS counts addresses).
+     void* wanted = reinterpret_cast<void*>(startOfMoreBlocks());
+-- 
+2.53.0
+
