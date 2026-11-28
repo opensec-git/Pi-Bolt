@@ -104,6 +104,17 @@ describe("pi-bolt on PATH", () => {
 		expect(analyzePiBoltOnPath([], "/x", "installer").first).toBeUndefined();
 	});
 
+	// hunt-install-5: the start command install.sh links on Linux x86-64 was taken for another Pi-Bolt, and doctor said
+	// to remove it.
+	it("takes the Linux start command install.sh writes for the build it starts", () => {
+		const start = [{ path: "/home/me/.local/bin/pi-bolt", real: "/home/me/.pi-bolt/pi-bolt-linux-x64.start" }];
+		expect(analyzePiBoltOnPath(start, "/home/me/.pi-bolt/pi-bolt-linux-x64", "installer").firstIsThis).toBe(true);
+		expect(analyzePiBoltOnPath(start, "/home/me/.pi-bolt/pi-bolt-linux-x64-jit", "installer").firstIsThis).toBe(
+			false,
+		);
+		expect(analyzePiBoltOnPath(start, "/opt/pi-bolt/pi-bolt-linux-x64", "installer").firstIsThis).toBe(false);
+	});
+
 	it("takes the npm package's launcher for this one when npm installed it", () => {
 		const launcher = [{ path: "/usr/bin/pi-bolt", real: "/usr/lib/node_modules/pi-bolt/bin/pi-bolt.exe" }];
 		const folder = "/home/me/.pi-bolt/npm/0.8.8/pi-bolt-linux-x64";
