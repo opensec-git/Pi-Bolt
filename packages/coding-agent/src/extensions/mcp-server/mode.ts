@@ -27,6 +27,7 @@ import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import { flushRawStdout, takeOverStdout, writeRawStdout } from "../../core/output-guard.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
+import { writeDiagnosticsToStderr } from "../../modes/diagnostics-stderr.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -287,12 +288,12 @@ export class McpServer {
 				sessionManager,
 				sessionStartEvent: resumed ? { type: "session_start", reason: "resume" } : undefined,
 			});
-			for (const diagnostic of runtime.diagnostics) {
-				console.error(`${diagnostic.type === "error" ? "Error" : "Warning"}: ${diagnostic.message}`);
-			}
+			// The client's log (stderr). Taking them marks them reported, so a reload reports only what is new.
+			const diagnostics = runtime.takeUnreportedDiagnostics();
+			writeDiagnosticsToStderr(diagnostics);
 			// As the other modes exit on them: a session whose extension failed to load, or whose `--provider` is unknown
 			// (it would run on another model), is not the session asked for.
-			const errors = runtime.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+			const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
 			if (errors.length > 0) {
 				await runtime.dispose();
 				throw new Error(errors.map((error) => error.message).join("\n"));
@@ -468,7 +469,10 @@ class PiSession {
 	}
 
 	async bind(): Promise<void> {
-		this.runtime.setRebindSession(async () => this.rebind());
+		this.runtime.setRebindSession(async () => {
+			await this.rebind();
+			writeDiagnosticsToStderr(this.runtime.takeUnreportedDiagnostics());
+		});
 		await this.rebind();
 	}
 
@@ -497,7 +501,8 @@ class PiSession {
 				},
 				switchSession: async (sessionPath, options) => this.runtime.switchSession(sessionPath, options),
 				reload: async () => {
-					await this.session.reload();
+					await this.runtime.reload();
+					writeDiagnosticsToStderr(this.runtime.takeUnreportedDiagnostics());
 				},
 			},
 			onError: (err) => console.error(`Extension error (${err.extensionPath}): ${err.error}`),

@@ -26,6 +26,7 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionRuntime,
 } from "../../core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { formatNoApiKeyFoundMessage } from "../../core/auth-guidance.ts";
 import type { ExtensionUIDialogOptions, ExtensionUIHost, SessionStartEvent } from "../../core/extensions/index.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
@@ -37,6 +38,7 @@ import {
 } from "../../core/output-guard.ts";
 import { type SessionInfo as PiSessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
+import { writeDiagnosticsToStderr } from "../../modes/diagnostics-stderr.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
@@ -395,13 +397,13 @@ export class AcpAgent {
 				sessionManager,
 				sessionStartEvent,
 			});
-			for (const diagnostic of runtime.diagnostics) {
-				console.error(`${diagnostic.type === "error" ? "Error" : "Warning"}: ${diagnostic.message}`);
-			}
+			// Taking them marks them reported, so a reload reports only what is new.
+			const diagnostics = runtime.takeUnreportedDiagnostics();
 			// As the other modes exit on them: a session whose extension failed to load, or whose `--provider` is unknown
 			// (it would run on another model), is not the session asked for.
-			const errors = runtime.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+			const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
 			if (errors.length > 0) {
+				writeDiagnosticsToStderr(diagnostics);
 				setSessionMcpServers(id, undefined);
 				await runtime.dispose();
 				throw new JsonRpcError(AcpErrorCode.InternalError, errors.map((error) => error.message).join("\n"));
@@ -414,7 +416,10 @@ export class AcpAgent {
 				void runtime.services.modelRuntime.refresh({ signal: AbortSignal.timeout(15_000) }).catch(() => {});
 			}
 			// After the response that tells the client the session exists (and has its settings).
-			setTimeout(() => session.announce(false), 0);
+			setTimeout(() => {
+				session.announce(false);
+				session.reportDiagnostics(diagnostics);
+			}, 0);
 			return session;
 		});
 		this.creating = create.catch(() => {});
@@ -490,6 +495,7 @@ class AcpSession {
 			await this.rebind();
 			this.applyMode();
 			this.announce();
+			this.reportDiagnostics(this.runtime.takeUnreportedDiagnostics());
 		});
 		await this.rebind();
 	}
@@ -518,9 +524,7 @@ class AcpSession {
 				},
 				switchSession: async (sessionPath, options) => this.runtime.switchSession(sessionPath, options),
 				reload: async () => {
-					await this.session.reload();
-					this.applyMode();
-					this.announce();
+					await this.reload();
 				},
 			},
 			onError: (err) => console.error(`Extension error (${err.extensionPath}): ${err.error}`),
@@ -691,9 +695,7 @@ class AcpSession {
 				return;
 			}
 			case "reload":
-				await session.reload();
-				this.applyMode();
-				this.announce();
+				await this.reload();
 				reply("Reloaded extensions, skills, prompt templates and context files.");
 				return;
 			default:
@@ -980,6 +982,28 @@ class AcpSession {
 				break;
 			default:
 				break;
+		}
+	}
+
+	/** Reloads the session as `/reload` does, and reports the settings errors the reload found. */
+	private async reload(): Promise<void> {
+		await this.runtime.reload();
+		this.applyMode();
+		this.announce();
+		this.reportDiagnostics(this.runtime.takeUnreportedDiagnostics());
+	}
+
+	/**
+	 * Problems the runtime found (settings, extensions) at startup, after a reload or after a session change: notices
+	 * for clients that show them, else the log on stderr.
+	 */
+	reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
+		if (!this.agent.capabilities.session?.notices) {
+			writeDiagnosticsToStderr(diagnostics);
+			return;
+		}
+		for (const diagnostic of diagnostics) {
+			this.send({ sessionUpdate: "notice", severity: diagnostic.type, title: diagnostic.message });
 		}
 	}
 

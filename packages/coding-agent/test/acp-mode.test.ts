@@ -559,6 +559,45 @@ describe("ACP mode", () => {
 		).toEqual({ stopReason: "end_turn" });
 	});
 
+	/** Runs `run` with the agent's settings.json not valid JSON, and puts it back after. */
+	const withBrokenSettings = async (run: () => Promise<void>) => {
+		const settingsPath = join(agentDir, "settings.json");
+		const settings = readFileSync(settingsPath, "utf8");
+		writeFileSync(settingsPath, "{ not json");
+		try {
+			await run();
+		} finally {
+			writeFileSync(settingsPath, settings);
+		}
+	};
+
+	it("reports settings errors as notices when a session opens", async () => {
+		await withBrokenSettings(async () => {
+			const { client } = await startClient();
+			await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+			await client.waitFor(() => client.updatesOf("notice").length > 0);
+			expect(client.updatesOf("notice")[0]).toMatchObject({
+				sessionUpdate: "notice",
+				severity: "warning",
+				title: expect.stringContaining("Invalid settings file"),
+			});
+		});
+	});
+
+	it("reports the settings errors /reload finds as notices", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		await withBrokenSettings(async () => {
+			await client.request<PromptResponse>("session/prompt", {
+				sessionId,
+				prompt: [{ type: "text", text: "/reload" }],
+			});
+		});
+		expect(client.updatesOf("notice").map((notice) => notice.title)).toEqual([
+			expect.stringContaining("Invalid settings file"),
+		]);
+	});
+
 	it("loads a session from an earlier process and replays it", async () => {
 		const first = await startClient();
 		const { sessionId } = await first.client.request<SessionResponse>("session/new", {
