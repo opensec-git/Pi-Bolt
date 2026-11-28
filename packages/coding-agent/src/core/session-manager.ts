@@ -779,6 +779,18 @@ function parseSessionEntryLine(line: string): FileEntry | null {
 	}
 }
 
+/**
+ * Whether a line parsed after the header is a record: `{}`, `42` or `[1]` parse but are none, and are skipped like a
+ * malformed line (trust boundary: file input). Since version 2 every entry has an id; version 1 files get theirs on
+ * migration.
+ */
+function isSessionRecord(parsed: FileEntry, needsId: boolean): boolean {
+	const value: unknown = parsed;
+	if (typeof value !== "object" || value === null || typeof (value as { type?: unknown }).type !== "string")
+		return false;
+	return !needsId || parsed.type === "session" || typeof parsed.id === "string";
+}
+
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	const entries: FileEntry[] = [];
@@ -792,11 +804,15 @@ function visitSessionEntries(filePath: string, visit: (entry: FileEntry, line: s
 	if (!existsSync(resolvedFilePath)) return;
 
 	let validHeader: boolean | undefined;
+	let entriesHaveIds = false;
 	const consume = (line: string): void => {
 		const entry = parseSessionEntryLine(line);
 		if (!entry) return;
-		validHeader ??= entry.type === "session" && typeof entry.id === "string";
-		if (validHeader) visit(entry, line);
+		if (validHeader === undefined) {
+			validHeader = entry.type === "session" && typeof entry.id === "string";
+			entriesHaveIds = entry.type === "session" && (entry.version ?? 1) >= 2;
+		}
+		if (validHeader && isSessionRecord(entry, entriesHaveIds)) visit(entry, line);
 	};
 	let finalLine = "";
 	const fd = openSync(resolvedFilePath, "r");

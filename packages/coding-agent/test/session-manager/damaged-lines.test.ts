@@ -183,4 +183,22 @@ describe("SessionManager with damaged lines", () => {
 		expect(content[2]).toBe('{"type":"custom","customType":"opense');
 		expect(JSON.parse(content[3]).id).toBe(second);
 	});
+
+	// A last line that parses as JSON but is not an entry (`{}`, `42`, `[1]`, a record without an id) left the leaf id
+	// undefined, and `_leafPath()` then read `.path` of the missing cache: `pi-bolt -c` crashed on every start.
+	it.each(["{}", "42", "[1,2,3]", '"text"', "true", '{"type":"message","message":{"role":"user","content":"x"}}'])(
+		"opens a file whose last line %s parses but is not an entry",
+		(line) => {
+			const { file, ids } = writeSession();
+			rewrite(file, (content) => {
+				content.push(line);
+			});
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			const session = SessionManager.open(file, dir);
+
+			expect(session.getBranch().map((entry) => entry.id)).toEqual(ids);
+			expect(session.buildSessionContext().messages[0]).toMatchObject({ role: "user", content: "original prompt" });
+		},
+	);
 });
