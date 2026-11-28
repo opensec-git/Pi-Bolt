@@ -508,6 +508,12 @@ export class AgentSession {
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	/** Overflow recovery steps taken since the last user message or successful response */
 	private _overflowRecoveryAttempts = 0;
+	/**
+	 * Session whose latest threshold auto-compaction failed. Threshold compaction then waits for the next user
+	 * prompt, a successful manual or overflow compaction, or a session change, instead of failing again before every
+	 * turn (upstream #12483, #12242). The overflow path is not affected.
+	 */
+	private _thresholdCompactionFailedFor: SessionManager | undefined;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -2170,6 +2176,8 @@ export class AgentSession {
 	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
 		// The starting message is sent below, so do not call agent.continue() here.
+		// New user input may retry a threshold compaction that failed earlier (upstream #12483).
+		if (trigger.messageType !== "custom") this._thresholdCompactionFailedFor = undefined;
 		const lastAssistant = this._findLastAssistantMessage();
 		if (lastAssistant) {
 			await this._checkCompaction(lastAssistant, false);
@@ -3208,6 +3216,7 @@ export class AgentSession {
 				usage,
 				details,
 			};
+			this._thresholdCompactionFailedFor = undefined;
 			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
 			this._clearManualCompactionState();
 			this._emit({
@@ -3514,7 +3523,9 @@ export class AgentSession {
 		let cancelledByExtension = false;
 
 		try {
-			if (!model) {
+			// After a failed threshold compaction, do not send another summary request before every turn
+			// (upstream #12483): the error was shown once, and the next user message retries.
+			if (!model || (reason === "threshold" && this._thresholdCompactionFailedFor === this.sessionManager)) {
 				return false;
 			}
 
@@ -3618,6 +3629,7 @@ export class AgentSession {
 				usage,
 				details,
 			};
+			this._thresholdCompactionFailedFor = undefined;
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) return true;
@@ -3628,6 +3640,7 @@ export class AgentSession {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "compaction failed";
 			const aborted = abortController?.signal.aborted === true || cancelledByExtension;
+			if (started && !aborted && reason === "threshold") this._thresholdCompactionFailedFor = this.sessionManager;
 			if (started) {
 				const errorMessage = aborted
 					? undefined
