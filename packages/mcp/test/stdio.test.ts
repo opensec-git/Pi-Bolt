@@ -5,6 +5,7 @@ import { McpClient, StdioTransport } from "../src/index.ts";
 const fixture = fileURLToPath(new URL("./fixtures/stdio-server.mjs", import.meta.url));
 const stubborn = fileURLToPath(new URL("./fixtures/stubborn-server.mjs", import.meta.url));
 const exitingParent = fileURLToPath(new URL("./fixtures/exiting-parent-server.mjs", import.meta.url));
+const detachedHolder = fileURLToPath(new URL("./fixtures/detached-holder-server.mjs", import.meta.url));
 
 function isAlive(pid: number): boolean {
 	try {
@@ -106,6 +107,44 @@ describe("StdioTransport", () => {
 
 				await transport.close();
 				expect(await waitFor(() => !isAlive(helper as number))).toBe(true);
+				expect(closeEvents).toBe(1);
+			} finally {
+				try {
+					process.kill(helper as number, "SIGKILL");
+				} catch {}
+			}
+		},
+		10_000,
+	);
+
+	// upstream #12238: a descendant outside the server's process group kept stdout open, so close() never resolved and
+	// `pi -p` hung after its answer.
+	it.skipIf(process.platform === "win32")(
+		"finishes closing when a descendant in another session keeps the pipes open",
+		async () => {
+			const transport = new StdioTransport({
+				command: process.execPath,
+				args: [detachedHolder],
+				closeTimeoutMs: 100,
+			});
+			let closeEvents = 0;
+			transport.onClose(() => closeEvents++);
+			await transport.start();
+			let helper: number | undefined;
+			await waitFor(() => {
+				const match = /helper (\d+)/.exec(transport.stderr);
+				if (match) helper = Number(match[1]);
+				return helper !== undefined;
+			});
+			expect(helper).toBeTypeOf("number");
+			try {
+				const startedAt = Date.now();
+				const closed = await Promise.race([
+					transport.close().then(() => true),
+					new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+				]);
+				expect(closed).toBe(true);
+				expect(Date.now() - startedAt).toBeLessThan(5_000);
 				expect(closeEvents).toBe(1);
 			} finally {
 				try {
