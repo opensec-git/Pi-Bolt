@@ -10,7 +10,7 @@ import { waitForLockRetry } from "../utils/lock-retry.ts";
 import { getFileRevision, normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import type { CompactionSettings as ResolvedCompactionSettings } from "./compaction/compaction.ts";
-import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, MAX_TIMER_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { getPackageIdentity, resolvePackageOverlay } from "./package-source.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 import type {
@@ -1254,7 +1254,10 @@ export class SettingsManager {
 	}
 
 	getHttpIdleTimeoutMs(): number {
-		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+		const timeoutMs =
+			parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+		// Provider clients time requests out with setTimeout(), which fires a longer timer after 1 ms: no timeout instead.
+		return timeoutMs > MAX_TIMER_MS ? 0 : timeoutMs;
 	}
 
 	setHttpIdleTimeoutMs(timeoutMs: number): void {

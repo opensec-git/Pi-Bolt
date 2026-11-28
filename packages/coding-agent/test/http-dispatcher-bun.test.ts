@@ -133,6 +133,13 @@ describe("Bun idle timeout fetch", () => {
 		expect(await response.text()).toBe("data: 1\n\ndata: 2\n\n");
 	});
 
+	it("waits for slow headers and a slow stream when the timeout is longer than a timer holds", async () => {
+		// 35 days: setTimeout() would fire such a timer after 1 ms.
+		const fetch = createBunIdleTimeoutFetch(runtimeFetch.nodeFetch, 3_000_000_000);
+		const response = await fetch(`${baseUrl}/50/50`);
+		expect(await response.text()).toBe("data: 1\n\ndata: 2\n\n");
+	});
+
 	it("waits for headers and a stream that are slower than Bun's timer but within the timeout", async () => {
 		const fetch = createBunIdleTimeoutFetch(runtimeFetch.nodeFetch, 1_000);
 		const response = await fetch(`${baseUrl}/300/300`);

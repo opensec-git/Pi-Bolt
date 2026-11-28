@@ -1,7 +1,9 @@
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
+import { pathToFileURL } from "url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, userMsg } from "../utilities.ts";
@@ -169,6 +171,53 @@ describe("SessionManager with damaged lines", () => {
 		).toEqual([first, second]);
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"cuts off a line whose last write failed, as the session rolls it back",
+		() => {
+			const session = SessionManager.create(dir, dir);
+			session.appendMessage(userMsg("first"));
+			const file = session.getSessionFile()!;
+			const before = readFileSync(file, "utf8");
+			const actual = vi.mocked(fs.writeSync).getMockImplementation()!;
+			// The record is written, all but its line feed; writing the rest fails.
+			vi.mocked(fs.writeSync)
+				.mockImplementationOnce((fd: number, data: unknown) => actual(fd, String(data).slice(0, -1)))
+				.mockImplementationOnce(() => {
+					throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+				});
+			expect(() => session.appendMessage(assistantMsg("not saved"))).toThrow("No space left");
+			expect(readFileSync(file, "utf8")).toBe(before);
+
+			session.appendMessage(assistantMsg("after the disk was freed"));
+			const expected = session.getEntries().map((entry) => entry.id);
+			expect(expected).toHaveLength(2);
+			expect(
+				SessionManager.open(file, dir)
+					.getEntries()
+					.map((entry) => entry.id),
+			).toEqual(expected);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not cut a line that another process appended after a failed write",
+		() => {
+			const session = SessionManager.create(dir, dir);
+			session.appendMessage(userMsg("first"));
+			const file = session.getSessionFile()!;
+			const actual = vi.mocked(fs.writeSync).getMockImplementation()!;
+			const other = '{"type":"custom","customType":"other","id":"other","parentId":null,"timestamp":"x"}\n';
+			vi.mocked(fs.writeSync)
+				.mockImplementationOnce((fd: number, data: unknown) => actual(fd, String(data).slice(0, 25)))
+				.mockImplementationOnce(() => {
+					fs.appendFileSync(file, other);
+					throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+				});
+			expect(() => session.appendMessage(assistantMsg("lost"))).toThrow("No space left");
+			expect(readFileSync(file, "utf8").endsWith(other)).toBe(true);
+		},
+	);
+
 	it("ends a partial line in a file that replaced the session file before appending to it", () => {
 		const session = SessionManager.create(dir, dir);
 		session.appendMessage(userMsg("first"));
@@ -183,4 +232,92 @@ describe("SessionManager with damaged lines", () => {
 		expect(content[2]).toBe('{"type":"custom","customType":"opense');
 		expect(JSON.parse(content[3]).id).toBe(second);
 	});
+
+	// A last line that parses as JSON but is not an entry (`{}`, `42`, `[1]`, a record without an id) left the leaf id
+	// undefined, and `_leafPath()` then read `.path` of the missing cache: `pi-bolt -c` crashed on every start.
+	it.each(["{}", "42", "[1,2,3]", '"text"', "true", '{"type":"message","message":{"role":"user","content":"x"}}'])(
+		"opens a file whose last line %s parses but is not an entry",
+		(line) => {
+			const { file, ids } = writeSession();
+			rewrite(file, (content) => {
+				content.push(line);
+			});
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			const session = SessionManager.open(file, dir);
+
+			expect(session.getBranch().map((entry) => entry.id)).toEqual(ids);
+			expect(session.buildSessionContext().messages[0]).toMatchObject({ role: "user", content: "original prompt" });
+		},
+	);
+
+	it("cuts parent links that form a cycle like a missing parent", () => {
+		// e1 and e2 name each other; e3 hangs below the cycle. In a second file a repeated id closes a cycle (the last
+		// definition of "a" names "b", whose parent is "a"). Walking the parent links never ended before, so the session
+		// is opened in a child process that is killed when it does not finish in time.
+		const message = (id: string, parentId: string | null) => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: userMsg(id),
+		});
+		const header = { type: "session", version: 3, id: "cycle", timestamp: "2026-01-01T00:00:00.000Z", cwd: dir };
+		const write = (name: string, entries: object[]) => {
+			const file = join(dir, name);
+			writeFileSync(file, `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+			return file;
+		};
+		const cycle = write("cycle.jsonl", [
+			message("r", null),
+			message("e1", "e2"),
+			message("e2", "e1"),
+			message("e3", "e2"),
+		]);
+		const repeated = write("repeated.jsonl", [message("a", null), message("b", "a"), message("a", "b")]);
+		const resolverUrl = pathToFileURL(resolve(__dirname, "../../src/experimental/source-resolver.ts")).href;
+		const managerUrl = pathToFileURL(resolve(__dirname, "../../src/core/session-manager.ts")).href;
+		const summaryUrl = pathToFileURL(resolve(__dirname, "../../src/core/compaction/branch-summarization.ts")).href;
+		const script = `
+			const { SessionManager } = await import(${JSON.stringify(managerUrl)});
+			const { collectEntriesForBranchSummary } = await import(${JSON.stringify(summaryUrl)});
+			const ids = (entries) => entries.map((entry) => entry.id);
+			const tree = (nodes) => nodes.map((node) => [node.entry.id, tree(node.children)]);
+			const result = {};
+			for (const [name, file] of Object.entries(${JSON.stringify({ cycle, repeated })})) {
+				const session = SessionManager.open(file, ${JSON.stringify(dir)});
+				result[name] = {
+					branch: ids(session.getBranch()),
+					fromE2: name === "cycle" ? ids(session.getBranch("e2")) : undefined,
+					tree: tree(session.getTree()),
+					messages: session.buildSessionContext().messages.length,
+					summary: name === "cycle" ? ids(collectEntriesForBranchSummary(session, "e3", "r").entries) : undefined,
+				};
+			}
+			process.stdout.write(JSON.stringify(result));
+		`;
+		const output = execFileSync(
+			process.execPath,
+			["--import", resolverUrl, "--input-type=module", "--eval", script],
+			{
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 15_000,
+			},
+		);
+
+		expect(JSON.parse(output)).toEqual({
+			cycle: {
+				branch: ["e1", "e2", "e3"],
+				fromE2: ["e1", "e2"],
+				tree: [
+					["r", []],
+					["e1", [["e2", [["e3", []]]]]],
+				],
+				messages: 3,
+				summary: ["e1", "e2", "e3"],
+			},
+			repeated: expect.objectContaining({ branch: ["b", "a"], messages: 2 }),
+		});
+	}, 30_000);
 });

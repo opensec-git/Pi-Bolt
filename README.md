@@ -307,6 +307,10 @@ saves the last two for a server restart. A `pi-bolt` pane reports its state and 
 restart reopens the conversation, but Herdr stores the session only for the agents it ships, so `herdr agent list` and
 `herdr pane get` show none.
 
+The reported command opens the session file with the same `--agent-dir` and the same restriction and resource flags
+(`--tools`, `--no-extensions` and so on) the session was started with. When those flags were typed in another directory than
+the session's, no command is reported, so a restart does not bring the session back without them.
+
 `pi-bolt --herdr-pi` reports as Herdr's own Pi integration (`source=herdr:pi`, `agent=pi`), which is one of them, so the
 session is stored. Restoring does not depend on the flag: Herdr runs the resume command Pi-Bolt reports either way, and that
 command carries `--herdr-pi`, so on Linux and macOS a restored session reports the same way. Herdr identifies an agent by

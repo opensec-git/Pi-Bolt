@@ -22,8 +22,9 @@
  */
 
 import { isAbsolute } from "node:path";
-import { COMMAND_NAME, PRODUCT_NAME } from "../../config.ts";
+import { PRODUCT_NAME } from "../../config.ts";
 import type { ExtensionContext, ExtensionFactory } from "../../core/extensions/types.ts";
+import { buildResumeArgv, getProgramResumeFlags } from "../../core/resume-command.ts";
 import { isHerdrPi } from "./pi-name.ts";
 import { type HerdrAnswer, type HerdrRequest, type HerdrTransport, herdrFromEnvironment } from "./transport.ts";
 
@@ -77,16 +78,23 @@ async function send(transport: HerdrTransport, request: () => HerdrRequest | und
 }
 
 /**
- * The command Herdr runs to reopen this session after a server restart: `pi-bolt --session <file>`, or with `--herdr-pi`
- * in front when reporting as Herdr's Pi integration, so the restored process reports the same way. Herdr refuses a report
- * whose command has an apostrophe or a control character in it or is over 8 KiB, so such a session gets no command (its
- * state still reaches Herdr).
+ * The command Herdr runs to reopen this session after a server restart: `pi-bolt --session <file>`, with `--herdr-pi`
+ * before `--session` when reporting as Herdr's Pi integration, so the restored process reports the same way. Like the
+ * OSC 7577 resume command (resume-command.ts), it keeps a non-default `--agent-dir` and repeats the restriction and
+ * resource flags this process was started with, and there is none when those flags were typed in another directory than
+ * the session's (`sessionCwd`). Herdr refuses a report whose command has an apostrophe or a control character in it or is
+ * over 8 KiB, so such a session gets no command (its state still reaches Herdr).
  */
-export function resumeArgv(sessionFile: string | undefined, piIntegration = false): string[] | undefined {
+export function resumeArgv(
+	sessionFile: string | undefined,
+	piIntegration = false,
+	sessionCwd: string = process.cwd(),
+	resumeFlags: readonly string[] = getProgramResumeFlags(),
+): string[] | undefined {
 	if (!sessionFile || !isAbsolute(sessionFile)) return undefined;
-	const argv = piIntegration
-		? [COMMAND_NAME, "--herdr-pi", "--session", sessionFile]
-		: [COMMAND_NAME, "--session", sessionFile];
+	const sessionArgs = piIntegration ? ["--herdr-pi", "--session", sessionFile] : ["--session", sessionFile];
+	const argv = buildResumeArgv(sessionArgs, sessionCwd, resumeFlags);
+	if (!argv) return undefined;
 	if (argv.some((arg) => arg.includes("'") || hasControlCharacter(arg))) return undefined;
 	if (argv.reduce((bytes, arg) => bytes + Buffer.byteLength(arg), 0) > 8192) return undefined;
 	return argv;
@@ -122,6 +130,7 @@ export function createHerdrExtension(
 		let reporting = false;
 		let sessionFile: string | undefined;
 		let sessionId: string | undefined;
+		let sessionCwd: string = process.cwd();
 		let agentActive = false;
 		let uiPrompt = false;
 		const blockedLabels: string[] = [];
@@ -148,6 +157,11 @@ export function createHerdrExtension(
 				sessionId = typeof id === "string" && id.length > 0 ? id : undefined;
 			} catch {
 				sessionId = undefined;
+			}
+			try {
+				sessionCwd = ctx.sessionManager.getCwd();
+			} catch {
+				sessionCwd = process.cwd();
 			}
 		}
 
@@ -192,7 +206,7 @@ export function createHerdrExtension(
 					? { agent_session_id: sessionId }
 					: undefined;
 			if (!sessionRef) return undefined;
-			const argv = withResume ? resumeArgv(sessionFile, piIntegration) : undefined;
+			const argv = withResume ? resumeArgv(sessionFile, piIntegration, sessionCwd) : undefined;
 			return {
 				method: "pane.report_agent_session",
 				params: {
@@ -282,7 +296,7 @@ export function createHerdrExtension(
 			}
 			last = next;
 			if (piIntegration && (force || sessionChanged || !sessionReported)) queueSession(sessionStartSource);
-			const argv = resumeArgv(sessionFile, piIntegration);
+			const argv = resumeArgv(sessionFile, piIntegration, sessionCwd);
 			const params = {
 				pane_id: paneId,
 				source,

@@ -1,8 +1,9 @@
 /**
  * The local control channel of remote control: one process at a time holds it, the background service
- * (`pi-bolt service run`) or a terminal running `/remote-control`. It is a Unix socket in the agent directory (a named pipe
- * on Windows) carrying one JSON object per line, and every request carries the token in `remote-control/service.token`, so
- * only the user who owns the agent directory gets an answer.
+ * (`pi-bolt service run`) or a terminal running `/remote-control`. It is a Unix socket in the agent directory, or in a
+ * folder of the user's own when that path is too long (a named pipe on Windows), carrying one JSON object per line. Every
+ * request carries the token in `remote-control/service.token`, so only the user who owns the agent directory gets an
+ * answer, and clients send requests only to a socket that user owns.
  *
  * What goes over it:
  * - `status`: the holder describes itself (`pi-bolt service status`).
@@ -12,15 +13,17 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { writePrivateFile } from "./store.ts";
 
 export interface ControlPaths {
 	socket: string;
 	token: string;
+	/** The folder made for the socket when the agent directory's path is too long for one (see [controlPaths]). */
+	socketDir?: string;
 }
 
 export type ControlRequest =
@@ -39,14 +42,47 @@ const CONNECT_TIMEOUT_MS = 1_000;
 const REPLY_TIMEOUT_MS = 5_000;
 const MAX_LINE_BYTES = 64 * 1024;
 
-/** Where the control socket and its token are for this agent directory. */
+/**
+ * Where the control socket and its token are for this agent directory. When the socket's path in the agent directory is
+ * too long for a Unix socket, the socket goes into a folder of this user's own: `$XDG_RUNTIME_DIR/pi-bolt`, or
+ * `<temp dir>/pi-bolt-<uid>`. [listenControl] makes that folder with mode 0700 and refuses one it does not own.
+ */
 export function controlPaths(agentDir: string, platform: NodeJS.Platform = process.platform): ControlPaths {
 	const dir = join(agentDir, "remote-control");
 	const id = createHash("sha256").update(dir).digest("hex").slice(0, 16);
 	const token = join(dir, "service.token");
 	if (platform === "win32") return { socket: `\\\\.\\pipe\\pi-bolt-rc-${id}`, token };
 	const socket = join(dir, "service.sock");
-	return { socket: socket.length <= MAX_SOCKET_PATH ? socket : join(tmpdir(), `pi-bolt-rc-${id}.sock`), token };
+	if (socket.length <= MAX_SOCKET_PATH) return { socket, token };
+	const runtimeDir = process.env.XDG_RUNTIME_DIR;
+	const socketDir =
+		runtimeDir && isAbsolute(runtimeDir)
+			? join(runtimeDir, "pi-bolt")
+			: join(tmpdir(), `pi-bolt-${process.getuid?.() ?? "user"}`);
+	return { socket: join(socketDir, `rc-${id}.sock`), token, socketDir };
+}
+
+/** Makes `dir` (mode 0700) unless it exists; throws unless it is a directory of this user's that only this user can open. */
+function ensurePrivateDir(dir: string): void {
+	try {
+		mkdirSync(dir, { mode: 0o700 });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	}
+	const stat = lstatSync(dir);
+	if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
+		throw new Error(`${dir} must be a directory owned by this user with mode 0700`);
+	}
+}
+
+/** Whether `path` is a socket (not a link to one) owned by this user. */
+function isOwnSocket(path: string): boolean {
+	try {
+		const stat = lstatSync(path);
+		return stat.isSocket() && stat.uid === process.getuid?.();
+	} catch {
+		return false;
+	}
 }
 
 /** The token, made on first use (mode 0600, next to the host key). */
@@ -197,6 +233,7 @@ export async function listenControl(
 	onRequest: (request: ControlRequest, connection: ControlConnection) => void,
 ): Promise<ControlListener | undefined> {
 	const token = readOrCreateToken(paths.token);
+	if (paths.socketDir) ensurePrivateDir(paths.socketDir);
 	const connections = new Set<ControlConnection>();
 	const server = createServer((socket) => {
 		const connection = new ControlConnection(socket);
@@ -291,7 +328,8 @@ export async function connectControl(paths: ControlPaths): Promise<ControlClient
 	} catch {
 		return undefined;
 	}
-	if (process.platform !== "win32" && !existsSync(paths.socket)) return undefined;
+	// Requests carry the token: they go only to a socket this user made.
+	if (process.platform !== "win32" && !isOwnSocket(paths.socket)) return undefined;
 	const socket = await openSocket(paths.socket);
 	return socket ? new ControlClient(new ControlConnection(socket), token) : undefined;
 }

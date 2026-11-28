@@ -104,7 +104,10 @@ the following in `~/.pi/agent/remote-control/`:
 
 - `service.log`: the log, mode 0600. It moves to `service.log.1` at 1 MiB.
 - `service.err.log`: the process's own output on macOS. systemd keeps it in the journal instead.
-- `service.token` and `service.sock`: the control channel (named pipe on Windows).
+- `service.token` and `service.sock`: the control channel (named pipe on Windows). When the path of `service.sock` would
+  be longer than 100 characters, the socket is `rc-<id>.sock` in `$XDG_RUNTIME_DIR/pi-bolt/`, or in
+  `<temp dir>/pi-bolt-<uid>/` without `$XDG_RUNTIME_DIR`. That folder is created with mode 0700, and the service does
+  not use one that another user owns or others can open.
 
 `uninstall` removes all of them.
 

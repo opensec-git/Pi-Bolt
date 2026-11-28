@@ -36,6 +36,7 @@ import type { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import type { ProgressEvent } from "./core/package-manager.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { setProgramResumeFlags } from "./core/resume-command.ts";
 import { type CreateAgentSessionOptions, enableCliStreamOptimization } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -630,6 +631,8 @@ export async function main(cliArgs: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// The resume commands (OSC 7577, Herdr) repeat the restriction and resource flags as typed.
+	setProgramResumeFlags(parsed.resumeFlags);
 	// The service runs headless as RPC does, whether or not it was started from a terminal.
 	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
 	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`: an

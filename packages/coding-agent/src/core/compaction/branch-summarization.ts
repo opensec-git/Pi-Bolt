@@ -123,7 +123,8 @@ export function collectEntriesForBranchSummary(
 	}
 
 	// Find common ancestor (deepest node that's on both paths)
-	const oldPath = new Set(session.getBranch(oldLeafId).map((e) => e.id));
+	const oldBranch = session.getBranch(oldLeafId);
+	const oldPath = new Set(oldBranch.map((e) => e.id));
 	const targetPath = session.getBranch(targetId);
 
 	// targetPath is root-first, so iterate backwards to find deepest common ancestor
@@ -135,19 +136,10 @@ export function collectEntriesForBranchSummary(
 		}
 	}
 
-	// Collect entries from old leaf back to common ancestor
-	const entries: SessionEntry[] = [];
-	let current: string | null = oldLeafId;
-
-	while (current && current !== commonAncestorId) {
-		const entry = session.getEntry(current);
-		if (!entry) break;
-		entries.push(entry);
-		current = entry.parentId;
-	}
-
-	// Reverse to get chronological order
-	entries.reverse();
+	// Entries of the old branch after the common ancestor, in chronological order. (Taken from the branch rather than
+	// by following parent links again: getBranch() cuts parent links that form a cycle in a damaged file.)
+	const start = commonAncestorId === null ? 0 : oldBranch.findIndex((e) => e.id === commonAncestorId) + 1;
+	const entries = oldBranch.slice(start);
 
 	return { entries, commonAncestorId };
 }

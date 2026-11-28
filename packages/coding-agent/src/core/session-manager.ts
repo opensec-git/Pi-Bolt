@@ -21,6 +21,7 @@ import {
 	fchmodSync,
 	constants as fsConstants,
 	fstatSync,
+	ftruncateSync,
 	linkSync,
 	mkdirSync,
 	openSync,
@@ -480,14 +481,38 @@ function buildSessionPath(
 		return [];
 	}
 
+	return walkToRoot(leaf, index);
+}
+
+/**
+ * The path from the root to `leaf`. Parent links that form a cycle (only a damaged file has one) are cut where the walk
+ * meets an entry already on the path, as if that entry's parent were missing.
+ */
+function walkToRoot(leaf: SessionEntry | undefined, byId: ReadonlyMap<string, SessionEntry>): SessionEntry[] {
 	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = leaf;
+	let current = leaf;
 	while (current) {
+		// A walk longer than the index has met an entry twice. Only then are the ids on the path tracked.
+		if (path.length > byId.size) return walkToRootCuttingCycle(leaf, byId);
 		path.push(current);
-		current = current.parentId ? index.get(current.parentId) : undefined;
+		current = current.parentId ? byId.get(current.parentId) : undefined;
 	}
-	path.reverse();
-	return path;
+	return path.reverse();
+}
+
+function walkToRootCuttingCycle(
+	leaf: SessionEntry | undefined,
+	byId: ReadonlyMap<string, SessionEntry>,
+): SessionEntry[] {
+	const path: SessionEntry[] = [];
+	const seen = new Set<string>();
+	let current = leaf;
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
+		path.push(current);
+		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+	return path.reverse();
 }
 
 function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "thinkingLevel" | "model"> {
@@ -779,6 +804,18 @@ function parseSessionEntryLine(line: string): FileEntry | null {
 	}
 }
 
+/**
+ * Whether a line parsed after the header is a record: `{}`, `42` or `[1]` parse but are none, and are skipped like a
+ * malformed line (trust boundary: file input). Since version 2 every entry has an id; version 1 files get theirs on
+ * migration.
+ */
+function isSessionRecord(parsed: FileEntry, needsId: boolean): boolean {
+	const value: unknown = parsed;
+	if (typeof value !== "object" || value === null || typeof (value as { type?: unknown }).type !== "string")
+		return false;
+	return !needsId || parsed.type === "session" || typeof parsed.id === "string";
+}
+
 /** Exported for testing */
 export function loadEntriesFromFile(filePath: string): FileEntry[] {
 	const entries: FileEntry[] = [];
@@ -792,11 +829,15 @@ function visitSessionEntries(filePath: string, visit: (entry: FileEntry, line: s
 	if (!existsSync(resolvedFilePath)) return;
 
 	let validHeader: boolean | undefined;
+	let entriesHaveIds = false;
 	const consume = (line: string): void => {
 		const entry = parseSessionEntryLine(line);
 		if (!entry) return;
-		validHeader ??= entry.type === "session" && typeof entry.id === "string";
-		if (validHeader) visit(entry, line);
+		if (validHeader === undefined) {
+			validHeader = entry.type === "session" && typeof entry.id === "string";
+			entriesHaveIds = entry.type === "session" && (entry.version ?? 1) >= 2;
+		}
+		if (validHeader && isSessionRecord(entry, entriesHaveIds)) visit(entry, line);
 	};
 	let finalLine = "";
 	const fd = openSync(resolvedFilePath, "r");
@@ -919,7 +960,14 @@ export function findMostRecentSession(sessionDir: string, cwd?: string): string 
 		const files = readdirSync(resolvedSessionDir)
 			.filter((file) => file.endsWith(".jsonl"))
 			.map((file) => join(resolvedSessionDir, file))
-			.map((path) => ({ path, mtime: statSync(path).mtimeMs }))
+			.flatMap((path) => {
+				// One entry that cannot be read (a dangling symlink, a file deleted since readdir) must not hide the others.
+				try {
+					return [{ path, mtime: statSync(path).mtimeMs }];
+				} catch {
+					return [];
+				}
+			})
 			.sort((a, b) => b.mtime - a.mtime);
 
 		for (const { path } of files) {
@@ -1471,6 +1519,40 @@ function endPartialLine(fd: number, size: number): void {
 }
 
 /**
+ * Appends `line`. A short write (a full disk) is continued like appendFileSync would. When a later write fails, the part
+ * already written is cut off again, so the file holds no entry that the session rolled back (_appendEntry()).
+ */
+function writeWholeLine(fd: number, line: string): void {
+	let written = writeSync(fd, line);
+	const length = Buffer.byteLength(line);
+	if (written === length) return;
+	const bytes = Buffer.from(line);
+	try {
+		while (written < length) written += writeSync(fd, bytes, written, length - written);
+	} catch (error) {
+		cutPartialLine(fd, bytes.subarray(0, written));
+		throw error;
+	}
+}
+
+/**
+ * Truncates the file by `part` when the file still ends with it: a line that another process appended after it is never
+ * cut. If the cut fails, the next open ends the partial line instead (endPartialLine()).
+ */
+function cutPartialLine(fd: number, part: Buffer): void {
+	try {
+		const size = fstatSync(fd).size;
+		if (size < part.length) return;
+		const tail = Buffer.alloc(part.length);
+		if (readSync(fd, tail, 0, part.length, size - part.length) === part.length && tail.equals(part)) {
+			ftruncateSync(fd, size - part.length);
+		}
+	} catch {
+		// Left for endPartialLine().
+	}
+}
+
+/**
  * A session file kept open for appends while they come in quick succession: opening and closing the file for every
  * entry cost 50-65 µs on macOS (APFS), a write on an open file 6 µs, and a turn appends an entry per message and tool
  * result. Each append still writes its whole line with write() before it returns, as before, so a crash loses no more.
@@ -1512,14 +1594,7 @@ class SessionAppendFile {
 	}
 
 	append(line: string): void {
-		const written = writeSync(this.fd, line);
-		if (written !== Buffer.byteLength(line)) {
-			// A short write (a full disk): write the rest like appendFileSync would.
-			const bytes = Buffer.from(line);
-			for (let offset = written; offset < bytes.length; ) {
-				offset += writeSync(this.fd, bytes, offset, bytes.length - offset);
-			}
-		}
+		writeWholeLine(this.fd, line);
 		this.lastAppend = performance.now();
 		if (!this.timer) this.scheduleClose(APPEND_FILE_IDLE_MS);
 	}
@@ -1572,6 +1647,11 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/**
+	 * Whether the parent links may form a cycle: set by _buildIndex() when an entry names a parent that is not before it
+	 * in the file, or an id repeats. Appends cannot make one, so a healthy file never pays for the check in getTree().
+	 */
+	private linksMayCycle = false;
 	/**
 	 * The root-to-leaf path of `leafId`, kept between calls: an append extends it by one entry, so
 	 * the per-request projection does not walk the whole history. Never handed out; callers get copies.
@@ -1680,6 +1760,7 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		this.linksMayCycle = false;
 		this.flushed = false;
 
 		if (this.persist) {
@@ -1738,6 +1819,7 @@ export class SessionManager {
 				}
 			}
 		}
+		this.linksMayCycle = unlinked || this.byId.size + 1 !== this.fileEntries.length;
 		return unlinked;
 	}
 
@@ -1810,7 +1892,7 @@ export class SessionManager {
 			const fd = openSync(path, "a+", SESSION_FILE_MODE);
 			try {
 				endPartialLine(fd, fstatSync(fd).size);
-				writeFileSync(fd, line);
+				writeWholeLine(fd, line);
 			} finally {
 				closeSync(fd);
 			}
@@ -2136,14 +2218,7 @@ export class SessionManager {
 	}
 
 	private _walkBranch(startId: string | null): SessionEntry[] {
-		const path: SessionEntry[] = [];
-		let current = startId ? this.byId.get(startId) : undefined;
-		while (current) {
-			path.push(current);
-			current = current.parentId ? this.byId.get(current.parentId) : undefined;
-		}
-		path.reverse();
-		return path;
+		return walkToRoot(startId ? this.byId.get(startId) : undefined, this.byId);
 	}
 
 	/** The cached path to the current leaf. Must not be modified or returned to callers. */
@@ -2351,6 +2426,7 @@ export class SessionManager {
 			previousId = entry.id;
 		}
 
+		const cuts = this.linksMayCycle ? this._cycleCuts() : undefined;
 		const roots: SessionTreeNode[] = [];
 		const forks: SessionTreeNode[] = [];
 		let previous: SessionTreeNode | undefined;
@@ -2358,7 +2434,7 @@ export class SessionManager {
 			if (entry.type === "session") continue;
 			const node = indexed.get(entry.id) ?? makeNode(entry);
 			const parentId = entry.parentId;
-			if (parentId === null || entry.id === parentId) {
+			if (parentId === null || entry.id === parentId || cuts?.has(entry.id)) {
 				roots.push(node);
 			} else {
 				const parent = previous?.entry.id === parentId ? previous : indexed.get(parentId);
@@ -2376,6 +2452,34 @@ export class SessionManager {
 			parent.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
 		}
 		return roots;
+	}
+
+	/**
+	 * The ids of entries whose parent link closes a cycle, found by walking up from every entry. getTree() makes each a
+	 * root, as walkToRoot() does for a branch: without the cut, a cycle and everything below it would be unreachable.
+	 * The walks start at the last entry, so a cycle above the leaf is cut where the leaf's branch cuts it.
+	 */
+	private _cycleCuts(): Set<string> {
+		const cuts = new Set<string>();
+		const done = new Set<string>();
+		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
+			const entry = this.fileEntries[i];
+			if (entry.type === "session") continue;
+			const onPath = new Set<string>();
+			let current = this.byId.get(entry.id);
+			let last: SessionEntry | undefined;
+			while (current && !done.has(current.id)) {
+				if (onPath.has(current.id)) {
+					if (last) cuts.add(last.id);
+					break;
+				}
+				onPath.add(current.id);
+				last = current;
+				current = current.parentId ? this.byId.get(current.parentId) : undefined;
+			}
+			for (const id of onPath) done.add(id);
+		}
+		return cuts;
 	}
 
 	// =========================================================================
@@ -2605,12 +2709,15 @@ export class SessionManager {
 		// reading, canonicalizing and closing it. A malformed source cannot expose a partial branch.
 		const tempPath = join(dir, `.fork-${createSessionId()}.tmp`);
 		removeStaleForkFiles(dir);
-		const output: { writer?: SessionBatchWriter; path?: string } = {};
+		// `legacy`: an older source (no entry ids in version 1) is collected and migrated before it is written, as opening it
+		// would.
+		const output: { writer?: SessionBatchWriter; path?: string; legacy?: FileEntry[] } = {};
 		try {
 			try {
 				visitSessionEntries(resolvedSourcePath, (entry, line) => {
 					if (entry.type === "session") {
 						if (output.writer) return;
+						if ((entry.version ?? 1) < CURRENT_SESSION_VERSION) output.legacy = [entry];
 						if (options?.id !== undefined) assertValidSessionId(options.id);
 						const id = options?.id ?? createSessionId();
 						const timestamp = new Date().toISOString();
@@ -2629,6 +2736,10 @@ export class SessionManager {
 						entries.push(header);
 						return;
 					}
+					if (output.legacy) {
+						output.legacy.push(entry);
+						return;
+					}
 					const encoded = JSON.stringify(entry);
 					output.writer!.write(encoded);
 					// Canonical input already has exactly the value a reopen would return. Imported
@@ -2638,6 +2749,15 @@ export class SessionManager {
 				});
 				if (!output.writer || !output.path) {
 					throw new Error(`Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}`);
+				}
+				if (output.legacy) {
+					migrateToCurrentVersion(output.legacy);
+					for (const entry of output.legacy) {
+						if (entry.type === "session") continue;
+						const encoded = JSON.stringify(entry);
+						output.writer.write(encoded);
+						entries.push(JSON.parse(encoded));
+					}
 				}
 				output.writer.flush();
 			} finally {
