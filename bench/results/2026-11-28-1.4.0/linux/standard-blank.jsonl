@@ -1,0 +1,108 @@
+{"ok": true, "wall_ms": 4.148906096816063, "cpu_ms": 4.028, "peak_mb": 39.5234375, "peak_own_mb": 1.8, "build": "1.3.1", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 4.317508079111576, "cpu_ms": 4.13, "peak_mb": 40.7265625, "peak_own_mb": 1.7, "build": "1.3.2", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 4.382274113595486, "cpu_ms": 4.176, "peak_mb": 41.6171875, "peak_own_mb": 1.7, "build": "1.4.0", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 4.1940538212656975, "cpu_ms": 4.01, "peak_mb": 39.5234375, "peak_own_mb": 2.1, "build": "1.3.1", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 4.628170747309923, "cpu_ms": 4.46, "peak_mb": 40.60546875, "peak_own_mb": 1.7, "build": "1.3.2", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 3.693448845297098, "cpu_ms": 3.4139999999999997, "peak_mb": 41.61328125, "peak_own_mb": 2.3, "build": "1.4.0", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 3.594741690903902, "cpu_ms": 3.3609999999999998, "peak_mb": 39.5234375, "peak_own_mb": 2.3, "build": "1.3.1", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.720989916473627, "cpu_ms": 3.546, "peak_mb": 40.60546875, "peak_own_mb": 2.3, "build": "1.3.2", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.281726036220789, "cpu_ms": 3.102, "peak_mb": 41.6328125, "peak_own_mb": 2.5, "build": "1.4.0", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 4.288113676011562, "cpu_ms": 4.113, "peak_mb": 39.48828125, "peak_own_mb": 1.9, "build": "1.3.1", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 4.300503060221672, "cpu_ms": 4.122, "peak_mb": 40.60546875, "peak_own_mb": 1.9, "build": "1.3.2", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 4.05143154785037, "cpu_ms": 3.9179999999999997, "peak_mb": 41.63671875, "peak_own_mb": 2.2, "build": "1.4.0", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 24.470683187246323, "cpu_ms": 22.284, "peak_mb": 77.56640625, "peak_own_mb": 14.9, "build": "1.3.1", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 24.2452179081738, "cpu_ms": 22.548, "peak_mb": 76.91015625, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 23.576542269438505, "cpu_ms": 21.786, "peak_mb": 83.97265625, "peak_own_mb": 15.4, "build": "1.4.0", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 26.06046013534069, "cpu_ms": 24.558, "peak_mb": 77.5703125, "peak_own_mb": 14.9, "build": "1.3.1", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 24.226831272244453, "cpu_ms": 22.323, "peak_mb": 76.47265625, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 24.430453311651945, "cpu_ms": 22.519000000000002, "peak_mb": 83.51953125, "peak_own_mb": 15.3, "build": "1.4.0", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 25.145599152892828, "cpu_ms": 23.042, "peak_mb": 77.06640625, "peak_own_mb": 14.5, "build": "1.3.1", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.143977090716362, "cpu_ms": 22.455, "peak_mb": 77.03125, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 23.511395789682865, "cpu_ms": 21.927, "peak_mb": 82.640625, "peak_own_mb": 14.1, "build": "1.4.0", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 23.97205075249076, "cpu_ms": 22.171, "peak_mb": 77.40234375, "peak_own_mb": 14.8, "build": "1.3.1", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 24.452907033264637, "cpu_ms": 22.837999999999997, "peak_mb": 76.91015625, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 23.301401641219854, "cpu_ms": 21.630999999999997, "peak_mb": 84.0234375, "peak_own_mb": 14.2, "build": "1.4.0", "scenario": "headless", "run": 3}
+{"ok": true, "tti_ms": 14.575591310858727, "turns_ms": 75.71565266698599, "peak_own_mb": 23.3, "wall_ms": 361.01252119988203, "cpu_ms": 67.211, "peak_mb": 89.87890625, "build": "1.3.1", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.83396503701806, "turns_ms": 75.93705086037517, "peak_own_mb": 23.4, "wall_ms": 363.6640287004411, "cpu_ms": 71.407, "peak_mb": 89.8046875, "build": "1.3.2", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.51043288782239, "turns_ms": 77.43472885340452, "peak_own_mb": 23.8, "wall_ms": 363.9021930284798, "cpu_ms": 71.463, "peak_mb": 98.61328125, "build": "1.4.0", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.635889954864979, "turns_ms": 76.93455507978797, "peak_own_mb": 23.0, "wall_ms": 363.7439371086657, "cpu_ms": 70.419, "peak_mb": 89.375, "build": "1.3.1", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 14.798703137785196, "turns_ms": 76.41592295840383, "peak_own_mb": 23.1, "wall_ms": 362.2520761564374, "cpu_ms": 70.418, "peak_mb": 88.765625, "build": "1.3.2", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.417895279824734, "turns_ms": 81.06693672016263, "peak_own_mb": 23.3, "wall_ms": 367.87037132307887, "cpu_ms": 72.84299999999999, "peak_mb": 98.55859375, "build": "1.4.0", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.21436171606183, "turns_ms": 79.09212680533528, "peak_own_mb": 23.5, "wall_ms": 365.70937279611826, "cpu_ms": 71.84899999999999, "peak_mb": 89.9921875, "build": "1.3.1", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 14.85955435782671, "turns_ms": 76.88280753791332, "peak_own_mb": 23.8, "wall_ms": 363.1566632539034, "cpu_ms": 71.212, "peak_mb": 88.42578125, "build": "1.3.2", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 15.709389932453632, "turns_ms": 76.16039086133242, "peak_own_mb": 23.6, "wall_ms": 363.3734458126128, "cpu_ms": 71.469, "peak_mb": 98.4375, "build": "1.4.0", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 15.507589094340801, "turns_ms": 77.55182404071093, "peak_own_mb": 23.8, "wall_ms": 364.17743284255266, "cpu_ms": 70.383, "peak_mb": 90.51953125, "build": "1.3.1", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 15.515390783548355, "turns_ms": 76.34946284815669, "peak_own_mb": 23.2, "wall_ms": 363.75514371320605, "cpu_ms": 72.22, "peak_mb": 88.78515625, "build": "1.3.2", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 15.174401924014091, "turns_ms": 78.476601280272, "peak_own_mb": 23.5, "wall_ms": 364.93003321811557, "cpu_ms": 70.27, "peak_mb": 98.9765625, "build": "1.4.0", "scenario": "interactive", "run": 3}
+{"ok": true, "wall_ms": 4.5587667264044285, "cpu_ms": 4.348999999999999, "peak_mb": 40.7265625, "peak_own_mb": 1.7, "build": "1.3.2", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 3.9838808588683605, "cpu_ms": 3.806, "peak_mb": 41.6328125, "peak_own_mb": 2.2, "build": "1.4.0", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 4.420281387865543, "cpu_ms": 4.266, "peak_mb": 39.46875, "peak_own_mb": 1.7, "build": "1.3.1", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 3.9574718102812767, "cpu_ms": 3.8049999999999997, "peak_mb": 40.72265625, "peak_own_mb": 2.2, "build": "1.3.2", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 4.285150207579136, "cpu_ms": 4.145, "peak_mb": 41.6171875, "peak_own_mb": 1.7, "build": "1.4.0", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 3.945845179259777, "cpu_ms": 3.6519999999999997, "peak_mb": 39.51953125, "peak_own_mb": 2.2, "build": "1.3.1", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 4.448122810572386, "cpu_ms": 4.144, "peak_mb": 40.7265625, "peak_own_mb": 1.9, "build": "1.3.2", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.4595010802149773, "cpu_ms": 3.284, "peak_mb": 41.6171875, "peak_own_mb": 2.4, "build": "1.4.0", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 4.353632684797049, "cpu_ms": 4.218, "peak_mb": 39.5234375, "peak_own_mb": 1.7, "build": "1.3.1", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.4350440837442875, "cpu_ms": 3.274, "peak_mb": 40.671875, "peak_own_mb": 2.3, "build": "1.3.2", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 4.182877950370312, "cpu_ms": 4.0169999999999995, "peak_mb": 41.6171875, "peak_own_mb": 1.8, "build": "1.4.0", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 3.817073069512844, "cpu_ms": 3.66, "peak_mb": 39.5234375, "peak_own_mb": 2.3, "build": "1.3.1", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 23.68472283706069, "cpu_ms": 21.557, "peak_mb": 76.94140625, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 24.570112116634846, "cpu_ms": 22.642, "peak_mb": 82.78515625, "peak_own_mb": 15.2, "build": "1.4.0", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 24.400328285992146, "cpu_ms": 22.378000000000004, "peak_mb": 78.5234375, "peak_own_mb": 15.1, "build": "1.3.1", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 23.70365196838975, "cpu_ms": 21.752, "peak_mb": 77.40625, "peak_own_mb": 15.3, "build": "1.3.2", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 24.588899686932564, "cpu_ms": 22.765, "peak_mb": 84.00390625, "peak_own_mb": 15.3, "build": "1.4.0", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 23.225239012390375, "cpu_ms": 21.378, "peak_mb": 77.515625, "peak_own_mb": 14.4, "build": "1.3.1", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 24.77817190811038, "cpu_ms": 22.5, "peak_mb": 76.91796875, "peak_own_mb": 14.7, "build": "1.3.2", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.56487435847521, "cpu_ms": 22.386999999999997, "peak_mb": 83.22265625, "peak_own_mb": 15.2, "build": "1.4.0", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.55695206299424, "cpu_ms": 22.41, "peak_mb": 78.015625, "peak_own_mb": 15.1, "build": "1.3.1", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.700656067579985, "cpu_ms": 22.525, "peak_mb": 76.91015625, "peak_own_mb": 15.1, "build": "1.3.2", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 24.398345965892076, "cpu_ms": 21.898, "peak_mb": 82.2265625, "peak_own_mb": 15.4, "build": "1.4.0", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 23.739134892821312, "cpu_ms": 21.609999999999996, "peak_mb": 78.015625, "peak_own_mb": 15.0, "build": "1.3.1", "scenario": "headless", "run": 3}
+{"ok": true, "tti_ms": 15.368200838565826, "turns_ms": 75.98147774115205, "peak_own_mb": 23.1, "wall_ms": 362.09587287157774, "cpu_ms": 68.67799999999998, "peak_mb": 88.59765625, "build": "1.3.2", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.121913980692625, "turns_ms": 76.37983746826649, "peak_own_mb": 23.6, "wall_ms": 362.65628784894943, "cpu_ms": 70.80499999999999, "peak_mb": 97.34375, "build": "1.4.0", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.71223372593522, "turns_ms": 77.92032370343804, "peak_own_mb": 23.6, "wall_ms": 364.6075427532196, "cpu_ms": 73.09299999999999, "peak_mb": 89.7109375, "build": "1.3.1", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.603892039507627, "turns_ms": 76.64528442546725, "peak_own_mb": 23.7, "wall_ms": 363.76251466572285, "cpu_ms": 70.34499999999998, "peak_mb": 88.23828125, "build": "1.3.2", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.276364982128143, "turns_ms": 76.14891557022929, "peak_own_mb": 23.3, "wall_ms": 362.4808769673109, "cpu_ms": 69.62299999999999, "peak_mb": 97.3828125, "build": "1.4.0", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.500919427722692, "turns_ms": 75.31826989725232, "peak_own_mb": 23.3, "wall_ms": 361.8254610337317, "cpu_ms": 68.95599999999999, "peak_mb": 90.8984375, "build": "1.3.1", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.934545081108809, "turns_ms": 74.4633674621582, "peak_own_mb": 23.8, "wall_ms": 361.58486315980554, "cpu_ms": 69.91600000000001, "peak_mb": 88.9453125, "build": "1.3.2", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 15.569370705634356, "turns_ms": 77.18923594802618, "peak_own_mb": 23.3, "wall_ms": 363.20370296016335, "cpu_ms": 70.089, "peak_mb": 97.53515625, "build": "1.4.0", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 14.814757276326418, "turns_ms": 76.97378331795335, "peak_own_mb": 23.1, "wall_ms": 364.048661198467, "cpu_ms": 70.829, "peak_mb": 89.16796875, "build": "1.3.1", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 14.98832507058978, "turns_ms": 78.0789596028626, "peak_own_mb": 23.5, "wall_ms": 365.62145315110683, "cpu_ms": 72.99499999999999, "peak_mb": 87.83984375, "build": "1.3.2", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 15.099822077900171, "turns_ms": 77.8793622739613, "peak_own_mb": 23.8, "wall_ms": 365.0472592562437, "cpu_ms": 71.00699999999999, "peak_mb": 98.68359375, "build": "1.4.0", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 15.347870998084545, "turns_ms": 79.29210644215345, "peak_own_mb": 23.5, "wall_ms": 365.19576888531446, "cpu_ms": 71.22, "peak_mb": 89.80859375, "build": "1.3.1", "scenario": "interactive", "run": 3}
+{"ok": true, "wall_ms": 3.8521052338182926, "cpu_ms": 3.6569999999999996, "peak_mb": 41.6171875, "peak_own_mb": 2.0, "build": "1.4.0", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 3.0433908104896545, "cpu_ms": 2.868, "peak_mb": 39.5234375, "peak_own_mb": 2.6, "build": "1.3.1", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 3.994257189333439, "cpu_ms": 3.822, "peak_mb": 40.72265625, "peak_own_mb": 2.2, "build": "1.3.2", "scenario": "startup", "run": 0}
+{"ok": true, "wall_ms": 3.4994101151823997, "cpu_ms": 3.312, "peak_mb": 41.6171875, "peak_own_mb": 2.3, "build": "1.4.0", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 4.097810946404934, "cpu_ms": 3.8699999999999997, "peak_mb": 39.51953125, "peak_own_mb": 2.1, "build": "1.3.1", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 4.83614020049572, "cpu_ms": 4.624, "peak_mb": 40.60546875, "peak_own_mb": 1.5, "build": "1.3.2", "scenario": "startup", "run": 1}
+{"ok": true, "wall_ms": 3.4783086739480495, "cpu_ms": 3.265, "peak_mb": 41.5625, "peak_own_mb": 2.4, "build": "1.4.0", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.7184758111834526, "cpu_ms": 3.518, "peak_mb": 39.5390625, "peak_own_mb": 2.3, "build": "1.3.1", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.2898779027163982, "cpu_ms": 3.1209999999999996, "peak_mb": 40.7265625, "peak_own_mb": 2.4, "build": "1.3.2", "scenario": "startup", "run": 2}
+{"ok": true, "wall_ms": 3.0862847343087196, "cpu_ms": 2.92, "peak_mb": 41.6171875, "peak_own_mb": 2.6, "build": "1.4.0", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 3.0163810588419437, "cpu_ms": 2.8539999999999996, "peak_mb": 39.5234375, "peak_own_mb": 2.6, "build": "1.3.1", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 3.167275805026293, "cpu_ms": 3.018, "peak_mb": 40.7265625, "peak_own_mb": 2.5, "build": "1.3.2", "scenario": "startup", "run": 3}
+{"ok": true, "wall_ms": 23.83687999099493, "cpu_ms": 21.912000000000003, "peak_mb": 84.0234375, "peak_own_mb": 15.3, "build": "1.4.0", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 23.101074155420065, "cpu_ms": 21.362999999999996, "peak_mb": 77.64453125, "peak_own_mb": 14.5, "build": "1.3.1", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 23.90605304390192, "cpu_ms": 21.863, "peak_mb": 76.91015625, "peak_own_mb": 15.3, "build": "1.3.2", "scenario": "headless", "run": 0}
+{"ok": true, "wall_ms": 24.034353904426098, "cpu_ms": 22.156000000000002, "peak_mb": 83.97265625, "peak_own_mb": 15.4, "build": "1.4.0", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 23.603602778166533, "cpu_ms": 21.657999999999998, "peak_mb": 77.54296875, "peak_own_mb": 15.1, "build": "1.3.1", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 25.566274765878916, "cpu_ms": 23.732999999999997, "peak_mb": 76.91015625, "peak_own_mb": 15.3, "build": "1.3.2", "scenario": "headless", "run": 1}
+{"ok": true, "wall_ms": 23.552516009658575, "cpu_ms": 21.56, "peak_mb": 83.37890625, "peak_own_mb": 15.1, "build": "1.4.0", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.275452829897404, "cpu_ms": 22.216, "peak_mb": 77.26171875, "peak_own_mb": 14.9, "build": "1.3.1", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 25.288961827754974, "cpu_ms": 23.194, "peak_mb": 76.91015625, "peak_own_mb": 14.7, "build": "1.3.2", "scenario": "headless", "run": 2}
+{"ok": true, "wall_ms": 24.34194227680564, "cpu_ms": 22.404999999999998, "peak_mb": 83.34375, "peak_own_mb": 15.3, "build": "1.4.0", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 22.90880912914872, "cpu_ms": 21.384, "peak_mb": 78.04296875, "peak_own_mb": 14.8, "build": "1.3.1", "scenario": "headless", "run": 3}
+{"ok": true, "wall_ms": 22.579809185117483, "cpu_ms": 20.562, "peak_mb": 76.91015625, "peak_own_mb": 15.2, "build": "1.3.2", "scenario": "headless", "run": 3}
+{"ok": true, "tti_ms": 15.73659898713231, "turns_ms": 75.95734857022762, "peak_own_mb": 24.2, "wall_ms": 363.4828180074692, "cpu_ms": 70.309, "peak_mb": 99.14453125, "build": "1.4.0", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 14.759765937924385, "turns_ms": 75.91057987883687, "peak_own_mb": 23.3, "wall_ms": 362.6852510496974, "cpu_ms": 70.604, "peak_mb": 90.4453125, "build": "1.3.1", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.093541704118252, "turns_ms": 77.02641375362873, "peak_own_mb": 23.1, "wall_ms": 363.1446249783039, "cpu_ms": 71.071, "peak_mb": 89.25, "build": "1.3.2", "scenario": "interactive", "run": 0}
+{"ok": true, "tti_ms": 15.42260218411684, "turns_ms": 76.23548386618495, "peak_own_mb": 23.8, "wall_ms": 361.8849888443947, "cpu_ms": 69.356, "peak_mb": 97.92578125, "build": "1.4.0", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.10044327005744, "turns_ms": 76.3209518045187, "peak_own_mb": 24.0, "wall_ms": 362.38826904445887, "cpu_ms": 69.3, "peak_mb": 90.15234375, "build": "1.3.1", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.07292129099369, "turns_ms": 76.39810675755143, "peak_own_mb": 23.1, "wall_ms": 363.11684316024184, "cpu_ms": 68.885, "peak_mb": 87.6796875, "build": "1.3.2", "scenario": "interactive", "run": 1}
+{"ok": true, "tti_ms": 15.26258373633027, "turns_ms": 76.22931385412812, "peak_own_mb": 24.2, "wall_ms": 363.04209288209677, "cpu_ms": 71.38699999999999, "peak_mb": 99.5703125, "build": "1.4.0", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 14.904501382261515, "turns_ms": 76.25962002202868, "peak_own_mb": 23.7, "wall_ms": 363.118386361748, "cpu_ms": 69.319, "peak_mb": 90.37109375, "build": "1.3.1", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 15.070467721670866, "turns_ms": 77.48988270759583, "peak_own_mb": 23.5, "wall_ms": 363.75891976058483, "cpu_ms": 72.06400000000001, "peak_mb": 88.4375, "build": "1.3.2", "scenario": "interactive", "run": 2}
+{"ok": true, "tti_ms": 15.46346303075552, "turns_ms": 79.01101559400558, "peak_own_mb": 23.8, "wall_ms": 365.77737471088767, "cpu_ms": 73.815, "peak_mb": 96.828125, "build": "1.4.0", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 15.508931130170822, "turns_ms": 77.96159572899342, "peak_own_mb": 23.3, "wall_ms": 364.22345228493214, "cpu_ms": 71.575, "peak_mb": 88.11328125, "build": "1.3.1", "scenario": "interactive", "run": 3}
+{"ok": true, "tti_ms": 14.9735938757658, "turns_ms": 77.6316225528717, "peak_own_mb": 23.2, "wall_ms": 363.38074691593647, "cpu_ms": 68.824, "peak_mb": 88.59765625, "build": "1.3.2", "scenario": "interactive", "run": 3}

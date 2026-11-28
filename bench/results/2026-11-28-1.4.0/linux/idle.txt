@@ -1,0 +1,51 @@
+{'build': '1.3.1', 'cpu_ms_per_s': 0.451, 'own_mb': [17.1, 14.5], 'threads': {'pi': (0.171, 0.5), 'JSCWarmUp': (0.024, 0.1), 'mi-scavenger': (0.084, 0.8), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.166, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.383, 'own_mb': [17.2, 14.5], 'threads': {'pi': (0.152, 0.7), 'JSCWarmUp': (0.011, 0.1), 'mi-scavenger': (0.07, 0.9), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.143, 0.6)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.415, 'own_mb': [17.4, 14.7], 'threads': {'pi': (0.197, 0.5), 'JSCWarmUp': (0.007, 0.1), 'mi-scavenger': (0.094, 0.7), 'HTTP Client': (0.004, 0.1)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.404, 'own_mb': [17.4, 14.8], 'threads': {'pi': (0.146, 0.5), 'JSCWarmUp': (0.011, 0.1), 'mi-scavenger': (0.08, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.16, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.507, 'own_mb': [17.3, 14.6], 'threads': {'pi': (0.21, 0.4), 'JSCWarmUp': (0.012, 0.1), 'mi-scavenger': (0.092, 0.9), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.188, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.412, 'own_mb': [17.2, 14.6], 'threads': {'pi': (0.136, 0.8), 'JSCWarmUp': (0.022, 0.1), 'mi-scavenger': (0.084, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.165, 0.7)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.477, 'own_mb': [17.5, 14.5], 'threads': {'pi': (0.182, 0.5), 'JSCWarmUp': (0.002, 0.1), 'mi-scavenger': (0.091, 0.9), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.198, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.456, 'own_mb': [17.4, 14.6], 'threads': {'pi': (0.14, 0.7), 'JSCWarmUp': (0.011, 0.1), 'mi-scavenger': (0.092, 0.8), 'HTTP Client': (0.003, 0.1), 'HeapHelper': (0.209, 0.6)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.512, 'own_mb': [17.1, 14.7], 'threads': {'pi': (0.179, 0.6), 'JSCWarmUp': (0.017, 0.1), 'mi-scavenger': (0.098, 0.9), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.214, 0.4)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.472, 'own_mb': [17.3, 14.7], 'threads': {'pi': (0.172, 0.9), 'JSCWarmUp': (0.018, 0.1), 'mi-scavenger': (0.086, 0.8), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.19, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.514, 'own_mb': [17.2, 14.5], 'threads': {'pi': (0.225, 0.5), 'JSCWarmUp': (0.017, 0.1), 'mi-scavenger': (0.071, 0.8), 'HTTP Client': (0.008, 0.1), 'HeapHelper': (0.194, 0.4)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.505, 'own_mb': [17.5, 14.5], 'threads': {'pi': (0.188, 0.6), 'JSCWarmUp': (0.002, 0.1), 'mi-scavenger': (0.108, 0.9), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.203, 0.5)}}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.1                      0.464         14.5
+1.3.2                      0.482         14.6
+1.4.0                      0.444         14.7
+{'build': '1.3.2', 'cpu_ms_per_s': 0.438, 'own_mb': [17.4, 14.5], 'threads': {'pi': (0.179, 0.5), 'JSCWarmUp': (0.014, 0.1), 'mi-scavenger': (0.07, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.17, 0.5)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.484, 'own_mb': [17.2, 14.7], 'threads': {'pi': (0.192, 0.5), 'JSCWarmUp': (0.019, 0.1), 'mi-scavenger': (0.092, 0.9), 'HTTP Client': (0.008, 0.1), 'HeapHelper': (0.172, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.472, 'own_mb': [17.2, 14.4], 'threads': {'pi': (0.165, 0.8), 'JSCWarmUp': (0.013, 0.1), 'mi-scavenger': (0.082, 0.9), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.208, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.485, 'own_mb': [17.1, 14.6], 'threads': {'pi': (0.188, 0.8), 'JSCWarmUp': (0.02, 0.1), 'mi-scavenger': (0.072, 0.8), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.2, 0.5)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.463, 'own_mb': [17.3, 14.7], 'threads': {'pi': (0.16, 0.7), 'JSCWarmUp': (0.016, 0.1), 'mi-scavenger': (0.07, 0.8), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.213, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.514, 'own_mb': [17.4, 14.5], 'threads': {'pi': (0.19, 0.5), 'JSCWarmUp': (0.011, 0.1), 'mi-scavenger': (0.101, 0.8), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.207, 0.4)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.488, 'own_mb': [17.2, 14.5], 'threads': {'pi': (0.17, 0.5), 'JSCWarmUp': (0.015, 0.1), 'mi-scavenger': (0.086, 0.9), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.211, 0.5)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.433, 'own_mb': [17.3, 14.8], 'threads': {'pi': (0.159, 0.6), 'JSCWarmUp': (0.019, 0.1), 'mi-scavenger': (0.088, 0.9), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.161, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.484, 'own_mb': [17.5, 14.6], 'threads': {'pi': (0.187, 0.5), 'JSCWarmUp': (0.013, 0.1), 'mi-scavenger': (0.069, 0.9), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.209, 0.4)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.421, 'own_mb': [17.4, 14.5], 'threads': {'pi': (0.163, 0.5), 'JSCWarmUp': (0.001, 0.1), 'mi-scavenger': (0.091, 0.9), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.162, 0.5)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.388, 'own_mb': [17.5, 14.8], 'threads': {'pi': (0.147, 0.7), 'JSCWarmUp': (0.01, 0.1), 'mi-scavenger': (0.071, 0.8), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.155, 0.5)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.383, 'own_mb': [17.2, 14.5], 'threads': {'pi': (0.136, 0.7), 'JSCWarmUp': (0.009, 0.1), 'mi-scavenger': (0.076, 0.8), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.156, 0.5)}}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.3.2                      0.463         14.5
+1.4.0                      0.448         14.8
+1.3.1                      0.478         14.6
+{'build': '1.4.0', 'cpu_ms_per_s': 0.388, 'own_mb': [17.2, 14.7], 'threads': {'pi': (0.137, 0.5), 'JSCWarmUp': (0.014, 0.1), 'mi-scavenger': (0.068, 0.8), 'HTTP Client': (0.006, 0.1), 'HeapHelper': (0.164, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.37, 'own_mb': [17.5, 14.5], 'threads': {'pi': (0.132, 0.7), 'JSCWarmUp': (0.001, 0.1), 'mi-scavenger': (0.071, 0.8), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.16, 0.6)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.416, 'own_mb': [17.4, 14.6], 'threads': {'pi': (0.157, 0.5), 'JSCWarmUp': (0.016, 0.1), 'mi-scavenger': (0.077, 0.8), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.161, 0.6)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.417, 'own_mb': [17.5, 14.6], 'threads': {'pi': (0.171, 1.1), 'JSCWarmUp': (0.009, 0.1), 'mi-scavenger': (0.072, 0.9), 'HTTP Client': (0.003, 0.1), 'HeapHelper': (0.162, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.49, 'own_mb': [17.5, 14.6], 'threads': {'pi': (0.191, 0.6), 'JSCWarmUp': (0.012, 0.1), 'mi-scavenger': (0.093, 0.9), 'HTTP Client': (0.005, 0.1), 'HeapHelper': (0.189, 0.5)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.459, 'own_mb': [17.3, 14.7], 'threads': {'pi': (0.16, 1.1), 'JSCWarmUp': (0.012, 0.1), 'mi-scavenger': (0.085, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.194, 0.6)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.475, 'own_mb': [17.5, 14.6], 'threads': {'pi': (0.18, 0.5), 'JSCWarmUp': (0.001, 0.1), 'mi-scavenger': (0.097, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.189, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.496, 'own_mb': [17.5, 14.6], 'threads': {'pi': (0.222, 0.5), 'JSCWarmUp': (0.012, 0.1), 'mi-scavenger': (0.092, 0.9), 'HTTP Client': (0.008, 0.1), 'HeapHelper': (0.161, 0.7)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.444, 'own_mb': [17.2, 14.6], 'threads': {'pi': (0.177, 0.5), 'JSCWarmUp': (0.015, 0.1), 'mi-scavenger': (0.081, 0.9), 'HTTP Client': (0.004, 0.1), 'HeapHelper': (0.167, 0.3)}}
+{'build': '1.3.2', 'cpu_ms_per_s': 0.407, 'own_mb': [17.4, 14.6], 'threads': {'pi': (0.144, 0.8), 'JSCWarmUp': (0.01, 0.1), 'mi-scavenger': (0.07, 0.9), 'HTTP Client': (0.003, 0.1), 'HeapHelper': (0.179, 0.5)}}
+{'build': '1.3.1', 'cpu_ms_per_s': 0.459, 'own_mb': [17.2, 14.5], 'threads': {'pi': (0.166, 0.8), 'JSCWarmUp': (0.022, 0.1), 'mi-scavenger': (0.084, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.179, 0.6)}}
+{'build': '1.4.0', 'cpu_ms_per_s': 0.477, 'own_mb': [17.2, 14.7], 'threads': {'pi': (0.187, 0.4), 'JSCWarmUp': (0.016, 0.1), 'mi-scavenger': (0.063, 0.8), 'HTTP Client': (0.007, 0.1), 'HeapHelper': (0.204, 0.5)}}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+1.4.0                      0.467         14.7
+1.3.1                      0.475         14.6
+1.3.2                      0.416         14.6

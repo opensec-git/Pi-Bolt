@@ -1,0 +1,24 @@
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.3.1                 60000      60000     60.5     2.95         5%      35    2505     3364           1.34
+1.3.2                 60000      60000     60.4     2.71         4%      41    2505     3389           1.35
+1.4.0                 60000      60000     60.7     3.08         5%      34    2505     3409           1.36
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.4.0                 60000      60000     59.9     3.50         6%      34    2505     3361           1.34
+1.3.2                 60000      60000     60.4     3.27         5%      34    2505     3428           1.37
+1.3.1                 60000      60000     65.2     3.20         5%      33    2505     3428           1.37
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.3.2                 60000      60000     68.7     2.67         4%      32    2505     3412           1.36
+1.4.0                 60000      60000     69.2     2.18         3%      38    2505     3422           1.37
+1.3.1                 60000      60000     68.4     2.99         4%      36    2505     3428           1.37
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.3.1                 60000      60000     69.5     2.10         3%      32    2505     3397           1.36
+1.4.0                 60000      60000     69.5     2.08         3%      35    2505     3363           1.34
+1.3.2                 60000      60000     69.3     2.07         3%      33    2505     3392           1.35
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.4.0                 60000      60000     69.6     2.11         3%      32    2505     3369           1.34
+1.3.1                 60000      60000     69.6     2.10         3%      36    2505     3370           1.35
+1.3.2                 60000      60000     69.2     2.07         3%      32    2505     3372           1.35
+build                answer characters   wall s    cpu s  of a core  own MB  frames  M instr  M instr/frame
+1.3.2                 60000      60000     68.3     2.13         3%      38    2505     3353           1.34
+1.3.1                 60000      60000     60.1     2.37         4%      39    2505     3400           1.36
+1.4.0                 60000      60000     60.4     2.01         3%      35    2505     3435           1.37
