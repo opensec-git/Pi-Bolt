@@ -1,0 +1,20 @@
+date: 2026-11-28T12:00:43Z
+host: Darwin 27.2.0 arm64
+cpu: Apple M5, 10 cores, 16 GB
+power: AC Power
+load: 3.52 7.01 15.94
+build 1.3.1: the bolt-v1.3.1 release archive pi-bolt-darwin-arm64.tar.xz, pi-bolt-darwin-arm64/pi
+  version: 1.6.0 (Pi-Bolt 1.3.1, darwin-arm64, JIT off)
+  sha256 pi: 2220b6623cadbd0a83e5c004198a11a564daa560a6da0822eec6113f5e9019ed
+  sha256 pi-bin: f80e397c11c2d73d64d61b80024a36e686f38b35b2511683ee64b6633287c205
+build 1.3.2: the bolt-v1.3.2 release archive pi-bolt-darwin-arm64.tar.xz, pi-bolt-darwin-arm64/pi
+  version: 1.7.0 (Pi-Bolt 1.3.2, darwin-arm64, JIT off)
+  sha256 pi: 2220b6623cadbd0a83e5c004198a11a564daa560a6da0822eec6113f5e9019ed
+  sha256 pi-bin: f3432841a386f155f4c53203d41abaf1bee427529bea99e5f60ef040a5853054
+build 1.4.0: built from release/1.4.0 at 337a9d614 on the bolt-v1.4.0 runtime, pi
+  version: 1.7.0 (Pi-Bolt 1.4.0, darwin-arm64, JIT off)
+  sha256 pi: 726302beb241723a8b3e523ffb3171707fc1d3db8ccd8e63ff7a3f1c69bfa6d1
+  sha256 pi-bin: eda593d574b3c92e96f22d5d37c5ed4f0989201385058ffcfd0148f407b04be9
+steps: startup modes session restored idle special grep bigtree codemode standard
+grep tree: packages/ of 337a9d614 (git archive), 3843 files
+big tree: the checkout of 337a9d614 with its node_modules, without .git and the .gitignore files outside node_modules, 51715 files

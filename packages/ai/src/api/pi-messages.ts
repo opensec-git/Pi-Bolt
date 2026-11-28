@@ -295,10 +295,12 @@ function createEventConverter(model: Model<"pi-messages">, stream: AssistantMess
 async function* readPiMessagesEvents(stream: ReadableStream<Uint8Array>): AsyncGenerator<PiMessagesEvent> {
 	const reader = stream.getReader();
 	const sse = new SseDecoder();
+	let finished = false;
 
 	try {
 		while (true) {
 			const { done, value } = await reader.read();
+			finished = done;
 			const events = done ? sse.end() : sse.push(value);
 
 			for (const { data } of events) {
@@ -314,6 +316,8 @@ async function* readPiMessagesEvents(stream: ReadableStream<Uint8Array>): AsyncG
 			}
 		}
 	} finally {
+		// Stopped before the end (a parse error, or the consumer stopped): close the connection.
+		if (!finished) void reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }

@@ -12,6 +12,9 @@
 #   crash       a crash of the engine (an assertion that fails) prints the assertion's message and Bun's crash report and ends
 #               the process with SIGABRT's status, also when signal-exit has a SIGABRT listener (Linux: the crash is made with an
 #               address space limit); kill and process.kill() still reach the listener
+#   realms      Linux: under an address space limit with room for the program, 48 workers at once run (those without a block
+#               of the static region without the static heap) and the process does not abort
+#   blob-parts  fetch() of a slice of a Blob made of other Blobs sends the slice, not the whole Blob
 # Usage: tests/runtime/run.sh        Environment: PIBOLT_BUN (the runtime; default $PIBOLT_WORK/runtime/bun);
 #   PIBOLT_RUNTIME_OLDER=1 skips workdir (CI, while the released runtime is an older engine)
 source "$(dirname "$0")/../../scripts/lib/common.sh"
@@ -74,6 +77,30 @@ else
 	fi
 	check "crash: kill and process.kill() reach the listener" "listener heard 2" "$("$crash/aot" kill 2>&1)"
 	rm -rf "$crash"
+fi
+
+# hunt-engine-3
+if [ "$PIBOLT_OS" = linux ] && ! runtime_is_older "$BUN"; then
+	limits=$(mktemp -d)
+	"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" realm-limit.mjs --outfile "$limits/bc" >/dev/null
+	BUN_BYTECODE_ORDER_OUT="$limits/order" "$limits/bc" run 2 >/dev/null 2>&1
+	env BUN_JSC_useJIT=0 BUN_STATIC_HEAP=1 BUN_AOT=1 BUN_AOT_JIT=0 BUN_JSC_omitBytecodeFromStaticHeap=1 BUN_JSC_useImmutableIntrinsics=1 \
+		"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" --bytecode-order="$limits/order" realm-limit.mjs \
+		--outfile "$limits/aot" >/dev/null 2>&1
+	# Four gigabytes more than the program uses once it runs (stock Bun runs the 48 workers in less).
+	limit=$(($("$limits/aot" measure) + 4 * 1024 * 1024))
+	check "realms: 48 workers under an address space limit" "workers 48 ok" \
+		"$( (ulimit -c 0 && ulimit -v "$limit" && BUN_ENABLE_CRASH_REPORTING=0 "$limits/aot" run 48 2>&1 | grep -m1 '^workers\|ASSERTION') 2>/dev/null)"
+	rm -rf "$limits"
+fi
+
+# hunt-engine-1
+if runtime_is_older "$BUN"; then
+	echo "SKIP blob-parts: the runtime is an older engine than this tree's"
+else
+	check "blob-parts: fetch() sends a slice of a Blob made of Blobs" \
+		"whole=ok head=ok middle=ok tail=ok within=ok nested=ok empty=ok fetch; read: whole=ok head=ok middle=ok tail=ok within=ok nested=ok empty=ok" \
+		"$("$BUN" blob-parts.mjs 2>&1)"
 fi
 
 port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }

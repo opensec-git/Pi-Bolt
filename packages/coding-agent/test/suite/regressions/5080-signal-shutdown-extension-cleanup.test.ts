@@ -47,6 +47,7 @@ function createSessionManager(options: { sessionFile?: string } = {}): SessionMa
 		isPersisted: () => options.sessionFile !== undefined,
 		getSessionFile: () => options.sessionFile,
 		getSessionId: () => "test-session",
+		getCwd: () => process.cwd(),
 		getSessionDir: () => "/tmp/pi-sessions",
 		usesDefaultSessionDir: () => true,
 	} as unknown as SessionManager;

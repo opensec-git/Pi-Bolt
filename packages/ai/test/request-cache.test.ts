@@ -208,9 +208,11 @@ const ADAPTERS: Adapter[] = [
 			model("google-generative-ai", "gemini-3-pro", "google"),
 			model("google-generative-ai", "gemini-3-pro", "google", { input: ["text"] }),
 			model("google-generative-ai", "claude-x", "google"),
+			// Unsigned calls of the current turn are signed after conversion (#12420).
+			model("google-generative-ai", "gemini-4-argon", "google"),
 		] as Model<Api>[],
 		send: (m, context, o) => streamGoogle(m as Model<"google-generative-ai">, context, common(o)).result(),
-		signature: (rng) => pick(rng, ["c2lnbmF0dXJl", "", undefined]),
+		signature: (rng) => pick(rng, ["c2lnbmF0dXJl", "c2ln_bmF0-dXJl", "", undefined]),
 	},
 ];
 
@@ -366,12 +368,15 @@ class Conversation {
 			]);
 			const name = pick(rng, ["read", "bash"]);
 			this.pendingCalls.push({ id, name });
+			const path = chance(rng, 0.5) ? `f${n}.ts` : undefined;
 			content.push({
 				type: "toolCall",
 				id,
 				name,
-				arguments: chance(rng, 0.5) ? { path: `f${n}.ts` } : { command: `echo ${text(rng, n).slice(0, 20)}`, n },
+				arguments: path ? { path } : { command: `echo ${text(rng, n).slice(0, 20)}`, n },
 				...(chance(rng, 0.2) ? { thoughtSignature: "dGhvdWdodA==" } : {}),
+				// The arguments text as an OpenAI Responses model streamed it (#12444).
+				...(path && chance(rng, 0.3) ? { rawArguments: `{ "path": "${path}" }` } : {}),
 			});
 		}
 		const stopReason = pick(rng, ["toolUse", "stop", "stop", "error", "aborted", "length"] as const);

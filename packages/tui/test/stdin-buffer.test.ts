@@ -313,6 +313,30 @@ describe("StdinBuffer", () => {
 			assert.deepStrictEqual(emittedSequences, ["\x1b[A", "h", "e", "l", "l", "o"]);
 		});
 
+		// Regression tests for upstream #11383
+		it("drops a reply whose terminator never comes once input has been idle for 10 s", (t) => {
+			t.mock.timers.enable({ apis: ["setTimeout"] });
+			processInput("\x1b]11;rgb:1e1e/1e1e/1e1e");
+			processInput("a");
+			t.mock.timers.tick(9999);
+			assert.deepStrictEqual(emittedSequences, []);
+			t.mock.timers.tick(1);
+			assert.strictEqual(buffer.getBuffer(), "");
+			processInput("b");
+			assert.deepStrictEqual(emittedSequences, ["b"]);
+		});
+
+		it("passes Ctrl+C on and drops a reply whose terminator has not come", () => {
+			for (const ctrlC of ["\x03", "\x1b[99;5u", "\x1b[27;5;99~"]) {
+				emittedSequences = [];
+				processInput("\x1b]11;rgb:1e1e/1e1e/1e1e");
+				processInput(ctrlC);
+				assert.deepStrictEqual(emittedSequences, [ctrlC], JSON.stringify(ctrlC));
+				processInput("b");
+				assert.deepStrictEqual(emittedSequences, [ctrlC, "b"], JSON.stringify(ctrlC));
+			}
+		});
+
 		it("discards a canceled reply without swallowing subsequent input", () => {
 			for (const cancel of ["\x18", "\x1a"]) {
 				processInput(`\x1b]11;rgb:0000${cancel}x`);
@@ -658,6 +682,41 @@ describe("StdinBuffer", () => {
 				assert.deepStrictEqual(emittedPaste, ["abcdef"], `cut ${cut}`);
 				assert.deepStrictEqual(emittedSequences, ["x"], `cut ${cut}`);
 			}
+		});
+
+		// Regression tests for upstream #11383
+		it("ends a paste whose end sequence never comes after 1 s without input", (t) => {
+			t.mock.timers.enable({ apis: ["setTimeout"] });
+			processInput("\x1b[200~hello");
+			t.mock.timers.tick(600);
+			processInput(" world");
+			t.mock.timers.tick(999);
+			assert.deepStrictEqual(emittedPaste, [], "each chunk restarts the wait");
+			t.mock.timers.tick(1);
+			assert.deepStrictEqual(emittedPaste, ["hello world"]);
+			processInput("a");
+			processInput("\r");
+			assert.deepStrictEqual(emittedSequences, ["a", "\r"]);
+		});
+
+		it("passes Ctrl+C on during a paste whose end sequence has not come", () => {
+			for (const ctrlC of ["\x03", "\x1b[99;5u", "\x1b[27;5;99~"]) {
+				emittedPaste = [];
+				emittedSequences = [];
+				processInput("\x1b[200~hello");
+				processInput(ctrlC);
+				assert.deepStrictEqual(emittedPaste, ["hello"], JSON.stringify(ctrlC));
+				assert.deepStrictEqual(emittedSequences, [ctrlC], JSON.stringify(ctrlC));
+				processInput("a");
+				assert.deepStrictEqual(emittedSequences, [ctrlC, "a"], JSON.stringify(ctrlC));
+			}
+		});
+
+		it("keeps a Ctrl+C byte that is part of a paste chunk", () => {
+			processInput("\x1b[200~a\x03b");
+			processInput("\x03c\x1b[201~");
+			assert.deepStrictEqual(emittedPaste, ["a\x03b\x03c"]);
+			assert.deepStrictEqual(emittedSequences, []);
 		});
 
 		it("should keep a large paste that arrives in many small chunks", () => {

@@ -26,6 +26,7 @@ import { basename } from "node:path";
 import { COMMAND_NAME, VERSION } from "../config.ts";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "../core/agent-session-runtime.ts";
 import { createAgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "../core/agent-session-services.ts";
 import type {
 	ExtensionUIDialogOptions,
 	ExtensionUIHost,
@@ -39,6 +40,7 @@ import type { RemoteControlSettings } from "../core/settings-schema.ts";
 import { REMOTE_CONTROL_OFF_MESSAGE } from "../core/slash-commands.ts";
 import { clientUIContext } from "../extensions/client-ui.ts";
 import type { RpcExtensionUIResponse } from "../modes/rpc/rpc-types.ts";
+import { onUnhandledRejection } from "../modes/uncaught-errors.ts";
 import { PIBOLT } from "../pi-bolt.ts";
 import { pathsEqual } from "../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
@@ -762,27 +764,49 @@ export class ServiceHost {
 			sessionStartEvent,
 			projectTrustContext: this.trustContext(cwd),
 		});
-		for (const diagnostic of runtime.diagnostics) {
-			const text = `${cwd}: ${diagnostic.message}`;
-			if (diagnostic.type === "error") this.log.error(text);
-			else if (diagnostic.type === "warning") this.log.warn(text);
-		}
-		const errors = runtime.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+		// Taking them marks them reported, so a reload reports only what is new.
+		const diagnostics = runtime.takeUnreportedDiagnostics();
+		const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
 		if (errors.length > 0) {
+			this.logDiagnostics(runtime, diagnostics);
 			await runtime.dispose();
 			this.server?.sessionChanged();
 			throw new Error(errors.map((error) => error.message).join("\n"));
 		}
 		if (this.runtime) this.background.set(this.runtime, Date.now());
 		this.runtime = runtime;
-		runtime.setRebindSession(() => this.bind(runtime));
+		runtime.setRebindSession(async () => {
+			await this.bind(runtime);
+			this.reportDiagnostics(runtime, runtime.takeUnreportedDiagnostics());
+		});
 		await this.bind(runtime);
+		this.reportDiagnostics(runtime, diagnostics);
 		this.log.info(
 			`Opened a session in ${cwd}${previous && !replace ? ` (the one in ${previous.cwd} keeps running)` : ""}`,
 		);
 		if (!this.refreshedModels && !this.options.offline) {
 			this.refreshedModels = true;
 			void runtime.services.modelRuntime.refresh({ signal: AbortSignal.timeout(15_000) }).catch(() => {});
+		}
+	}
+
+	/**
+	 * Problems a runtime found (settings, extensions) when it opened, after a reload or after a session change: in the
+	 * service log, and to the phones as notices.
+	 */
+	private reportDiagnostics(
+		runtime: AgentSessionRuntime,
+		diagnostics: readonly AgentSessionRuntimeDiagnostic[],
+	): void {
+		this.logDiagnostics(runtime, diagnostics);
+		for (const diagnostic of diagnostics) this.server?.notify(diagnostic.message, diagnostic.type);
+	}
+
+	private logDiagnostics(runtime: AgentSessionRuntime, diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
+		for (const diagnostic of diagnostics) {
+			const text = `${runtime.cwd}: ${diagnostic.message}`;
+			if (diagnostic.type === "error") this.log.error(text);
+			else if (diagnostic.type === "warning") this.log.warn(text);
 		}
 	}
 
@@ -811,7 +835,8 @@ export class ServiceHost {
 				}),
 				switchSession: (sessionPath, options) => runtime.switchSession(sessionPath, options),
 				reload: async () => {
-					await session.reload();
+					await runtime.reload();
+					this.reportDiagnostics(runtime, runtime.takeUnreportedDiagnostics());
 				},
 			},
 			onError: (error) => this.log.warn(`Extension error (${error.extensionPath}): ${error.error}`),
@@ -1080,14 +1105,13 @@ export async function runServiceHost(options: RunServiceHostOptions): Promise<ne
 		});
 	}
 	// A crash exits non-zero, so the service manager starts the service again.
-	process.on("uncaughtException", (error) => {
+	const crash = (error: Error) => {
+		killTrackedDetachedChildren();
 		log.error(`Crashed: ${error.stack ?? error.message}`);
 		process.exit(1);
-	});
-	process.on("unhandledRejection", (reason) => {
-		log.error(`Crashed: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
-		process.exit(1);
-	});
+	};
+	process.on("uncaughtException", crash);
+	onUnhandledRejection(crash);
 	log.info(
 		`Starting Pi-Bolt ${version} remote control service (pid ${process.pid}): port ${host.port}, tunnel ${describeTunnel(host.tunnelSetting)}`,
 	);

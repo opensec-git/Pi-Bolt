@@ -17,6 +17,7 @@ import type { ToolResultMessage, Usage } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
+import { NESTED_CALL_LIMITS } from "../../src/core/nested-tool-calls.ts";
 import type { CustomEntry } from "../../src/core/session-manager.ts";
 import {
 	createToolDefinitionFromAgentTool,
@@ -333,6 +334,48 @@ describe("AgentSession codemode tool", () => {
 		// Nested calls never become transcript tool results; their events carry the parent id.
 		const toolResults = harness.session.messages.filter((message) => message.role === "toolResult");
 		expect(toolResults).toHaveLength(1);
+	});
+
+	// Upstream PR #12623: every update copied every row, so a script looping over ~1,700 calls ran out of memory.
+	it("bounds the rows and updates of a script that loops over calls, and returns every result to it", async () => {
+		const harness = await setup();
+		const total = NESTED_CALL_LIMITS.maxCalls * 3;
+		harness.setResponses([
+			fauxAssistantMessage(
+				[
+					fauxToolCall("codemode", {
+						code: `
+							let echoed = 0;
+							let last = "";
+							for (let i = 0; i < ${total}; i++) {
+								last = await tools.echo({ text: String(i) });
+								if (last === "echo: " + i) echoed++;
+							}
+							return { echoed, last };
+						`,
+					}),
+				],
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("done"),
+		]);
+
+		await harness.session.prompt("go");
+
+		const result = codemodeResult(harness);
+		expect(result.isError).toBe(false);
+		// Calls past the list's limit still run and return their results to the script.
+		expect(resultText(result)).toBe(JSON.stringify({ echoed: total, last: `echo: ${total - 1}` }));
+		const details = result.details as unknown as CodemodeToolDetails;
+		expect(details.calls).toHaveLength(NESTED_CALL_LIMITS.maxCalls);
+		expect(details.omittedCalls).toBe(total - NESTED_CALL_LIMITS.maxCalls);
+		// Updates and the rows each one copies depend on the limit, not on how many calls the script makes.
+		const updates = harness
+			.eventsOfType("tool_execution_update")
+			.filter((event) => event.toolCallId === result.toolCallId);
+		expect(updates).toHaveLength(2 * NESTED_CALL_LIMITS.maxCalls + 2);
+		const rows = updates.map((event) => (event.partialResult.details as CodemodeToolDetails).calls.length);
+		expect(Math.max(...rows)).toBe(NESTED_CALL_LIMITS.maxCalls);
 	});
 
 	it("routes nested calls through extension hooks", async () => {
@@ -945,6 +988,36 @@ describe("codemode models", () => {
 		expect(result.usage?.input).toBe(1800);
 		expect(result.usage?.cost.total).toBeCloseTo(0.006, 10);
 		expect(harness.session.getSessionStats().cost).toBeCloseTo(0.006, 10);
+	});
+
+	it("caps the listed calls and still counts every call and its cost", async () => {
+		const { harness } = await setup();
+		const total = NESTED_CALL_LIMITS.maxCalls + 4;
+		const result = await run(
+			harness,
+			`
+			const [model] = await models.getAvailableOfType("classifier", "scorer");
+			await Promise.all(
+				Array.from({ length: ${total} }, () => models.classify(model, { state: { text: "good" }, questions: ${questions} })),
+			);
+			throw new Error("stop");
+		`,
+		);
+		expect(result.isError).toBe(true);
+		expect(resultText(result)).toContain("(ok), and 4 later calls not listed");
+		const details = result.details as unknown as CodemodeToolDetails;
+		expect(details.calls).toHaveLength(NESTED_CALL_LIMITS.maxCalls);
+		expect(details.omittedCalls).toBe(4);
+		expect(details.omittedCost).toBeCloseTo(0.004, 10);
+		// Usage covers every call, listed or not.
+		expect(result.usage?.input).toBe(300 * total);
+		expect(result.usage?.cost.total).toBeCloseTo(0.001 * total, 10);
+		expect(harness.session.getSessionStats().cost).toBeCloseTo(0.001 * total, 10);
+		// Omitted calls publish only the one update that marks the list incomplete.
+		const updates = harness
+			.eventsOfType("tool_execution_update")
+			.filter((event) => event.toolCallId === result.toolCallId);
+		expect(updates).toHaveLength(2 * NESTED_CALL_LIMITS.maxCalls + 2);
 	});
 
 	it("generates images with catalog auth and attaches them through image()", async () => {

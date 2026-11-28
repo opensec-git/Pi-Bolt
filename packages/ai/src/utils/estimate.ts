@@ -88,7 +88,11 @@ function getLastAssistantUsageInfo(messages: readonly Message[]): { usage: Usage
 				usageInfo = { usage: assistant.usage, index: i };
 			}
 		}
-		latestPrefixTimestamp = Math.max(latestPrefixTimestamp, message.timestamp);
+		// A message without a timestamp (for example one an extension built) must not turn the anchor into NaN, which
+		// discards every usage after it (upstream #12626).
+		if (Number.isFinite(message.timestamp)) {
+			latestPrefixTimestamp = Math.max(latestPrefixTimestamp, message.timestamp);
+		}
 	}
 
 	return usageInfo;

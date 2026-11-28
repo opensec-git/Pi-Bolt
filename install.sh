@@ -66,6 +66,10 @@ main() {
 	MUSL=""
 	if [ "$PLATFORM" = linux ] && [ -z "$TERMUX" ] && is_musl; then MUSL=-musl; fi
 	if [ -n "$TERMUX" ]; then BIN_DIR="${PIBOLT_BIN_DIR:-$PREFIX/bin}"; else BIN_DIR="${PIBOLT_BIN_DIR:-$HOME/.local/bin}"; fi
+	# (As PATH names it: absolute, so that the line given for the shell's configuration is no folder relative to wherever a
+	# command runs, and without a trailing slash, so that the pi-bolt PATH finds there is taken for this one.)
+	case "$BIN_DIR" in /*) ;; *) BIN_DIR="$PWD/$BIN_DIR" ;; esac
+	while [ "$BIN_DIR" != / ] && [ "${BIN_DIR%/}" != "$BIN_DIR" ]; do BIN_DIR=${BIN_DIR%/}; done
 	LAUNCHER="${PIBOLT_LAUNCHER:-0}"
 	setup_style
 	# (The npm package's first run is not asked for by the user: nothing is installed there without a signature check.)
@@ -485,11 +489,14 @@ check_sum() {
 
 # curl that gives up on a connection after a few seconds: one of the addresses a name has can stop answering (seen with
 # GitHub's release servers), and curl then waits for the system's timeout, 75 s on macOS, before trying the next. With a
-# timeout, it tries the next address after half of it.
-net_curl() { curl --connect-timeout 8 "$@"; }
+# timeout, it tries the next address after half of it. And on a transfer that receives nothing for STALL_SECONDS: curl
+# otherwise waits for as long as the server keeps the connection open, and `pi-bolt update` (a background update too, which
+# holds its lock meanwhile) with it. (--retry tries such a transfer again.)
+STALL_SECONDS=30
+net_curl() { curl --connect-timeout 8 --speed-limit 1 --speed-time "$STALL_SECONDS" "$@"; }
 
 fetch() { # fetch FILE URL
-	if command -v curl >/dev/null 2>&1; then net_curl -fsSL --retry 2 -o "$1" "$2"; else wget -q -O "$1" "$2"; fi
+	if command -v curl >/dev/null 2>&1; then net_curl -fsSL --retry 2 -o "$1" "$2"; else wget -q -T "$STALL_SECONDS" -O "$1" "$2"; fi
 }
 
 # probe URL: prints "FINAL SIZE RANGES": where the download ends up after redirects ("-" if not known), its size in bytes (0 if
@@ -503,7 +510,7 @@ probe() {
 			$1 == "url" { u = $2 }
 			END { print (u == "" ? "-" : u), n + 0, r + 0 }'
 	else
-		wget -q --spider -S "$1" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print "-", n + 0, 0 }'
+		wget -q -T "$STALL_SECONDS" --spider -S "$1" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print "-", n + 0, 0 }'
 	fi
 }
 
@@ -586,12 +593,19 @@ extract() {
 	return 1
 }
 
-# Whether the last unpack failed writing (a full disk, a quota, a read-only or failing disk), not reading the archive: another
-# archive would fail the same way.
-write_failed() { grep -qiE 'no space left on device|quota exceeded|read-only file system|input/output error' "$TMP/unpack.log"; }
+# What xz and tar say when a write fails (a full disk, a quota, a read-only or failing disk), not a read of the archive.
+WRITE_ERRORS='no space left on device|quota exceeded|read-only file system|input/output error'
 
-# What the last unpack said last, as ": <line>" (nothing if it said nothing), for an error message.
-unpack_error() { tail -n 1 "$TMP/unpack.log" 2>/dev/null | sed 's/^/: /'; }
+# Whether the last unpack failed writing: another archive would fail the same way.
+write_failed() { grep -qiE "$WRITE_ERRORS" "$TMP/unpack.log"; }
+
+# Why the last unpack failed, as ": <line>" (nothing if it said nothing), for an error message: its first failed write, else its
+# last line. (bsdtar, macOS's tar, ends with "Error exit delayed from previous errors", which says nothing of why.)
+unpack_error() {
+	line=$(grep -iE "$WRITE_ERRORS" "$TMP/unpack.log" 2>/dev/null | head -n 1) || line=""
+	[ -n "$line" ] || line=$(tail -n 1 "$TMP/unpack.log" 2>/dev/null) || line=""
+	[ -z "$line" ] || printf ': %s' "$line"
+}
 
 # The npm package that holds this release's .tar.xz.
 npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_VERSION"; }
@@ -611,15 +625,15 @@ start_download() {
 			from=$((n * chunk))
 			to=$((from + chunk - 1))
 			[ "$to" -lt "$3" ] || to=$(($3 - 1))
-			curl --connect-timeout 8 -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
+			curl --connect-timeout 8 --speed-limit 1 --speed-time "$STALL_SECONDS" -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
 			PIDS="$PIDS $!"
 			n=$((n + 1))
 		done
 	elif command -v curl >/dev/null 2>&1; then
-		curl --connect-timeout 8 -fsSL --retry 2 -o "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		curl --connect-timeout 8 --speed-limit 1 --speed-time "$STALL_SECONDS" -fsSL --retry 2 -o "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
 		PIDS=$!
 	else
-		wget -q -O "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		wget -q -T "$STALL_SECONDS" -O "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
 		PIDS=$!
 	fi
 }
@@ -849,12 +863,18 @@ download() {
 		all_succeeded || return 1
 	fi
 	rm -f "$5"
-	n=0
-	while [ -f "$TMP/part.$n" ]; do
-		cat "$TMP/part.$n" >>"$5"
-		rm -f "$TMP/part.$n"
-		n=$((n + 1))
-	done
+	# (One part is renamed, not copied: a copy needs room for the download twice, and on a disk without it the copy was cut short
+	# and taken for a corrupt download. A write that fails as the parts are put together is said for what it is.)
+	if [ -f "$TMP/part.0" ] && [ ! -f "$TMP/part.1" ]; then
+		mv "$TMP/part.0" "$5"
+	else
+		n=0
+		while [ -f "$TMP/part.$n" ]; do
+			cat "$TMP/part.$n" >>"$5" || fail "could not write the download to $(dirname "$5") (is the disk full?). Nothing was installed."
+			rm -f "$TMP/part.$n"
+			n=$((n + 1))
+		done
+	fi
 	total=$(wc -c <"$5" | tr -d ' ')
 }
 
@@ -878,9 +898,11 @@ install_release() {
 	PIDS=""
 	SIG_PID=""
 	# (Whatever ends the script, a failed step too, takes the download with it: what runs in the background is stopped, and
-	# waited for, so that nothing writes into the folder as it is removed.)
+	# waited for, so that nothing writes into the folder as it is removed. A hangup too, as a closed terminal or a dropped SSH
+	# connection sends: dash, Debian's and Ubuntu's sh, runs no EXIT trap when a signal it does not trap ends it.)
 	trap 'stop_background; rm -rf "$TMP"' EXIT
 	trap 'stop_background; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
+	trap 'stop_background; rm -rf "$TMP"; exit 129' HUP
 	[ -t 1 ] && printf '%s[?25l' "$ESC"
 	if [ ! -t 1 ]; then
 		# Not a terminal (a log, CI): plain lines instead of an animated bar.
@@ -954,20 +976,26 @@ install_release() {
 	fi
 	"$TMP/$NAME/pi" --version >/dev/null 2>&1 || fail "the downloaded executable does not run on this system"
 	mkdir -p "$INSTALL"
-	rm -rf "$INSTALL/$NAME.old"
-	# The build this replaces is kept as $NAME.previous, for `pi-bolt update --rollback`; the same build installed again
-	# (the same pi-bolt.txt) is not, and the one kept before stays.
-	if [ -d "$INSTALL/$NAME" ]; then
-		if [ "$LAUNCHER" != 1 ] && ! cmp -s "$INSTALL/$NAME/pi-bolt.txt" "$TMP/$NAME/pi-bolt.txt"; then
-			rm -rf "$INSTALL/$NAME.previous"
-			mv "$INSTALL/$NAME" "$INSTALL/$NAME.previous"
-		else
-			mv "$INSTALL/$NAME" "$INSTALL/$NAME.old"
+	if [ "$LAUNCHER" = 1 ] && [ -x "$INSTALL/$NAME/pi" ]; then
+		# (The npm package's first run, started twice at once: the other one installed this version first, and its session may
+		# run from that folder already. Replacing it would take the folder from under that session: this download goes instead.)
+		rm -rf "$TMP"
+	else
+		rm -rf "$INSTALL/$NAME.old"
+		# The build this replaces is kept as $NAME.previous, for `pi-bolt update --rollback`; the same build installed again
+		# (the same pi-bolt.txt) is not, and the one kept before stays.
+		if [ -d "$INSTALL/$NAME" ]; then
+			if [ "$LAUNCHER" != 1 ] && ! cmp -s "$INSTALL/$NAME/pi-bolt.txt" "$TMP/$NAME/pi-bolt.txt"; then
+				rm -rf "$INSTALL/$NAME.previous"
+				mv "$INSTALL/$NAME" "$INSTALL/$NAME.previous"
+			else
+				mv "$INSTALL/$NAME" "$INSTALL/$NAME.old"
+			fi
 		fi
+		mv "$TMP/$NAME" "$INSTALL/$NAME"
+		rm -rf "$INSTALL/$NAME.old" "$TMP"
 	fi
-	mv "$TMP/$NAME" "$INSTALL/$NAME"
-	rm -rf "$INSTALL/$NAME.old" "$TMP"
-	trap - EXIT INT TERM
+	trap - EXIT INT TERM HUP
 	finish_progress
 	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "$PLATFORM-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
 	if [ -n "$UNSIGNED$NOVERIFY" ]; then
@@ -977,14 +1005,17 @@ install_release() {
 }
 
 uninstall() {
+	uninstall_service
 	# (The builds kept for a rollback too: pi-bolt-<platform>-<variant>.previous.)
 	for dir in "$INSTALL"/pi-bolt-linux-* "$INSTALL"/pi-bolt-darwin-*; do
 		[ -d "$dir" ] && rm -rf "$dir"
 	done
-	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed; and
-	# what automatic updates keep: when the last one ran, its output, and its lock.)
+	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed; what
+	# automatic updates keep: when the last one ran, its output, its lock and the release a rollback skips; and the download of an
+	# installer that was killed.)
 	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-* \
-		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock"
+		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock" "$INSTALL/auto-update.skip" \
+		"$INSTALL"/.download.*
 	rm -f "$INSTALL/pi-bolt-linux-x64.start"
 	target=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
 	case "$target" in
@@ -993,6 +1024,19 @@ uninstall() {
 	target=$(readlink "$INSTALL/pi-bolt-jit" 2>/dev/null || true)
 	case "$target" in pi-bolt-*-jit/pi | pi-bolt-*-jit/pi-termux) rm -f "$INSTALL/pi-bolt-jit" ;; esac
 	rmdir "$INSTALL" 2>/dev/null || true
+}
+
+# uninstall_service: the remote control service (`pi-bolt service install`) that runs an executable of this installation is
+# uninstalled with it, by that executable: its service manager (launchd, systemd) would otherwise go on starting the executable
+# removed here at each login, and again after each failure. A service that runs another Pi-Bolt (the npm package's) stays.
+uninstall_service() {
+	config=$HOME/.config
+	case "${XDG_CONFIG_HOME:-}" in /*) config=$XDG_CONFIG_HOME ;; esac
+	for unit in "$HOME/Library/LaunchAgents/in.opensec.pi-bolt.remote-control.plist" "$config/systemd/user/pi-bolt-remote-control.service"; do
+		if [ -f "$unit" ] && grep -qF "$INSTALL/pi-bolt-" "$unit" && exe=$(installed_pibolt); then
+			(cd "$INSTALL" && "$exe" service uninstall >/dev/null 2>&1) || true
+		fi
+	done
 }
 
 # --- Questions --------------------------------------------------------------------------------------------------------

@@ -172,7 +172,7 @@ export function formatToolDuration(ms: number): string {
 }
 
 /** Renderer state of {@link startToolTimer} and {@link toolTimerText}, kept in `ToolRenderContext.state`. */
-interface ToolTimerState {
+export interface ToolTimerState {
 	startedAt?: number;
 	endedAt?: number;
 	interval?: ReturnType<typeof setInterval>;
@@ -188,13 +188,25 @@ export function startToolTimer(context: ToolRenderContext<ToolTimerState>): void
 }
 
 /**
+ * Stop the row's clock for good: for a row that gets no final result (it left the transcript, or its run ended).
+ * Claim T5: otherwise its 1 s timer keeps asking for frames, and keeps the row alive, for the rest of the session.
+ */
+export function stopToolTimer(state: ToolTimerState): void {
+	if (state.startedAt !== undefined) state.endedAt ??= Date.now();
+	if (state.interval) {
+		clearInterval(state.interval);
+		state.interval = undefined;
+	}
+}
+
+/**
  * The row's timing line, from `renderResult`: `Elapsed 4.2s` while the result is partial, redrawn
  * every second, and `Took 4.2s` once it is final. Undefined when the row has no start time and no
  * recorded duration.
  */
 export function toolTimerText(context: ToolRenderContext<ToolTimerState>, isPartial: boolean): string | undefined {
 	const state = context.state;
-	if (state.startedAt !== undefined && isPartial && !state.interval) {
+	if (state.startedAt !== undefined && state.endedAt === undefined && isPartial && !state.interval) {
 		state.interval = setInterval(() => context.invalidate(), 1000);
 	}
 	if (!isPartial || context.isError) {

@@ -36,6 +36,7 @@ import type { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import type { ProgressEvent } from "./core/package-manager.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+import { setProgramResumeFlags } from "./core/resume-command.ts";
 import { type CreateAgentSessionOptions, enableCliStreamOptimization } from "./core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -64,33 +65,11 @@ import { PIBOLT } from "./pi-bolt.ts";
 import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { formatStdinIgnoredNotice, getStdinFirstDataTimeoutMs, readPipedStdin } from "./utils/piped-stdin.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${COMMAND_NAME} -ne".`;
-
-/**
- * Read all content from piped stdin.
- * Returns undefined if stdin is a TTY (interactive terminal).
- */
-async function readPipedStdin(): Promise<string | undefined> {
-	// If stdin is a TTY, we're running interactively - don't read stdin
-	if (process.stdin.isTTY) {
-		return undefined;
-	}
-
-	return new Promise((resolve) => {
-		let data = "";
-		process.stdin.setEncoding("utf8");
-		process.stdin.on("data", (chunk) => {
-			data += chunk;
-		});
-		process.stdin.on("end", () => {
-			resolve(data.trim() || undefined);
-		});
-		process.stdin.resume();
-	});
-}
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
@@ -630,6 +609,8 @@ export async function main(cliArgs: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
+	// The resume commands (OSC 7577, Herdr) repeat the restriction and resource flags as typed.
+	setProgramResumeFlags(parsed.resumeFlags);
 	// The service runs headless as RPC does, whether or not it was started from a terminal.
 	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
 	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`: an
@@ -1000,7 +981,13 @@ export async function main(cliArgs: string[], options?: MainOptions) {
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
 	let stdinContent: string | undefined;
 	if (appMode !== "rpc") {
-		stdinContent = await readPipedStdin();
+		// With a prompt argument, an open pipe that never sends data must not block the run (upstream #10415).
+		const stdinTimeoutMs =
+			parsed.messages.length > 0 || parsed.fileArgs.length > 0 ? getStdinFirstDataTimeoutMs() : 0;
+		// On stderr, which print and JSON mode use for human-readable diagnostics; stdout stays clean.
+		stdinContent = await readPipedStdin(process.stdin, stdinTimeoutMs, () =>
+			console.error(chalk.yellow(`Warning: ${formatStdinIgnoredNotice(stdinTimeoutMs)}`)),
+		);
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
 		}

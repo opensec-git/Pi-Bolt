@@ -1,0 +1,36 @@
+{"build": "1.3.2", "round": 0, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2759.2848148196936, "cpu_ms": 10857.454, "peak_mb": 106.53125, "peak_own_mb": 32.1}
+{"build": "1.4.0", "round": 0, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2770.3153281472623, "cpu_ms": 10914.065, "peak_mb": 109.96875, "peak_own_mb": 32.4}
+{"build": "1.3.1", "round": 0, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2811.1735223792493, "cpu_ms": 11045.556999999999, "peak_mb": 108.36328125, "peak_own_mb": 32.2}
+{"build": "1.3.1", "round": 1, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2778.1581161543727, "cpu_ms": 10929.843, "peak_mb": 108.00390625, "peak_own_mb": 32.4}
+{"build": "1.4.0", "round": 1, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2817.3706578090787, "cpu_ms": 11016.608, "peak_mb": 109.6875, "peak_own_mb": 32.5}
+{"build": "1.3.2", "round": 1, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2805.4423280991614, "cpu_ms": 10982.178, "peak_mb": 106.14453125, "peak_own_mb": 32.4}
+{"build": "1.3.2", "round": 2, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2784.0777090750635, "cpu_ms": 11004.927, "peak_mb": 108.140625, "peak_own_mb": 32.6}
+{"build": "1.3.1", "round": 2, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2755.841559264809, "cpu_ms": 10843.839, "peak_mb": 108.04296875, "peak_own_mb": 32.3}
+{"build": "1.4.0", "round": 2, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2777.874533087015, "cpu_ms": 10906.623, "peak_mb": 111.15625, "peak_own_mb": 32.5}
+{"build": "1.4.0", "round": 3, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2772.794099058956, "cpu_ms": 10993.160000000002, "peak_mb": 112.125, "peak_own_mb": 32.3}
+{"build": "1.3.1", "round": 3, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2739.760576747358, "cpu_ms": 10811.288, "peak_mb": 108.93359375, "peak_own_mb": 32.4}
+{"build": "1.3.2", "round": 3, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2770.887319929898, "cpu_ms": 10966.826, "peak_mb": 106.0390625, "peak_own_mb": 32.4}
+{"build": "1.3.1", "round": 4, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2767.2172160819173, "cpu_ms": 10962.572, "peak_mb": 108.68359375, "peak_own_mb": 32.4}
+{"build": "1.3.2", "round": 4, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2774.8083281330764, "cpu_ms": 10887.365000000002, "peak_mb": 105.3671875, "peak_own_mb": 32.2}
+{"build": "1.4.0", "round": 4, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2729.110219050199, "cpu_ms": 10733.588000000002, "peak_mb": 110.5625, "peak_own_mb": 32.5}
+{"build": "1.4.0", "round": 5, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2754.0384037420154, "cpu_ms": 10856.437, "peak_mb": 110.23046875, "peak_own_mb": 32.5}
+{"build": "1.3.2", "round": 5, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2800.33584497869, "cpu_ms": 11095.462, "peak_mb": 105.14453125, "peak_own_mb": 32.1}
+{"build": "1.3.1", "round": 5, "calls": 4, "exit": 0, "timed_out": false, "completed": 4, "ok": true, "wall_ms": 2774.3527200073004, "cpu_ms": 10959.659, "peak_mb": 107.85546875, "peak_own_mb": 32.2}
+{"build": "1.4.0", "round": 0, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7909.653082955629, "cpu_ms": 156317.78, "peak_mb": 189.67578125, "peak_own_mb": 116.8}
+{"build": "1.3.1", "round": 0, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.908451855182648, "cpu_ms": 69.328, "peak_mb": 116.52734375, "peak_own_mb": 22.6, "tail": ""}
+{"build": "1.3.2", "round": 0, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 8002.772767096758, "cpu_ms": 157314.59699999998, "peak_mb": 194.27734375, "peak_own_mb": 127.6}
+{"build": "1.3.2", "round": 1, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7969.252848997712, "cpu_ms": 157050.747, "peak_mb": 175.9765625, "peak_own_mb": 111.5}
+{"build": "1.4.0", "round": 1, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7826.960415113717, "cpu_ms": 154292.29499999998, "peak_mb": 187.4375, "peak_own_mb": 113.5}
+{"build": "1.3.1", "round": 1, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.761884033679962, "cpu_ms": 72.715, "peak_mb": 114.9765625, "peak_own_mb": 28.5, "tail": ""}
+{"build": "1.3.2", "round": 2, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7917.3684301786125, "cpu_ms": 156299.27800000002, "peak_mb": 180.546875, "peak_own_mb": 113.0}
+{"build": "1.3.1", "round": 2, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.539842762053013, "cpu_ms": 67.029, "peak_mb": 117.484375, "peak_own_mb": 30.2, "tail": ""}
+{"build": "1.4.0", "round": 2, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7838.7881042435765, "cpu_ms": 154250.569, "peak_mb": 185.046875, "peak_own_mb": 112.8}
+{"build": "1.3.1", "round": 3, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.16424409300089, "cpu_ms": 62.90599999999999, "peak_mb": 115.5546875, "peak_own_mb": 29.8, "tail": ""}
+{"build": "1.3.2", "round": 3, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7897.239051293582, "cpu_ms": 155560.86099999998, "peak_mb": 185.51171875, "peak_own_mb": 118.4}
+{"build": "1.4.0", "round": 3, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7952.35607214272, "cpu_ms": 157196.719, "peak_mb": 186.640625, "peak_own_mb": 113.2}
+{"build": "1.4.0", "round": 4, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7909.187260083854, "cpu_ms": 155864.38, "peak_mb": 187.26953125, "peak_own_mb": 116.2}
+{"build": "1.3.2", "round": 4, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7860.791965853423, "cpu_ms": 155265.762, "peak_mb": 190.953125, "peak_own_mb": 126.1}
+{"build": "1.3.1", "round": 4, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.979929000139236, "cpu_ms": 80.289, "peak_mb": 119.0703125, "peak_own_mb": 26.5, "tail": ""}
+{"build": "1.3.1", "round": 5, "calls": 20, "exit": -6, "timed_out": false, "completed": 0, "ok": false, "wall_ms": 27.05456130206585, "cpu_ms": 69.363, "peak_mb": 118.34765625, "peak_own_mb": 33.2, "tail": ""}
+{"build": "1.4.0", "round": 5, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7908.63847406581, "cpu_ms": 156496.224, "peak_mb": 185.62890625, "peak_own_mb": 112.6}
+{"build": "1.3.2", "round": 5, "calls": 20, "exit": 0, "timed_out": false, "completed": 20, "ok": true, "wall_ms": 7960.241162683815, "cpu_ms": 156685.94900000002, "peak_mb": 187.12109375, "peak_own_mb": 118.3}

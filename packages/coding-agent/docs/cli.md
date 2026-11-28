@@ -35,7 +35,7 @@ With terminal stdin and stdout, Pi opens the terminal UI unless `--print`, `--mo
 |---|---|
 | `message` | Provide an initial prompt |
 | `@path` | Include a text file or image in the first prompt |
-| Piped stdin | Prepend its contents to the first prompt |
+| Piped stdin | Prepend its contents to the first prompt. With a prompt argument, stdin that sends nothing within 2 seconds is not read, with a warning on stderr; set [`PI_STDIN_TIMEOUT_MS`](environment-variables.md) to change the wait |
 | `--` | Stop option parsing so a prompt can begin with `-` |
 
 Pi resolves `@path` from the current working directory. The working directory also controls project configuration, resource discovery, and session grouping.

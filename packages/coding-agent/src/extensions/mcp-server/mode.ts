@@ -27,7 +27,9 @@ import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import { flushRawStdout, takeOverStdout, writeRawStdout } from "../../core/output-guard.ts";
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
+import { writeDiagnosticsToStderr } from "../../modes/diagnostics-stderr.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
+import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { resultText, toolCallInfo } from "../acp/translate.ts";
 import { clientUIContext, settleWithin } from "../client-ui.ts";
@@ -92,6 +94,7 @@ export async function runMcpMode(options: McpModeOptions): Promise<never> {
 			void shutdown(signal === "SIGHUP" ? 129 : 143, false);
 		});
 	}
+	exitOnUncaughtErrors();
 	const detach = server.attach(process.stdin, () => void shutdown(0, true));
 	return new Promise<never>(() => {});
 }
@@ -117,6 +120,8 @@ export class McpServer {
 			write,
 			onRequest: (method, params, id) => this.handleRequest(method, params, id),
 			onNotification: (method, params) => this.handleNotification(method, params),
+			// As MCP asks of a sender that no longer waits for a request's result.
+			onDrop: (requestId) => this.connection.notify("notifications/cancelled", { requestId }),
 		});
 	}
 
@@ -283,12 +288,12 @@ export class McpServer {
 				sessionManager,
 				sessionStartEvent: resumed ? { type: "session_start", reason: "resume" } : undefined,
 			});
-			for (const diagnostic of runtime.diagnostics) {
-				console.error(`${diagnostic.type === "error" ? "Error" : "Warning"}: ${diagnostic.message}`);
-			}
+			// The client's log (stderr). Taking them marks them reported, so a reload reports only what is new.
+			const diagnostics = runtime.takeUnreportedDiagnostics();
+			writeDiagnosticsToStderr(diagnostics);
 			// As the other modes exit on them: a session whose extension failed to load, or whose `--provider` is unknown
 			// (it would run on another model), is not the session asked for.
-			const errors = runtime.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+			const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
 			if (errors.length > 0) {
 				await runtime.dispose();
 				throw new Error(errors.map((error) => error.message).join("\n"));
@@ -350,19 +355,27 @@ export class McpServer {
 		return { content: [{ type: "text", text }], structuredContent: { sessions } };
 	}
 
-	/** Asks the client to fill in a form; undefined when it declines or cannot. */
+	/**
+	 * Asks the client to fill in a form; undefined when it declines or cannot, or when the dialog or `run` (the call
+	 * whose prompt asks) is cancelled first.
+	 */
 	async elicit(
 		message: string,
 		properties: Record<string, Record<string, unknown>>,
 		opts: ExtensionUIDialogOptions | undefined,
+		run?: AbortSignal,
 	): Promise<Record<string, unknown> | undefined> {
-		if (opts?.signal?.aborted) return undefined;
-		const request = this.connection.request<{ action?: string; content?: unknown }>("elicitation/create", {
+		const params = {
 			mode: "form",
 			message,
 			requestedSchema: { type: "object", properties, required: Object.keys(properties) },
-		});
-		const response = await settleWithin(request, opts);
+		};
+		const response = await settleWithin(
+			(signal) =>
+				this.connection.request<{ action?: string; content?: unknown }>("elicitation/create", params, signal),
+			opts,
+			run,
+		);
 		return response?.action === "accept" && isRecord(response.content) ? response.content : undefined;
 	}
 }
@@ -429,6 +442,8 @@ class PiSession {
 	private readonly runtime: AgentSessionRuntime;
 	private queue: Promise<unknown> = Promise.resolve();
 	private pending = 0;
+	/** The signal of the call whose prompt runs: its cancellation also ends the dialogs the prompt opened. */
+	private promptSignal: AbortSignal | undefined;
 	private disposed = false;
 
 	constructor(server: McpServer, runtime: AgentSessionRuntime) {
@@ -454,7 +469,10 @@ class PiSession {
 	}
 
 	async bind(): Promise<void> {
-		this.runtime.setRebindSession(async () => this.rebind());
+		this.runtime.setRebindSession(async () => {
+			await this.rebind();
+			writeDiagnosticsToStderr(this.runtime.takeUnreportedDiagnostics());
+		});
 		await this.rebind();
 	}
 
@@ -483,7 +501,8 @@ class PiSession {
 				},
 				switchSession: async (sessionPath, options) => this.runtime.switchSession(sessionPath, options),
 				reload: async () => {
-					await this.session.reload();
+					await this.runtime.reload();
+					writeDiagnosticsToStderr(this.runtime.takeUnreportedDiagnostics());
 				},
 			},
 			onError: (err) => console.error(`Extension error (${err.extensionPath}): ${err.error}`),
@@ -498,7 +517,14 @@ class PiSession {
 
 	prompt(args: PromptArgs, signal: AbortSignal, progress?: (message: string) => void): Promise<McpToolResult> {
 		this.pending++;
-		const run = this.queue.then(() => this.runPrompt(args, signal, progress));
+		const run = this.queue.then(async () => {
+			this.promptSignal = signal;
+			try {
+				return await this.runPrompt(args, signal, progress);
+			} finally {
+				this.promptSignal = undefined;
+			}
+		});
 		this.queue = run.catch(() => {});
 		return run.finally(() => {
 			this.pending--;
@@ -534,6 +560,10 @@ class PiSession {
 		const report = progress ? new ProgressReport(progress) : undefined;
 		const unsubscribe = session.subscribe((event) => {
 			switch (event.type) {
+				case "agent_start":
+					// A cancel while the prompt is checked (input handlers, credentials) found no run to abort.
+					if (signal.aborted) void session.abort();
+					break;
 				case "message_start":
 					if (event.message.role === "assistant") report?.doing("Thinking");
 					break;
@@ -627,7 +657,8 @@ class PiSession {
 		const server = this.server;
 		return clientUIContext({
 			select: async (title, options, opts) => {
-				const answer = await server.elicit(title, { choice: { type: "string", title, enum: options } }, opts);
+				const choice = { type: "string", title, enum: options };
+				const answer = await server.elicit(title, { choice }, opts, this.promptSignal);
 				return typeof answer?.choice === "string" && options.includes(answer.choice) ? answer.choice : undefined;
 			},
 			confirm: async (title, message, opts) => {
@@ -635,17 +666,18 @@ class PiSession {
 					message ? `${title}\n\n${message}` : title,
 					{ confirm: { type: "boolean", title: "Yes", default: false } },
 					opts,
+					this.promptSignal,
 				);
 				return answer?.confirm === true;
 			},
 			input: async (title, placeholder, opts) => {
 				const field = { type: "string", title, ...(placeholder ? { description: placeholder } : {}) };
-				const answer = await server.elicit(title, { value: field }, opts);
+				const answer = await server.elicit(title, { value: field }, opts, this.promptSignal);
 				return typeof answer?.value === "string" ? answer.value : undefined;
 			},
 			editor: async (title, prefill) => {
 				const field = { type: "string", title, ...(prefill ? { default: prefill } : {}) };
-				const answer = await server.elicit(title, { value: field }, undefined);
+				const answer = await server.elicit(title, { value: field }, undefined, this.promptSignal);
 				return typeof answer?.value === "string" ? answer.value : undefined;
 			},
 			notify: (message, type) =>

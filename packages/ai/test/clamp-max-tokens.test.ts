@@ -65,7 +65,10 @@ describe("clampMaxTokensToContext", () => {
 		);
 	});
 
-	it("sends 1 token when the input already exceeds the window", () => {
-		expect(clampMaxTokensToContext(modelWith(943_718), contextWithInput(1_050_000), 943_718)).toBe(1);
+	// upstream #12482: no request with a cap of a few tokens; the overflow error lets recovery compact first.
+	it("fails as a context overflow when the input already exceeds the window", () => {
+		expect(() => clampMaxTokensToContext(modelWith(943_718), contextWithInput(1_050_000), 943_718)).toThrow(
+			/Context window exceeded/,
+		);
 	});
 });

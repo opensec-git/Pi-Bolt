@@ -103,6 +103,42 @@ describe("bulk session forks", () => {
 		expect(readFileSync(source, "utf8").endsWith("\n")).toBe(false);
 	});
 
+	it("migrates a version 1 source before writing the fork", () => {
+		// Version 1 entries have no ids. Copied as they are under a version 3 header, no migration would run on them.
+		const source = join(dir, "legacy.jsonl");
+		const lines = [
+			{ type: "session", id: "legacy-session", timestamp: "2025-01-01T00:00:00Z", cwd: dir },
+			{ type: "message", timestamp: "2025-01-01T00:00:01Z", message: { role: "user", content: "hi", timestamp: 1 } },
+			{
+				type: "message",
+				timestamp: "2025-01-01T00:00:02Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "hello" }],
+					api: "test",
+					provider: "test",
+					model: "test",
+					usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+					stopReason: "stop",
+					timestamp: 2,
+				},
+			},
+		];
+		const text = `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+		writeFileSync(source, text);
+
+		const forked = SessionManager.forkFrom(source, dir, join(dir, "forks"));
+		const entries = forked.getEntries();
+		expect(entries.map((entry) => typeof entry.id)).toEqual(["string", "string"]);
+		expect(entries.map((entry) => entry.parentId)).toEqual([null, entries[0].id]);
+		expect(forked.buildSessionContext().messages).toHaveLength(2);
+		const reopened = SessionManager.open(forked.getSessionFile()!);
+		expect(reopened.getEntries()).toEqual(entries);
+		expect(reopened.buildSessionContext().messages).toHaveLength(2);
+		// The source is left as it was.
+		expect(readFileSync(source, "utf8")).toBe(text);
+	});
+
 	it("cleans up its temporary file on publication errors", () => {
 		const source = join(dir, "source.jsonl");
 		writeFileSync(source, `${JSON.stringify(SessionManager.inMemory(dir).getHeader())}\n`);

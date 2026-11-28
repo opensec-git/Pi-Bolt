@@ -203,7 +203,8 @@ class AcpTestClient {
 		if (message.method && message.id !== undefined) {
 			this.clientRequests.push(message);
 			const result = this.onRequest(message);
-			this.write({ jsonrpc: "2.0", id: message.id, result });
+			// (undefined: the client leaves the request unanswered.)
+			if (result !== undefined) this.write({ jsonrpc: "2.0", id: message.id, result });
 		} else if (message.method === "session/update") {
 			this.updates.push(message.params as SessionNotification);
 		} else if (message.id !== undefined) {
@@ -467,6 +468,134 @@ describe("ACP mode", () => {
 		await new Promise((r) => setTimeout(r, 500));
 		client.notify("session/cancel", { sessionId });
 		expect(await prompt).toEqual({ stopReason: "cancelled" });
+	});
+
+	// hunt-e2e-3: a cancel that arrives before the prompt starts running was cleared by runPrompt(), so the prompt ran
+	// to the end and its tools ran.
+	it("cancels a prompt whose cancel arrives right after it", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const prompt = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[tools] write the notes" }],
+		});
+		client.notify("session/cancel", { sessionId });
+		expect(await prompt).toEqual({ stopReason: "cancelled" });
+		expect(client.updatesOf("tool_call")).toHaveLength(0);
+	});
+
+	// hunt-e2e-3: a prompt queued behind a running one ran after the cancel.
+	it("cancels a prompt queued behind the running one", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const running = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[slow] wait" }],
+		});
+		const queued = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[tools] write the notes" }],
+		});
+		await new Promise((r) => setTimeout(r, 500));
+		client.notify("session/cancel", { sessionId });
+		expect(await running).toEqual({ stopReason: "cancelled" });
+		expect(await queued).toEqual({ stopReason: "cancelled" });
+		expect(client.updatesOf("tool_call")).toHaveLength(0);
+	});
+
+	it("cancels a prompt whose cancel arrives while an input handler checks it", async () => {
+		const extensionPath = join(root, "slow-input-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.on("input", async () => {
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		return { action: "continue" };
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const prompt = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "[tools] write the notes" }],
+		});
+		await new Promise((r) => setTimeout(r, 300));
+		client.notify("session/cancel", { sessionId });
+		expect(await prompt).toEqual({ stopReason: "cancelled" });
+		expect(client.updatesOf("tool_call")).toHaveLength(0);
+	});
+
+	it("stops waiting for a form of a cancelled prompt, and the session takes the next prompt", async () => {
+		const extensionPath = join(root, "name-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.registerCommand("name-me", {
+		description: "Ask for a name",
+		handler: async (_args, ctx) => {
+			await ctx.ui.input("Your name");
+		},
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		client.onRequest = () => undefined;
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		const prompt = client.request<PromptResponse>("session/prompt", {
+			sessionId,
+			prompt: [{ type: "text", text: "/name-me" }],
+		});
+		await client.waitFor(() => client.clientRequests.some((m) => m.method === "elicitation/create"));
+		client.notify("session/cancel", { sessionId });
+		expect(await prompt).toEqual({ stopReason: "cancelled" });
+		expect(
+			await client.request<PromptResponse>("session/prompt", {
+				sessionId,
+				prompt: [{ type: "text", text: "[hello] again" }],
+			}),
+		).toEqual({ stopReason: "end_turn" });
+	});
+
+	/** Runs `run` with the agent's settings.json not valid JSON, and puts it back after. */
+	const withBrokenSettings = async (run: () => Promise<void>) => {
+		const settingsPath = join(agentDir, "settings.json");
+		const settings = readFileSync(settingsPath, "utf8");
+		writeFileSync(settingsPath, "{ not json");
+		try {
+			await run();
+		} finally {
+			writeFileSync(settingsPath, settings);
+		}
+	};
+
+	it("reports settings errors as notices when a session opens", async () => {
+		await withBrokenSettings(async () => {
+			const { client } = await startClient();
+			await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+			await client.waitFor(() => client.updatesOf("notice").length > 0);
+			expect(client.updatesOf("notice")[0]).toMatchObject({
+				sessionUpdate: "notice",
+				severity: "warning",
+				title: expect.stringContaining("Invalid settings file"),
+			});
+		});
+	});
+
+	it("reports the settings errors /reload finds as notices", async () => {
+		const { client } = await startClient();
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		await withBrokenSettings(async () => {
+			await client.request<PromptResponse>("session/prompt", {
+				sessionId,
+				prompt: [{ type: "text", text: "/reload" }],
+			});
+		});
+		expect(client.updatesOf("notice").map((notice) => notice.title)).toEqual([
+			expect.stringContaining("Invalid settings file"),
+		]);
 	});
 
 	it("loads a session from an earlier process and replays it", async () => {

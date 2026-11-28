@@ -526,7 +526,7 @@ If output was truncated, includes `fullOutputPath`, or `fullOutputError` with th
     "exitCode": 0,
     "cancelled": false,
     "truncated": true,
-    "fullOutputPath": "/tmp/pi-bash-abc123.log"
+    "fullOutputPath": "/tmp/pi-output-4242-k3J9x2/pi-bash-abc123.log"
   }
 }
 ```

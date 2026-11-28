@@ -144,11 +144,15 @@ function withBodyIdleTimeout(response: Response, controller: AbortController, ti
 	return wrapped;
 }
 
+/** The longest delay setTimeout() holds (about 24.8 days); a longer one fires after 1 ms. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /**
  * Bun's fetch with the HTTP idle timeout applied as undici's headersTimeout and bodyTimeout apply it on Node: no
  * response headers within `timeoutMs`, or a body read that waits longer than `timeoutMs`, fails the request; 0 waits
- * forever. Bun's own idle timer is turned off for the request: it does not read this setting (5 minutes, or
- * BUN_CONFIG_HTTP_IDLE_TIMEOUT), so "disabled" or a longer timeout still failed after about 6 minutes (#206).
+ * forever, and so does a timeout longer than a timer holds. Bun's own idle timer is turned off for the request: it does
+ * not read this setting (5 minutes, or BUN_CONFIG_HTTP_IDLE_TIMEOUT), so "disabled" or a longer timeout still failed
+ * after about 6 minutes (#206).
  */
 export function createBunIdleTimeoutFetch(
 	bunFetch: typeof globalThis.fetch,
@@ -160,7 +164,7 @@ export function createBunIdleTimeoutFetch(
 	): Promise<Response> => {
 		// A caller's own `timeout` option wins.
 		const bunInit: BunRequestInit = { timeout: false, ...init };
-		if (timeoutMs === 0) return bunFetch(input, bunInit);
+		if (timeoutMs === 0 || timeoutMs > MAX_TIMER_MS) return bunFetch(input, bunInit);
 		const controller = new AbortController();
 		const callerSignal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
 		bunInit.signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;

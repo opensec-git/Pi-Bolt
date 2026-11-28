@@ -21,8 +21,15 @@ const CONTEXT_SAFETY_RATIO = 0.15;
 // output is capped at this size so an OpenRouter overcount still fits for a while before compaction.
 const MIN_OUTPUT_WITH_RATIO_MARGIN = 32768;
 const MIN_MAX_TOKENS = 1;
+// Least output worth a request. With less room the request fails as a context overflow instead of being sent with a
+// cap of a few tokens, so overflow recovery compacts first (upstream #12626, #12293, #12482).
+const MIN_USABLE_OUTPUT_TOKENS = 1024;
 
-/** Fit maxTokens into the context window, leaving room for the input being counted higher than estimated. */
+/**
+ * Fit maxTokens into the context window, leaving room for the input being counted higher than estimated. Throws a
+ * context overflow error when the room left is below the least usable output (or below `maxTokens`, when that is
+ * smaller), unless the window itself is too small for that.
+ */
 export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptContext, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
 	const input = estimateContextTokens(context).tokens;
@@ -30,6 +37,13 @@ export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptCo
 	let room = model.contextWindow - input - margin;
 	if (room < MIN_OUTPUT_WITH_RATIO_MARGIN) {
 		room = Math.min(MIN_OUTPUT_WITH_RATIO_MARGIN, model.contextWindow - input - CONTEXT_SAFETY_TOKENS);
+	}
+	// A window smaller than the margin plus the least usable output (test and toy models) keeps the old floor of 1.
+	const usableWindow = model.contextWindow > CONTEXT_SAFETY_TOKENS + MIN_USABLE_OUTPUT_TOKENS;
+	if (usableWindow && room < Math.max(MIN_MAX_TOKENS, Math.min(maxTokens, MIN_USABLE_OUTPUT_TOKENS))) {
+		throw new Error(
+			`Context window exceeded: the input (about ${input} tokens) leaves ${Math.max(0, room)} tokens for output in the ${model.contextWindow}-token context window`,
+		);
 	}
 	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, room));
 }

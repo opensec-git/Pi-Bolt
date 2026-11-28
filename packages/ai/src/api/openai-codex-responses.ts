@@ -219,6 +219,30 @@ function loadNodeZlib(): typeof NodeZlib | null {
 	return (process as ProcessWithBuiltinModule).getBuiltinModule?.("node:zlib") ?? null;
 }
 
+/** Sessions whose Codex SSE requests are sent uncompressed after the backend rejected a zstd body (#12060). */
+const uncompressedSseSessions = new Set<string>();
+
+/**
+ * The Codex backend's answer to a zstd request body it could not take: exactly `400 {"detail":"Bad Request"}` (#12060).
+ * Other 400s, such as invalid parameters, carry their own message and are not resent.
+ */
+function isCompressedBodyRejection(status: number, errorText: string): boolean {
+	if (status !== 400) return false;
+	const parsed = parseJsonObject(errorText);
+	return parsed !== undefined && Object.keys(parsed).length === 1 && parsed.detail === "Bad Request";
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+	try {
+		const value: unknown = JSON.parse(text);
+		return typeof value === "object" && value !== null && !Array.isArray(value)
+			? (value as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 function canCompressRequestBodyZstd(): boolean {
 	return typeof loadNodeZlib()?.zstdCompressSync === "function";
 }
@@ -453,13 +477,16 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			// Compress the request body once for the SSE path. The Codex backend
 			// decodes Content-Encoding: zstd; the WebSocket transport above sends the
 			// uncompressed JSON frame, matching the official Codex client.
-			const compressedBody = canCompressRequestBodyZstd()
-				? compressRequestBodyZstd(new Uint8Array(await getBodyBytes().arrayBuffer()))
-				: null;
+			const compressionSessionId = options?.sessionId;
+			let compressedBody =
+				canCompressRequestBodyZstd() &&
+				!(compressionSessionId !== undefined && uncompressedSseSessions.has(compressionSessionId))
+					? compressRequestBodyZstd(new Uint8Array(await getBodyBytes().arrayBuffer()))
+					: null;
 			if (compressedBody) {
 				sseHeaders.set("content-encoding", "zstd");
 			}
-			const sseBody: Uint8Array<ArrayBuffer> | string = compressedBody ?? JSON.stringify(body);
+			let sseBody: Uint8Array<ArrayBuffer> | string = compressedBody ?? JSON.stringify(body);
 
 			// Fetch with retry logic for rate limits and transient errors
 			let response: Response | undefined;
@@ -500,6 +527,16 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 					}
 
 					const errorText = await response.text();
+					if (compressedBody && isCompressedBodyRejection(response.status, errorText)) {
+						// The backend sometimes rejects a valid zstd body (#12060). Send the same JSON uncompressed, once,
+						// without using a retry, and keep the session's later SSE requests uncompressed.
+						compressedBody = null;
+						sseHeaders.delete("content-encoding");
+						sseBody = JSON.stringify(body);
+						if (compressionSessionId !== undefined) uncompressedSseSessions.add(compressionSessionId);
+						attempt--;
+						continue;
+					}
 					if (attempt < maxRetries && isRetryableError(response.status, errorText)) {
 						const retryAfterDelayMs = getRetryAfterDelayMs(response.headers);
 						const delayMs =
@@ -967,7 +1004,8 @@ interface WebSocketLike {
 
 interface CachedWebSocketContinuationState {
 	head: string;
-	tail: string;
+	/** The settings after the input, without `max_output_tokens` (see prepareWebSocketFrame). */
+	tailKey: string;
 	/** Exactly the input already present on this connection, including the last assistant response. */
 	input: (ResponseInput[number] | SentJson)[];
 	lastResponseId: string;
@@ -1068,7 +1106,14 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 	websocketSessionCache.clear();
 }
 
-registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
+// An ended session also drops its debug stats and transport fallback state: kept, they add one entry per session for
+// the life of the process (review claim A3).
+registerSessionResourceCleanup((sessionId) => {
+	closeOpenAICodexWebSocketSessions(sessionId);
+	resetOpenAICodexWebSocketDebugStats(sessionId);
+	if (sessionId === undefined) uncompressedSseSessions.clear();
+	else uncompressedSseSessions.delete(sessionId);
+});
 
 function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
 	const state = sessionId ? websocketSseFallbackSessions.get(sessionId) : undefined;
@@ -1695,7 +1740,14 @@ function prepareWebSocketFrame(
 	}
 	const end = JSON.stringify(after).slice(1);
 	const tail = end === "}" ? end : "," + end;
-	if (matched?.tail !== tail) matched = undefined;
+	// The output limit is a setting of this response only, and the context clamp changes it from turn to turn once the
+	// input grows past about 125k tokens. Comparing it dropped the continuation on every such turn (#12444).
+	let tailKey = tail;
+	if (Object.hasOwn(after, "max_output_tokens")) {
+		const { max_output_tokens: _limit, ...rest } = after;
+		tailKey = JSON.stringify(rest);
+	}
+	if (matched?.tailKey !== tailKey) matched = undefined;
 	const from = matched ? priorCount : 0;
 	const suffix = from ? captured.slice(from) : captured;
 	const encoded = suffix.some((item) => item instanceof SentJson)
@@ -1708,7 +1760,7 @@ function prepareWebSocketFrame(
 		head +
 		encoded +
 		(previousId ? tail.slice(0, -1) + `,"previous_response_id":${JSON.stringify(previousId)}}` : tail);
-	return { wire, inputCount: count - from, previousId, next: { head, tail, input: captured } };
+	return { wire, inputCount: count - from, previousId, next: { head, tailKey, input: captured } };
 }
 
 async function* startWebSocketOutputOnFirstEvent(

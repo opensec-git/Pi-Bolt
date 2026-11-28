@@ -13,6 +13,7 @@ import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "..
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { writeDiagnosticsToStderr } from "./diagnostics-stderr.ts";
 import { toJsonEvent } from "./json-event.ts";
+import { exitOnUncaughtErrors } from "./uncaught-errors.ts";
 
 /**
  * Options for print mode.
@@ -27,6 +28,13 @@ export interface PrintModeOptions {
 	/** Images to attach to the initial message */
 	initialImages?: ImageContent[];
 }
+
+/**
+ * How long disposal may take before pi exits anyway, after the run or after the first SIGTERM/SIGHUP. Disposal can
+ * wait on things outside pi's control, such as a stdio MCP server's descendant that keeps its pipes open
+ * (upstream #12238).
+ */
+const DISPOSE_TIMEOUT_MS = 5_000;
 
 /**
  * Run in print (single-shot) mode.
@@ -62,7 +70,10 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 				signalCount++;
 				killTrackedDetachedChildren();
 				if (signalCount > 1) process.exit(exitCode);
+				// The first signal waits for disposal, but not forever (upstream #12238).
+				const forceExit = setTimeout(() => process.exit(exitCode), DISPOSE_TIMEOUT_MS);
 				void disposeRuntime().finally(() => {
+					clearTimeout(forceExit);
 					process.exit(exitCode);
 				});
 			};
@@ -72,6 +83,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	registerSignalHandlers();
+	// (Kept after the run: main exits once it returns, and a rejection can surface in between.)
+	exitOnUncaughtErrors();
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
@@ -111,7 +124,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 					return runtimeHost.switchSession(sessionPath, switchOptions);
 				},
 				reload: async () => {
-					await session.reload();
+					await runtimeHost.reload();
+					writeDiagnosticsToStderr(runtimeHost.takeUnreportedDiagnostics());
 				},
 			},
 			onError: (err) => {
@@ -165,14 +179,27 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		return exitCode;
 	} catch (error: unknown) {
 		console.error(error instanceof Error ? error.message : String(error));
+		exitCode = 1;
 		return 1;
 	} finally {
 		// Keep the signal handlers until disposal is done: without one, a signal would kill the
 		// process mid-dispose (for example during a pending MCP token refresh).
-		await disposeRuntime();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const disposed = await Promise.race([
+			disposeRuntime().then(() => true),
+			new Promise<false>((resolve) => {
+				timer = setTimeout(() => resolve(false), DISPOSE_TIMEOUT_MS);
+			}),
+		]);
+		clearTimeout(timer);
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
 		await flushRawStdout();
+		if (!disposed) {
+			// What disposal still waits on would keep the process alive after the answer (upstream #12238).
+			console.error(`Shutdown did not finish within ${DISPOSE_TIMEOUT_MS / 1000} seconds; exiting.`);
+			process.exit(exitCode);
+		}
 	}
 }

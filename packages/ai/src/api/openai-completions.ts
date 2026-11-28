@@ -200,6 +200,13 @@ type ChatCompletionAssistantMessageParamWithReasoning = ChatCompletionAssistantM
 		reasoning_opaque?: string;
 	};
 
+/** Gemini's thought signature on a tool call, in Google's OpenAI-compatible format (#12613, #10157). */
+type GoogleToolCallExtraContent = { google: { thought_signature: string } };
+
+type ChatCompletionMessageToolCallWithExtraContent = ChatCompletionMessageToolCall & {
+	extra_content?: GoogleToolCallExtraContent;
+};
+
 type ChatCompletionTextPartWithCacheControl = ChatCompletionContentPartText & {
 	cache_control?: OpenAICompatCacheControl;
 };
@@ -339,6 +346,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				type?: string;
 				function?: { name?: string; arguments?: string };
 				custom?: { name?: string; input?: string };
+				extra_content?: { google?: { thought_signature?: unknown } };
 			};
 
 			let textBlock: TextContent | null = null;
@@ -599,6 +607,12 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 							const name = toolCall.function?.name ?? toolCall.custom?.name;
 							if (!block.name && name) {
 								block.name = name;
+							}
+							// Gemini behind an OpenAI-compatible endpoint signs a tool call here and rejects the next
+							// request when the call is replayed without it (#12613, #10157).
+							const thoughtSignature = toolCall.extra_content?.google?.thought_signature;
+							if (typeof thoughtSignature === "string" && thoughtSignature.length > 0) {
+								block.thoughtSignature = thoughtSignature;
 							}
 
 							let delta = "";
@@ -1341,7 +1355,7 @@ function convertResolvedMessages(
 				}
 
 				if (toolCalls.length > 0) {
-					assistantMsg.tool_calls = toolCalls.map((tc): ChatCompletionMessageToolCall => {
+					assistantMsg.tool_calls = toolCalls.map((tc): ChatCompletionMessageToolCallWithExtraContent => {
 						const customInputProperty = options?.grammarToolInputProperties?.get(tc.name);
 						if (customInputProperty !== undefined) {
 							return {
@@ -1353,6 +1367,7 @@ function convertResolvedMessages(
 								},
 							};
 						}
+						const extraContent = googleToolCallExtraContent(tc.thoughtSignature);
 						return {
 							id: tc.id,
 							type: "function",
@@ -1360,6 +1375,7 @@ function convertResolvedMessages(
 								name: tc.name,
 								arguments: JSON.stringify(tc.arguments),
 							},
+							...(extraContent && { extra_content: extraContent }),
 						};
 					});
 				}
@@ -1465,6 +1481,18 @@ function convertResolvedMessages(
 	}
 
 	return params;
+}
+
+const BASE64_SIGNATURE = /^[A-Za-z0-9+/_-]+={0,2}$/;
+
+/**
+ * The `extra_content` that replays a tool call's Gemini thought signature (#12613, #10157). Only a base64 value is one:
+ * older sessions keep OpenRouter's encrypted reasoning detail (JSON) in the same field, replayed as `reasoning_details`.
+ * The signature is only present on a call from the same provider and model (transformMessages drops it otherwise).
+ */
+function googleToolCallExtraContent(thoughtSignature: string | undefined): GoogleToolCallExtraContent | undefined {
+	if (!thoughtSignature || !BASE64_SIGNATURE.test(thoughtSignature)) return undefined;
+	return { google: { thought_signature: thoughtSignature } };
 }
 
 /**

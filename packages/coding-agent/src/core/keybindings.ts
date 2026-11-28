@@ -11,6 +11,7 @@ import { join } from "path";
 import type { Static } from "typebox";
 import { getAgentDir } from "../config.ts";
 import { stripBom } from "../utils/text.ts";
+import { isWSL } from "../utils/wsl.ts";
 import { checkKeybindingValue } from "./config-checks.generated.ts";
 import type { KeybindingValueSchema } from "./key-id-schema.ts";
 
@@ -18,7 +19,7 @@ export function useWindowsKeybindings(
 	platform: NodeJS.Platform = process.platform,
 	env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-	return platform === "win32" || (platform === "linux" && Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP));
+	return platform === "win32" || isWSL(platform, env);
 }
 
 const windowsKeybindings = useWindowsKeybindings();

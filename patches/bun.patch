@@ -19784,3 +19784,174 @@ index 332961e3..6ea1308d 100644
 -- 
 2.53.0
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sat, 28 Nov 2026 00:28:46 -0600
+Subject: [PATCH] fetch: a slice of a Blob made of Blobs is sent as the slice;
+ a builtin namespace used as a value stays an import
+
+- fetch() handed the parts of a Blob made of other Blobs to the HTTP client without looking at
+  the Blob's offset and size. `blob.slice()` keeps the parts (StoreSlot::dupe()), so a slice of
+  such a Blob (256 KiB or more) sent the whole parent Blob, with the parent's Content-Length.
+  The parts go out only when the Blob is all of them; a slice is joined and sliced, as every
+  other consumer does.
+- In an executable compiled ahead of time, `import * as ns from "<builtin>"` in a module wrapped
+  as ESM (one loaded with import()) became `var ns = require("<builtin>")`, a plain writable
+  object with the keys of the require() value, not a module namespace object. Such an import is
+  not deferred when `ns` itself is used as a value; `ns.name` reads (import items), default and
+  named imports are deferred as before.
+---
+ .../linker_context/scanImportsAndExports.rs        | 14 ++++++++++++--
+ src/runtime/webcore/fetch/FetchTasklet.rs          |  6 +++++-
+ 2 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/src/bundler/linker_context/scanImportsAndExports.rs b/src/bundler/linker_context/scanImportsAndExports.rs
+index 101b1afe..551660f2 100644
+--- a/src/bundler/linker_context/scanImportsAndExports.rs
++++ b/src/bundler/linker_context/scanImportsAndExports.rs
+@@ -1092,15 +1092,25 @@ pub(crate) fn scan_imports_and_exports(
+             let parts_len = col_ref!(parts_list)[id].len() as usize;
+             // The `import` statements of builtin modules that become a `require()` in this file's wrapper
+             // (`requires_builtin_in_wrapper`): said on the record, for what follows and for `convert_stmts_for_chunk`.
++            // Not `import * as ns` where `ns` is used as a value (`ns` itself, not only `ns.name`, which the parser turns into
++            // an import item and does not count as a use of `ns`): the `require()` value is not the module namespace object
++            // that `ns` must be (tagged "Module", not extensible, only the exports as keys), so that import stays an import.
+             if this.options.defer_builtin_imports && col_ref!(flags)[id].wrap == WrapKind::Esm {
++                let parts = col_ref!(parts_list)[id].as_slice();
++                let namespace_is_used = |import: &bun_ast::S::Import| {
++                    !import.star_name_loc.is_empty()
++                        && parts.iter().any(|part| {
++                            part.symbol_uses.get(&import.namespace_ref).is_some_and(|uses| uses.count_estimate() > 0)
++                        })
++                };
+                 for part_index in 0..parts_len {
+-                    for stmt in col_ref!(parts_list)[id].as_slice()[part_index].stmts.slice() {
++                    for stmt in parts[part_index].stmts.slice() {
+                         let bun_ast::StmtData::SImport(import) = stmt.data else { continue };
+                         let record_index = import.import_record_index as usize;
+                         let required = this.requires_builtin_in_wrapper(
+                             &col_ref!(import_records_list)[id].as_slice()[record_index],
+                             id as crate::IndexInt,
+-                        );
++                        ) && !namespace_is_used(&*import);
+                         if required {
+                             col!(import_records_list)[id].as_mut_slice()[record_index]
+                                 .flags
+diff --git a/src/runtime/webcore/fetch/FetchTasklet.rs b/src/runtime/webcore/fetch/FetchTasklet.rs
+index 0ed0e1c9..8a5a7c06 100644
+--- a/src/runtime/webcore/fetch/FetchTasklet.rs
++++ b/src/runtime/webcore/fetch/FetchTasklet.rs
+@@ -2144,9 +2144,13 @@ impl FetchTasklet {
+         let headers_buf: &'static [u8] =
+             unsafe { bun_ptr::Interned::assume(fetch_tasklet.request_headers.buf.as_slice()) }
+                 .as_bytes();
+-        // A Blob made of other Blobs goes out as its parts, not joined (the client joins them where it must).
++        // A Blob made of other Blobs goes out as its parts, not joined (the client joins them where it must). Only the whole of
++        // them: a slice of such a Blob (`blob.slice()` keeps the parts, with its own offset and size) is joined and sliced by
++        // `request_body.slice()` below, as any other consumer of it does.
+         if let HTTPRequestBody::AnyBlob(AnyBlob::Blob(blob)) = &fetch_tasklet.request_body
+             && let Some(parts) = blob.store.parts()
++            && blob.offset.get() == 0
++            && blob.size.get() as usize == parts.len
+         {
+             fetch_tasklet.request_body_parts = parts
+                 .parts
+-- 
+2.53.0
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sat, 28 Nov 2026 02:29:29 -0600
+Subject: [PATCH] Blob: a slice of a Blob made of Blobs keeps only the parts it
+ covers
+
+A slice took its parent's parts whole (StoreSlot::dupe()) with its own offset and size, so every
+reader of the slice (arrayBuffer(), text(), fetch()) joined all of the parent's parts to read a
+window of them: 64 slices of 4 MB of a 256 MB Blob of four parts took 3.2 s, and 2.6 GB at 8
+fetches at once. The slice now gets the parts it covers, the first and last cut to it, with
+offset 0 and its own size: fetch() sends them as parts, and a reader joins only those bytes. A
+slice within one part is a slice of that part's store; an empty slice has none.
+---
+ src/runtime/webcore/Blob.rs | 59 +++++++++++++++++++++++++++++++++++--
+ 1 file changed, 56 insertions(+), 3 deletions(-)
+
+diff --git a/src/runtime/webcore/Blob.rs b/src/runtime/webcore/Blob.rs
+index d73735c0..5a21c74f 100644
+--- a/src/runtime/webcore/Blob.rs
++++ b/src/runtime/webcore/Blob.rs
+@@ -1799,9 +1799,18 @@ impl BlobExt for Blob {
+ 
+         // This copies over the charset field
+         // which is okay because this will only be a <= slice
+-        let blob = self.dupe();
+-        blob.offset.set(offset);
+-        blob.size.set(len);
++        let mut blob = self.dupe();
++        if let Some(parts) = self.store.parts() {
++            // A Blob made of other Blobs: the slice keeps only the parts it covers, so that reading it (or sending it) handles
++            // its own bytes, not a join of the whole Blob's.
++            let (store, offset, size) = slice_of_parts(parts, offset as usize, len as usize);
++            blob.store = store;
++            blob.offset.set(offset);
++            blob.size.set(size);
++        } else {
++            blob.offset.set(offset);
++            blob.size.set(len);
++        }
+ 
+         let content_type_was_allocated = content_type.is_owned() && !content_type.is_empty();
+         // infer the content type if it was not specified
+@@ -3470,6 +3479,50 @@ impl BlobExt for Blob {
+ // JSC-integration methods (host fns, to_js/from_js, S3/file I/O state machines)
+ // ──────────────────────────────────────────────────────────────────────────
+ 
++/// The slice `[offset, offset + len)` of a Blob made of other Blobs (`get_slice_from`): a slot with only the parts it covers, the
++/// first and the last cut to it, and the slice's offset and size in that slot. A slice within one part is a slice of that part's
++/// store; an empty one has no store.
++fn slice_of_parts(
++    parts: &webcore_types::BlobParts,
++    offset: usize,
++    len: usize,
++) -> (webcore_types::StoreSlot, SizeType, SizeType) {
++    let start = offset.min(parts.len);
++    let end = start.saturating_add(len).min(parts.len);
++    let mut window: Vec<webcore_types::BlobPart> = Vec::new();
++    let mut position: usize = 0;
++    for part in parts.parts.iter() {
++        let from = position.max(start);
++        let to = (position + part.len).min(end);
++        if from < to {
++            window.push(webcore_types::BlobPart {
++                store: part.store.clone(),
++                offset: part.offset + (from - position),
++                len: to - from,
++            });
++        }
++        position += part.len;
++        if position >= end {
++            break;
++        }
++    }
++    match window.len() {
++        0 => (webcore_types::StoreSlot::new(None), 0, 0),
++        1 => {
++            let part = window.pop().expect("one part");
++            (webcore_types::StoreSlot::new(Some(part.store)), part.offset as SizeType, part.len as SizeType)
++        }
++        _ => (
++            webcore_types::StoreSlot::with_parts(webcore_types::BlobParts {
++                parts: window.into_boxed_slice(),
++                len: end - start,
++            }),
++            0,
++            (end - start) as SizeType,
++        ),
++    }
++}
++
+ /// `new Blob([blob, blob, ...])` of in-memory Blobs, 256 KiB or more: a Blob whose bytes are those Blobs' stores, kept
+ /// as parts instead of copied into one (`StoreSlot`). Blobs cannot change, so it is the same bytes either way;
+ /// fetch() sends the parts one after the other, and whatever else needs the bytes joins them then, once. `None`
+-- 
+2.53.0
+

@@ -68,7 +68,6 @@ import {
 	getDebugLogPath,
 	getDocsPath,
 	PRODUCT_NAME,
-	usesDefaultAgentDir,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
@@ -115,6 +114,7 @@ import { findMatchingProviders } from "../../core/provider-matching.ts";
 import { RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { planRadiusMcpServer } from "../../core/radius-mcp.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { buildResumeArgv } from "../../core/resume-command.ts";
 import { isBuiltinOnlyInteractiveCli } from "../../core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -158,12 +158,13 @@ import { flushStdout } from "../../utils/flush-stdout.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoderOnFirstUse } from "../../utils/image-convert.ts";
 import { chalk } from "../../utils/lazy-packages.ts";
-import { getCwdRelativePath, pathsEqual, resolvePath, shortenHomePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguagesOnDemand } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { onUnhandledRejection } from "../uncaught-errors.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -440,17 +441,14 @@ function quoteIfNeeded(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Arguments that open the session in a new process, or undefined while the session has no file to open. */
+/** Arguments that name the session for a new process, or undefined while the session has no file to open. */
 function getResumeArgs(sessionManager: SessionManager): string[] | undefined {
 	if (!sessionManager.isPersisted()) return undefined;
 
 	const sessionFile = sessionManager.getSessionFile();
 	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
 
-	const args = [COMMAND_NAME];
-	if (!usesDefaultAgentDir()) {
-		args.push("--agent-dir", resolvePath(getAgentDir()));
-	}
+	const args: string[] = [];
 	if (!sessionManager.usesDefaultSessionDir()) {
 		args.push("--session-dir", sessionManager.getSessionDir());
 	}
@@ -461,7 +459,8 @@ function getResumeArgs(sessionManager: SessionManager): string[] | undefined {
 /** The resume command as shell text for the user to copy. */
 export function formatResumeCommand(sessionManager: SessionManager): string | undefined {
 	if (!process.stdout.isTTY) return undefined;
-	return getResumeArgs(sessionManager)?.map(quoteIfNeeded).join(" ");
+	const args = getResumeArgs(sessionManager);
+	return args && buildResumeArgv(args, sessionManager.getCwd(), [])?.map(quoteIfNeeded).join(" ");
 }
 
 /**
@@ -474,12 +473,11 @@ export function getProgramResumeCommand(
 	sessionManager: SessionManager,
 	resumeFlags: readonly string[],
 ): ProgramResumeCommand | undefined {
-	const argv = getResumeArgs(sessionManager);
-	if (!argv) return undefined;
+	const args = getResumeArgs(sessionManager);
+	if (!args) return undefined;
 	const cwd = sessionManager.getCwd();
-	// pi never changes its working directory, so it is still the one the flags were typed in.
-	if (resumeFlags.length > 0 && !pathsEqual(cwd, process.cwd())) return undefined;
-	return { argv: [...argv, ...resumeFlags], cwd };
+	const argv = buildResumeArgv(args, cwd, resumeFlags);
+	return argv && { argv, cwd };
 }
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {
@@ -600,6 +598,11 @@ interface ReasoningDropDiagnostic {
 	provider: string;
 	/** Transformation `type` of a withheld block. */
 	droppedType: string;
+	/**
+	 * Transformation fields that name a withheld block across requests, in order of preference: the first that is set
+	 * names it. Anthropic's `path` is a place in the request, which stays the same while only later messages are added.
+	 */
+	keyFields: readonly string[];
 	/** Singular and plural name of a withheld block. */
 	noun: [string, string];
 }
@@ -608,21 +611,26 @@ interface ReasoningDropDiagnostic {
 const REASONING_DROP_DIAGNOSTICS = new Map<string, ReasoningDropDiagnostic>([
 	[
 		"anthropic_input_transformations",
-		{ provider: "Anthropic", droppedType: "thinking_dropped", noun: ["thinking block", "thinking blocks"] },
+		{
+			provider: "Anthropic",
+			droppedType: "thinking_dropped",
+			keyFields: ["signatureHash", "path"],
+			noun: ["thinking block", "thinking blocks"],
+		},
 	],
 	[
 		"openai_input_transformations",
-		{ provider: "OpenAI", droppedType: "reasoning", noun: ["reasoning item", "reasoning items"] },
+		{ provider: "OpenAI", droppedType: "reasoning", keyFields: ["id"], noun: ["reasoning item", "reasoning items"] },
 	],
 ]);
 
 interface DroppedReasoning {
 	diagnostic: ReasoningDropDiagnostic;
-	count: number;
-	reasons: string[];
+	/** The withheld blocks, each named by its first key field that is set; undefined for a block without one. */
+	blocks: { key: string | undefined; reason: string | undefined }[];
 }
 
-/** Count the reasoning blocks a provider reported as withheld from the request that produced `message`. */
+/** The reasoning blocks a provider reported as withheld from the request that produced `message`. */
 function getDroppedReasoning(message: AssistantMessage): DroppedReasoning | undefined {
 	for (const diagnostic of message.diagnostics ?? []) {
 		const kind = REASONING_DROP_DIAGNOSTICS.get(diagnostic.type);
@@ -630,18 +638,22 @@ function getDroppedReasoning(message: AssistantMessage): DroppedReasoning | unde
 		// Session data: diagnostics details are untyped JSON.
 		const transformations = diagnostic.details?.transformations;
 		if (!Array.isArray(transformations)) continue;
-		const dropped = transformations.filter(
-			(transformation): transformation is Record<string, unknown> =>
-				typeof transformation === "object" &&
-				transformation !== null &&
-				(transformation as Record<string, unknown>).type === kind.droppedType,
-		);
-		if (dropped.length === 0) continue;
-		const reasons = new Set<string>();
-		for (const transformation of dropped) {
-			if (typeof transformation.reason === "string") reasons.add(transformation.reason);
+		const blocks: DroppedReasoning["blocks"] = [];
+		for (const transformation of transformations) {
+			if (typeof transformation !== "object" || transformation === null || Array.isArray(transformation)) continue;
+			if (transformation.type !== kind.droppedType) continue;
+			let key: string | undefined;
+			for (const field of kind.keyFields) {
+				const value = transformation[field];
+				if (typeof value === "string") {
+					key = `${field}:${value}`;
+					break;
+				}
+			}
+			const reason = transformation.reason;
+			blocks.push({ key, reason: typeof reason === "string" ? reason : undefined });
 		}
-		return { diagnostic: kind, count: dropped.length, reasons: [...reasons] };
+		if (blocks.length > 0) return { diagnostic: kind, blocks };
 	}
 	return undefined;
 }
@@ -2541,6 +2553,8 @@ export class InteractiveMode {
 
 	private showRuntimeDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
 		for (const diagnostic of diagnostics) {
+			// Phones of the terminal's /remote-control see them too, as they see extensions' notices.
+			this.remoteControl?.notify(diagnostic.message, diagnostic.type);
 			if (diagnostic.type === "error") {
 				this.showError(diagnostic.message);
 			} else if (diagnostic.type === "warning") {
@@ -2677,6 +2691,15 @@ export class InteractiveMode {
 		return true;
 	}
 
+	/**
+	 * Forget the tool rows waiting for a result. They get no final result after this, so their elapsed-time timers are
+	 * stopped (claim T5): a dropped row's timer would otherwise ask for a frame every second for the rest of the session.
+	 */
+	private clearPendingTools(): void {
+		for (const component of this.pendingTools.values()) component.dispose();
+		this.pendingTools.clear();
+	}
+
 	private renderCurrentSessionState(): void {
 		this.loadedResourcesContainer.clear();
 		clearTranscriptForRebuild(this.renderer, this.chatContainer);
@@ -2685,7 +2708,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		this.renderInitialMessages();
 	}
 
@@ -4067,7 +4090,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.idleCollector?.cancel();
-				this.pendingTools.clear();
+				this.clearPendingTools();
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
@@ -4243,7 +4266,7 @@ export class InteractiveMode {
 								isError: true,
 							});
 						}
-						this.pendingTools.clear();
+						this.clearPendingTools();
 						this.maybeSuggestBugReport(this.streamingMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
@@ -4334,7 +4357,7 @@ export class InteractiveMode {
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
-				this.pendingTools.clear();
+				this.clearPendingTools();
 
 				requestTurnEndRender(this.ui);
 				this.idleCollector?.schedule();
@@ -4700,7 +4723,7 @@ export class InteractiveMode {
 		messageMeta?: Map<AgentMessage, { id: string; timestamp: string }>,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		const fullscreen = this.renderer?.mode === "fullscreen";
 		// Extensions can run stateful code while constructing a row. Preserve that construction order.
@@ -4932,26 +4955,28 @@ export class InteractiveMode {
 		const dropped = getDroppedReasoning(message);
 		if (!dropped) return;
 
-		// Providers report a withheld block again on every later request that replays it, so only
-		// a count above the previous response's means new losses. message_end reaches the UI before
-		// the current message is persisted, so the branch's last assistant message is the previous response.
-		const branch = this.sessionManager.getBranch();
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				const previous = getDroppedReasoning(entry.message);
-				if (previous?.diagnostic === dropped.diagnostic && dropped.count <= previous.count) return;
-				break;
-			}
+		// A block is announced once: pi stops replaying a block withheld for good, but one it cannot name, or one
+		// withheld for a reason that can change, is reported again on every later request that replays it (#346).
+		// message_end reaches the UI before the current message is persisted, so the branch holds only earlier responses.
+		const announced = new Set<string>();
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "assistant" || !entry.message.diagnostics) continue;
+			const earlier = getDroppedReasoning(entry.message);
+			if (earlier?.diagnostic !== dropped.diagnostic) continue;
+			for (const block of earlier.blocks) if (block.key !== undefined) announced.add(block.key);
 		}
+		const fresh = dropped.blocks.filter((block) => block.key === undefined || !announced.has(block.key));
+		if (fresh.length === 0) return;
 
 		const { provider, noun: nouns } = dropped.diagnostic;
-		const noun = nouns[dropped.count === 1 ? 0 : 1];
-		const reasons = dropped.reasons.length > 0 ? `: ${dropped.reasons.join(", ")}` : "";
+		const noun = nouns[fresh.length === 1 ? 0 : 1];
+		const reasonSet = new Set<string>();
+		for (const block of fresh) if (block.reason !== undefined) reasonSet.add(block.reason);
+		const reasons = reasonSet.size > 0 ? `: ${[...reasonSet].join(", ")}` : "";
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(
 			new ThemedText(
-				() => theme.fg("warning", `${provider} dropped ${dropped.count} ${noun}${reasons} (details in session)`),
+				() => theme.fg("warning", `${provider} dropped ${fresh.length} ${noun}${reasons} (details in session)`),
 				1,
 				0,
 			),
@@ -5225,6 +5250,8 @@ export class InteractiveMode {
 		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
 		process.prependListener("uncaughtException", uncaughtExceptionHandler);
 		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
+		// Node raises an unhandled rejection as an uncaught exception; Bun exits without calling the handler above.
+		this.signalCleanupHandlers.push(onUnhandledRejection((error) => this.uncaughtCrash(error)));
 	}
 
 	private unregisterSignalHandlers(): void {
@@ -7385,7 +7412,7 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
+			await this.runtimeHost.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
 			restoreChatBeforeSessionStart();
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
@@ -7407,6 +7434,7 @@ export class InteractiveMode {
 			if (modelsJsonError) {
 				this.showWarning(`models.json error: ${modelsJsonError}`);
 			}
+			this.showRuntimeDiagnostics(this.runtimeHost.takeUnreportedDiagnostics());
 			this.showStatus(
 				savedImplicitProjectTrust
 					? "Reloaded keybindings, extensions, skills, prompts, themes, and context files; saved project trust"

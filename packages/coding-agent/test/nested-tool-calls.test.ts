@@ -24,8 +24,8 @@ function usage(input: number, cost: number): Usage {
 function createRunner(tools: AgentTool[], options: { sequential?: boolean } = {}) {
 	const events: NestedToolExecutionEvent[] = [];
 	const host: NestedToolCallHost = {
-		getTools: () => tools,
-		isSequential: () => options.sequential ?? false,
+		isExclusive: (name) =>
+			options.sequential === true || tools.find((tool) => tool.name === name)?.executionMode === "sequential",
 		runToolCall: async (toolCall, _parentId, signal, onUpdate) => {
 			const tool = tools.find((candidate) => candidate.name === toolCall.name);
 			if (!tool) {

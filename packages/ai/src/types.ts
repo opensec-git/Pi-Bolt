@@ -485,6 +485,12 @@ export interface ToolCall {
 	 * Describes the problem and includes the text the model sent; tool argument validation fails with it.
 	 */
 	argumentsError?: string;
+	/**
+	 * The arguments text exactly as an OpenAI Responses model streamed it, kept only when it differs from
+	 * `JSON.stringify(arguments)` (spacing, key order, escapes). Replayed unchanged: the server compares replayed items
+	 * with the ones it stored, and a re-serialized text drops the prompt cache and the reasoning after the call (#12444).
+	 */
+	rawArguments?: string;
 }
 
 export interface Usage {

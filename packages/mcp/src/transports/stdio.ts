@@ -10,6 +10,11 @@ import { type McpTransport, TransportEvents } from "./transport.ts";
 const DEFAULT_CLOSE_TIMEOUT_MS = 2_000;
 /** How long a server gets to exit on its own after stdin closes, before it is sent SIGTERM. */
 const STDIN_CLOSE_GRACE_MS = 500;
+/**
+ * How long the pipes may stay open after the server exited. A descendant outside the server's process group (for
+ * example one that called setsid) can hold them forever, and closing waits for them (upstream #12238).
+ */
+const PIPE_RELEASE_GRACE_MS = 500;
 const USE_PROCESS_GROUPS = process.platform !== "win32";
 
 /** Process groups of running servers, killed if the host exits without closing them. */
@@ -217,6 +222,18 @@ export class StdioTransport extends TransportEvents implements McpTransport {
 				killProcessTree(child, "SIGTERM");
 				resolve();
 			});
+			// Once the server has exited, stop waiting for the pipes: destroying them lets "close" fire.
+			const releasePipes = () => {
+				timers.push(
+					setTimeout(() => {
+						child.stdin?.destroy();
+						child.stdout?.destroy();
+						child.stderr?.destroy();
+					}, PIPE_RELEASE_GRACE_MS),
+				);
+			};
+			if (child.exitCode !== null || child.signalCode !== null) releasePipes();
+			else child.once("exit", releasePipes);
 			const grace = Math.min(STDIN_CLOSE_GRACE_MS, closeTimeoutMs);
 			timers.push(setTimeout(() => killProcessTree(child, "SIGTERM"), grace));
 			timers.push(setTimeout(() => killProcessTree(child, "SIGKILL"), grace + closeTimeoutMs));

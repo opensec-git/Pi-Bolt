@@ -184,7 +184,8 @@ export class SseDecoder {
 /**
  * The server-sent events of a response body. The bytes are decoded as UTF-8 as they arrive and split into lines with
  * indexOf(), rather than searched for line ends one byte at a time. Once `signal` is aborted, the next read throws
- * "Request was aborted".
+ * "Request was aborted". When the iteration stops before the body ends (the consumer threw or returned), the body is
+ * cancelled, which closes the connection instead of leaving the response open.
  */
 export async function* iterateSseMessages(
 	body: ReadableStream<Uint8Array>,
@@ -193,6 +194,7 @@ export async function* iterateSseMessages(
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	const state = createSseDecoder();
+	let finished = false;
 
 	try {
 		while (true) {
@@ -202,6 +204,7 @@ export async function* iterateSseMessages(
 
 			const { value, done } = await reader.read();
 			if (done) {
+				finished = true;
 				break;
 			}
 
@@ -210,6 +213,7 @@ export async function* iterateSseMessages(
 
 		yield* decodeSseText(state, decoder.decode(), true);
 	} finally {
+		if (!finished) void reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
 }

@@ -1155,6 +1155,98 @@ describe("agentLoop with AgentMessage", () => {
 		expect(executionOrder).toContain("fast:b");
 	});
 
+	// upstream #11950: a sequential tool is a barrier, so a read after a bash call sees what the bash wrote, while the
+	// calls between barriers still overlap.
+	it("treats sequential tools as barriers and runs the calls between them in parallel", async () => {
+		const toolSchema = obj({ value: str() });
+		const log: string[] = [];
+		let active = 0;
+		let activeReads = 0;
+		let maxActiveReads = 0;
+		let overlapWithShell = false;
+
+		const shellTool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "shell",
+			label: "Shell",
+			description: "Shell tool",
+			parameters: toolSchema,
+			executionMode: "sequential",
+			async execute(toolCallId, params) {
+				log.push(`start:${toolCallId}`);
+				active++;
+				if (active !== 1) overlapWithShell = true;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				if (active !== 1) overlapWithShell = true;
+				active--;
+				log.push(`end:${toolCallId}`);
+				return { content: [{ type: "text", text: params.value }], details: { value: params.value } };
+			},
+		};
+		const readTool: AgentTool<typeof toolSchema, { value: string }> = {
+			name: "read",
+			label: "Read",
+			description: "Read tool",
+			parameters: toolSchema,
+			async execute(toolCallId, params) {
+				log.push(`start:${toolCallId}`);
+				active++;
+				activeReads++;
+				maxActiveReads = Math.max(maxActiveReads, activeReads);
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				activeReads--;
+				active--;
+				log.push(`end:${toolCallId}`);
+				return { content: [{ type: "text", text: params.value }], details: { value: params.value } };
+			},
+		};
+
+		const context: AgentContext = { messages: [], tools: [shellTool, readTool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		const calls = [
+			["1", "read"],
+			["2", "shell"],
+			["3", "read"],
+			["4", "read"],
+			["5", "read"],
+			["6", "shell"],
+			["7", "shell"],
+		] as const;
+
+		let callIndex = 0;
+		const stream = agentLoop([createUserMessage("go")], context, config, undefined, () => {
+			const mockStream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message =
+					callIndex === 0
+						? createAssistantMessage(
+								calls.map(([id, name]) => ({ type: "toolCall", id, name, arguments: { value: id } })),
+								"toolUse",
+							)
+						: createAssistantMessage([{ type: "text", text: "done" }]);
+				mockStream.push({ type: "done", reason: callIndex === 0 ? "toolUse" : "stop", message });
+				callIndex++;
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		const at = (entry: string) => log.indexOf(entry);
+		expect(at("end:1")).toBeLessThan(at("start:2"));
+		expect(at("end:2")).toBeLessThan(Math.min(at("start:3"), at("start:4"), at("start:5")));
+		expect(Math.max(at("end:3"), at("end:4"), at("end:5"))).toBeLessThan(at("start:6"));
+		expect(at("end:6")).toBeLessThan(at("start:7"));
+		expect(maxActiveReads).toBe(3);
+		expect(overlapWithShell).toBe(false);
+		const toolResultIds = events.flatMap((event) =>
+			event.type === "message_end" && event.message.role === "toolResult" ? [event.message.toolCallId] : [],
+		);
+		expect(toolResultIds).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
+	});
+
 	it("should allow parallel execution when all tools have executionMode=parallel", async () => {
 		const toolSchema = obj({ value: str() });
 		let firstResolved = false;

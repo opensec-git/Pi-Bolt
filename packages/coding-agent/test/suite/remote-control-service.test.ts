@@ -99,6 +99,14 @@ describe("remote control background service", () => {
 								})),
 							});
 						},
+						(pi: ExtensionAPI) => {
+							pi.registerCommand("reload-settings", {
+								description: "Reload",
+								handler: async (_args, ctx) => {
+									await ctx.reload();
+								},
+							});
+						},
 					],
 					noSkills: true,
 					noPromptTemplates: true,
@@ -208,6 +216,30 @@ describe("remote control background service", () => {
 		await phone.waitFor((message) => message.type === "agent_end");
 		const last = await phone.request({ type: "get_last_assistant_text" });
 		expect((last.data as { text: string }).text).toBe("hello from the service");
+	});
+
+	it("tells the phones about the settings errors a reload finds, and logs them", async () => {
+		const { agentDir, newer } = await setup();
+		const { phone } = await pairPhone(agentDir);
+		const settingsPath = join(agentDir, "settings.json");
+		const settings = readFileSync(settingsPath, "utf8");
+		writeFileSync(settingsPath, "{ not json");
+		try {
+			const response = await phone.request({ type: "prompt", message: "/reload-settings" });
+			expect(response.success).toBe(true);
+			const notice = await phone.waitFor(
+				(message) =>
+					message.type === "extension_ui_request" &&
+					message.method === "notify" &&
+					String(message.message).includes("Invalid settings file"),
+			);
+			expect(notice).toMatchObject({ notifyType: "warning" });
+		} finally {
+			writeFileSync(settingsPath, settings);
+		}
+		expect(readFileSync(join(agentDir, "remote-control", "service.log"), "utf8")).toContain(
+			`${newer}: Invalid settings file ${settingsPath}`,
+		);
 	});
 
 	it("lists projects and sessions, opens another session, and starts sessions only in projects used before", async () => {

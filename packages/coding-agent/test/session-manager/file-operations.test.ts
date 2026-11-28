@@ -9,6 +9,7 @@ import {
 	openSync,
 	readFileSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 	writeSync,
 } from "fs";
@@ -227,6 +228,17 @@ describe("findMostRecentSession", () => {
 		writeFileSync(join(tempDir, "file.txt"), "hello");
 		writeFileSync(join(tempDir, "file.json"), "{}");
 		expect(findMostRecentSession(tempDir)).toBeNull();
+	});
+
+	it("finds the most recent valid session next to a dangling .jsonl symlink", () => {
+		const valid = join(tempDir, "2026-11-28T10-00-00-000Z_valid.jsonl");
+		writeFileSync(
+			valid,
+			`${JSON.stringify({ type: "session", id: "valid", timestamp: "2026-11-28T10:00:00Z", cwd: tempDir })}\n`,
+		);
+		symlinkSync(join(tempDir, "missing-target.jsonl"), join(tempDir, "2026-11-28T11-00-00-000Z_dangling.jsonl"));
+		expect(findMostRecentSession(tempDir)).toBe(valid);
+		expect(SessionManager.continueRecent(tempDir, tempDir).getSessionFile()).toBe(valid);
 	});
 
 	it("ignores jsonl files without valid session header", () => {

@@ -1,0 +1,38 @@
+=== 2026-11-28 06:00:43 load 4.11 4.28 4.73
+=== 2026-11-28 06:00:43 startup: blank home, launch to visible typing, 30 rounds
+=== 2026-11-28 06:00:44 load 4.11 4.28 4.73
+=== 2026-11-28 06:00:44 modes: headless, RPC and TUI single answer, 12 rounds
+=== 2026-11-28 06:00:52 load 4.57 4.37 4.75
+=== 2026-11-28 06:00:52 session: 101 interactive tool prompts over HTTPS, 6 rounds, rotating order
+=== 2026-11-28 06:02:40 load 8.63 5.71 5.18
+=== 2026-11-28 06:02:40 restored: 6,000 restored messages in RPC, 2 rounds per rotation
+=== 2026-11-28 06:02:50 load 8.14 5.71 5.19
+=== 2026-11-28 06:02:50 idle: post-answer idle CPU and memory, 4 rounds of 15 s per rotation
+=== 2026-11-28 06:13:09 load 4.08 4.48 4.71
+=== 2026-11-28 06:13:09 special: get_entries / get_session_stats on 12,000 entries, 2 rounds per rotation
+=== 2026-11-28 06:13:12 special: tree search, linear and branched, 2 rounds per rotation
+=== 2026-11-28 06:13:43 special: 8 Mi and 32 Mi nested edit preview, 6 pairs per rotation
+=== 2026-11-28 06:14:02 load 4.36 4.48 4.69
+=== 2026-11-28 06:14:02 grep: 7 searches with the grep tool over packages/ of 337a9d614 (git archive), 12 rounds
+=== 2026-11-28 06:14:30 load 4.36 4.47 4.69
+=== 2026-11-28 06:14:30 bigtree: grep and find with their default limits over the checkout of 337a9d614 with its node_modules, without .git and the .gitignore files outside node_modules, 12 rounds each
+=== 2026-11-28 06:14:36 load 4.33 4.46 4.68
+=== 2026-11-28 06:14:36 codemode: 4 and 20 codemode calls at once, PI_CODEMODE_MAX_WORKERS=51, 6 rounds
+=== 2026-11-28 06:17:26 load 22.41 11.53 7.26
+=== 2026-11-28 06:17:26 standard: benchmark.py, blank home, 4 runs per rotation
+=== 2026-11-28 06:17:48 standard: benchmark.py, realistic home, 4 runs per rotation
+=== 2026-11-28 06:18:11 standard: benchmark.py, extensions home, 4 runs per rotation
+=== 2026-11-28 06:18:37 standard: 60,000-character answer, order 1 of 6
+=== 2026-11-28 06:21:12 standard: 60,000-character answer, order 2 of 6
+=== 2026-11-28 06:23:46 standard: 60,000-character answer, order 3 of 6
+=== 2026-11-28 06:26:20 standard: 60,000-character answer, order 4 of 6
+=== 2026-11-28 06:28:55 standard: 60,000-character answer, order 5 of 6
+=== 2026-11-28 06:31:29 standard: 60,000-character answer, order 6 of 6
+=== 2026-11-28 06:34:03 standard: resuming a 2,292-entry session in fullscreen, order 1 of 6
+=== 2026-11-28 06:34:12 standard: resuming a 2,292-entry session in fullscreen, order 2 of 6
+=== 2026-11-28 06:34:22 standard: resuming a 2,292-entry session in fullscreen, order 3 of 6
+=== 2026-11-28 06:34:31 standard: resuming a 2,292-entry session in fullscreen, order 4 of 6
+=== 2026-11-28 06:34:40 standard: resuming a 2,292-entry session in fullscreen, order 5 of 6
+=== 2026-11-28 06:34:50 standard: resuming a 2,292-entry session in fullscreen, order 6 of 6
+=== 2026-11-28 06:34:59 load 4.57 5.07 5.50
+=== 2026-11-28 06:34:59 done

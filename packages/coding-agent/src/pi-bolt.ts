@@ -328,13 +328,22 @@ function npmShimTarget(path: string): string | undefined {
 }
 
 /**
+ * The build folder a `pi-bolt` command starts, from where the command leads (`real`): the folder of that executable, or for the
+ * start command install.sh writes on Linux x86-64 (<install>/pi-bolt-linux-x64.start, which starts that build's pi-start or
+ * pi), that build's folder.
+ */
+export function piBoltCommandFolder(real: string): string {
+	return /[\\/]pi-bolt-linux-[a-z0-9-]+\.start$/.test(real) ? real.slice(0, -".start".length) : dirname(real);
+}
+
+/**
  * Whether the installer put the installation in `installDir` where it is: its own folder (~/.pi-bolt, or PIBOLT_INSTALL), or
  * a `pi-bolt` on PATH that leads to the build's folder `folder`. Anything else is an archive unpacked by hand.
  */
 export function piBoltInstalledByInstaller(installDir: string, folder: string): boolean {
 	const defaults = [join(homedir(), ".pi-bolt"), process.env.PIBOLT_INSTALL].filter((dir): dir is string => !!dir);
 	if (defaults.some((dir) => realPathOf(dir) === realPathOf(installDir))) return true;
-	return piBoltOnPath().some((entry) => dirname(entry.real) === folder);
+	return piBoltOnPath().some((entry) => piBoltCommandFolder(entry.real) === folder);
 }
 
 /**

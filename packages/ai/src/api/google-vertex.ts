@@ -73,7 +73,8 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 	context: TranscriptContext,
 	options?: GoogleVertexOptions,
 ): AssistantMessageEventStream => {
-	const stream = new AssistantMessageEventStream();
+	// The internal delta options, as every other provider passes them (review claim A2).
+	const stream = new AssistantMessageEventStream(options);
 	const normalizedContext = collapseSystemMessages(context);
 
 	(async () => {

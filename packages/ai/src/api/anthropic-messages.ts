@@ -2,6 +2,7 @@ import type { Hash } from "node:crypto";
 import Anthropic, { type ClientOptions } from "@anthropic-ai/sdk";
 import type {
 	BetaInputTransformation,
+	BetaIterationsUsage,
 	BetaStopReason,
 	BetaTool,
 	BetaCacheControlEphemeral as CacheControlEphemeral,
@@ -37,10 +38,11 @@ import type {
 	Tool,
 	ToolResultMessage,
 } from "../types.ts";
+import { combineAbortSignals } from "../utils/abort-signals.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { ShortHash } from "../utils/hash.ts";
+import { ShortHash, shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -72,6 +74,7 @@ import {
 	type UnsupportedStrictSchemaKeywordCheck,
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import { collectReasoningDrops, droppedBlocksOf, isDroppedBlock, type ReasoningDropFormat } from "./reasoning-drops.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
 import { splitErrorToolResultImages, toolCallIds, transformMessages } from "./transform-messages.ts";
 
@@ -773,6 +776,51 @@ const ANTHROPIC_MESSAGE_EVENTS: ReadonlySet<string> = new Set([
 	"content_block_stop",
 ]);
 
+// api.anthropic.com finishes the prompt before it sends the response headers, so message_start follows them at once.
+const ANTHROPIC_FIRST_EVENT_TIMEOUT_MS = 60_000;
+
+/**
+ * Fails a request whose response sends no message event within a deadline after its headers. Subscription requests
+ * can get a 200 followed only by `ping` events, for minutes (#10019). Pings are bytes, so the HTTP idle timeout never
+ * fires, and the turn hangs without a retry. The deadline is the request timeout (the HTTP idle timeout by default),
+ * at most 60 s on api.anthropic.com. Only the time before the first message event counts: later gaps, such as
+ * thinking that is not streamed, stay with the HTTP idle timeout.
+ */
+function firstEventWatchdog(model: Model<"anthropic-messages">, timeoutMs: number | undefined) {
+	const configured = timeoutMs !== undefined && timeoutMs > 0 ? timeoutMs : undefined;
+	const deadlineMs = hostMatches(hostOf(model.baseUrl), "api.anthropic.com")
+		? Math.min(configured ?? ANTHROPIC_FIRST_EVENT_TIMEOUT_MS, ANTHROPIC_FIRST_EVENT_TIMEOUT_MS)
+		: configured;
+	const controller = deadlineMs === undefined ? undefined : new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	return {
+		/** Aborts the request when the watchdog fires; undefined when there is no deadline. */
+		signal: controller?.signal,
+		/** Starts the deadline once the response headers arrived. */
+		start(): void {
+			if (!controller || deadlineMs === undefined) return;
+			timer = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, deadlineMs);
+		},
+		/** Ends the watch: a message event arrived, or the request finished. */
+		stop(): void {
+			clearTimeout(timer);
+			timer = undefined;
+		},
+		/** The error to report instead of the abort it caused, once the watchdog fired. */
+		error(): Error | undefined {
+			return timedOut
+				? new Error(
+						`Anthropic sent no message events for ${(deadlineMs ?? 0) / 1000} s after the response headers (timed out)`,
+					)
+				: undefined;
+		},
+	};
+}
+
 async function* iterateAnthropicEvents(
 	response: Response,
 	signal?: AbortSignal,
@@ -844,6 +892,8 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 		};
 
 		let cache: RequestCacheRun | undefined;
+		const firstEvent = firstEventWatchdog(model, options?.timeoutMs);
+		let releaseRequestSignal: (() => void) | undefined;
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -886,8 +936,10 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				client = created.client;
 				isOAuth = created.isOAuthToken;
 			}
+			const requestSignal = combineAbortSignals([options?.signal, firstEvent.signal]);
+			releaseRequestSignal = requestSignal.cleanup;
 			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
+				...(requestSignal.signal ? { signal: requestSignal.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
@@ -919,6 +971,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			// SDK serializes itself; a full request (with or without `thread: create`) is sent as bytes.
 			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId, cache);
 			const reuseThreadContent = cache !== undefined && options?.client === undefined;
+			// The messages of the last attempt as sent, which the paths of `input_transformations` index: a thread
+			// `continue` sends only the new messages.
+			let sentMessages = params.messages;
 			const send = (body: ThreadedParams, prepared?: PreparedThreadRequest): Promise<ThreadResponse> =>
 				retryProviderRequest(
 					async () => {
@@ -927,6 +982,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						const fingerprint =
 							prepared && (prepared.prefix?.copy() ?? threadFingerprint(model, body, reuseThreadContent));
 						fingerprint?.append(body.messages.slice());
+						sentMessages = body.messages;
 						const response = await client.beta.messages.create(body, requestOptions).asResponse();
 						return {
 							response,
@@ -960,7 +1016,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				return open === undefined ? undefined : { ...open, block: output.content[open.contentIndex]! };
 			};
 
+			firstEvent.start();
 			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+				firstEvent.stop();
 				await options?.onProviderStreamEvent?.(event, model);
 				if (event.type === "message_start") {
 					output.responseId = event.message.id;
@@ -984,6 +1042,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
+						iterationContextTokens(event.message.usage.iterations) ??
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(usageModel, output.usage);
 				} else if (event.type === "content_block_start") {
@@ -1137,6 +1196,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					}
 					// Anthropic doesn't provide total_tokens, compute from components
 					output.usage.totalTokens =
+						iterationContextTokens(event.usage?.iterations) ??
 						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 					calculateCost(usageModel, output.usage);
 					if (isOpenRouterModel(model) && event.usage) {
@@ -1166,18 +1226,23 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					type: "anthropic_input_transformations",
 					timestamp: Date.now(),
 					details: {
-						transformations: inputTransformations.map((transformation) => ({
-							type: transformation.type ?? undefined,
-							path: transformation.path ?? undefined,
-							reason: transformation.reason ?? undefined,
-						})),
+						transformations: inputTransformations.map((transformation) => {
+							const signatureHash = droppedSignatureHash(sentMessages, transformation);
+							return {
+								type: transformation.type ?? undefined,
+								path: transformation.path ?? undefined,
+								reason: transformation.reason ?? undefined,
+								...(signatureHash === undefined ? {} : { signatureHash }),
+							};
+						}),
 					},
 				});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
-		} catch (error) {
+		} catch (caught) {
+			const error = firstEvent.error() ?? caught;
 			cache?.end();
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = error instanceof Error ? withCauseDetail(error) : JSON.stringify(error);
@@ -1185,6 +1250,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			if (retryAfterMs !== undefined) output.retryAfterMs = retryAfterMs;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			firstEvent.stop();
+			releaseRequestSignal?.();
 		}
 	})();
 
@@ -1265,6 +1333,27 @@ export const streamSimple: StreamFunction<"anthropic-messages", SimpleStreamOpti
 		thinkingBudgetTokens: Math.min(adjusted.thinkingBudget, Math.max(0, maxTokens - 1024)),
 	} satisfies AnthropicOptions);
 };
+
+/**
+ * Context size of a response from its usage iterations. After a server-tool loop the top-level usage fields are sums
+ * over the loop's sampling iterations, which count the context once per iteration; the context is the last sampling
+ * iteration's (upstream #12293). Undefined without iterations. The top-level fields stay the billed sums for cost.
+ */
+function iterationContextTokens(iterations: BetaIterationsUsage | null | undefined): number | undefined {
+	if (!iterations) return undefined;
+	for (let i = iterations.length - 1; i >= 0; i--) {
+		const iteration = iterations[i];
+		if (iteration.type === "message" || iteration.type === "fallback_message") {
+			return (
+				iteration.input_tokens +
+				iteration.output_tokens +
+				iteration.cache_read_input_tokens +
+				iteration.cache_creation_input_tokens
+			);
+		}
+	}
+	return undefined;
+}
 
 function isOAuthToken(apiKey: string): boolean {
 	return apiKey.includes("sk-ant-oat");
@@ -1423,6 +1512,45 @@ function getBetaFeatures(
 	return [...new Set(features)];
 }
 
+/**
+ * Anthropic names a removed thinking block only by its place in the request (`messages.{i}.content.{j}`), and that
+ * place moves as soon as anything before it changes. The reply records a hash of the block's signature instead
+ * (`signatureHash`, from `droppedSignatureHash`), and the converter leaves out the blocks whose signature hashes to a
+ * recorded one (#346).
+ */
+const ANTHROPIC_REASONING_DROPS: ReasoningDropFormat = {
+	diagnostic: "anthropic_input_transformations",
+	droppedType: "thinking_dropped",
+	keyField: "signatureHash",
+	prefixReason: "prefix_binding_mismatch",
+	modelReason: "model_binding_mismatch",
+	// A redacted block is sent with its signature as `data`.
+	blockKey: (block) => (block.thinkingSignature ? shortHash(block.thinkingSignature) : undefined),
+};
+
+const TRANSFORMATION_PATH = /^messages\.(\d+)\.content\.(\d+)$/;
+
+/**
+ * The hash of the signature of the thinking block a `thinking_dropped` transformation names in the messages that
+ * were sent; undefined for other transformations and for a path that names no signed thinking block, which then
+ * stays in later requests.
+ */
+function droppedSignatureHash(
+	sent: readonly MessageParam[],
+	transformation: BetaInputTransformation,
+): string | undefined {
+	// Wire input: the path is the API's.
+	if (transformation.type !== "thinking_dropped" || typeof transformation.path !== "string") return undefined;
+	const match = TRANSFORMATION_PATH.exec(transformation.path);
+	if (!match) return undefined;
+	const content = sent[Number(match[1])]?.content;
+	if (!Array.isArray(content)) return undefined;
+	const block = content[Number(match[2])];
+	const signature =
+		block?.type === "thinking" ? block.signature : block?.type === "redacted_thinking" ? block.data : undefined;
+	return signature ? shortHash(signature) : undefined;
+}
+
 interface BuildParamsFlags {
 	/** The session uses message threads, so the threads beta is sent. */
 	messageThreads: boolean;
@@ -1476,6 +1604,7 @@ function buildParams(
 		nativeToolChanges ? convertToolDefinitions : undefined,
 		cache,
 		conversationSources,
+		collectReasoningDrops(context.messages, ANTHROPIC_REASONING_DROPS, model),
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, options, {
@@ -1631,6 +1760,8 @@ function convertMessages(
 	/** Reuse what unchanged messages converted to before (request-cache.ts); `sources` as transformMessages fills it. */
 	cache?: RequestCacheRun,
 	sources?: (Message | undefined)[],
+	/** Thinking blocks the API removed for good, which are left out (ANTHROPIC_REASONING_DROPS). */
+	drops?: ReadonlySet<string>,
 ): ConvertedAnthropicMessages {
 	const params: MessageParam[] = [];
 	/**
@@ -1726,7 +1857,9 @@ function convertMessages(
 			const held = pendingSystemMessages.length > 0;
 			const assistantParams: MessageParam[] = held ? [] : params;
 			const before = assistantParams.length;
-			unit(i, i + 1, undefined, assistantParams, (out) => {
+			// Only the messages that have a removed block convert again when it is first reported.
+			const dropped = droppedBlocksOf(msg, drops, ANTHROPIC_REASONING_DROPS);
+			unit(i, i + 1, dropped, assistantParams, (out) => {
 				const blocks: ContentBlockParam[] = [];
 
 				for (const block of msg.content) {
@@ -1737,6 +1870,7 @@ function convertMessages(
 							text: sanitizeSurrogates(block.text),
 						});
 					} else if (block.type === "thinking") {
+						if (dropped && isDroppedBlock(block, drops, ANTHROPIC_REASONING_DROPS)) continue;
 						// Redacted thinking: pass the opaque payload back as redacted_thinking
 						if (block.redacted) {
 							blocks.push({

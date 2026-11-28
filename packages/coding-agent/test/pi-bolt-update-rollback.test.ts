@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_TOOL_NAMES, defaultToolNamesFor } from "../src/core/settings-manager.ts";
 import { handlePackageCommand } from "../src/package-manager-cli.ts";
 import { piBoltChannel, setPiBoltChannel } from "../src/pi-bolt.ts";
+import { skipsRelease } from "../src/pi-bolt-auto-update.ts";
 import { rollBackInstallation, swapFolderContents } from "../src/pi-bolt-rollback.ts";
 import { newestPiBoltVersion } from "../src/utils/version-check.ts";
 
@@ -53,6 +54,20 @@ describe.skipIf(process.platform === "win32")("pi-bolt update --rollback", () =>
 		expect(versionOf(`${current}.previous`)).toBe("0.9.0");
 		rollBackInstallation(current, "linux");
 		expect(versionOf(current)).toBe("0.9.0");
+	});
+
+	// hunt-install-9: an automatic update installed the release rolled back from again, the next day.
+	test("keeps automatic updates from installing the release it went back from, until it goes forward again", () => {
+		const current = join(dir, "pi-bolt-linux-x64");
+		build(current, "0.9.0");
+		build(`${current}.previous`, "0.8.8");
+		rollBackInstallation(current, "linux");
+		expect(readFileSync(join(dir, "auto-update.skip"), "utf8").trim()).toBe("0.9.0");
+		expect(skipsRelease(dir, "0.9.0")).toBe(true);
+		expect(skipsRelease(dir, "0.9.1")).toBe(false);
+		rollBackInstallation(current, "linux");
+		expect(existsSync(join(dir, "auto-update.skip"))).toBe(false);
+		expect(skipsRelease(dir, "0.9.0")).toBe(false);
 	});
 
 	test("says what was compiled in", () => {

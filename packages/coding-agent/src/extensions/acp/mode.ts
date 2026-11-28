@@ -26,6 +26,7 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionRuntime,
 } from "../../core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "../../core/agent-session-services.ts";
 import { formatNoApiKeyFoundMessage } from "../../core/auth-guidance.ts";
 import type { ExtensionUIDialogOptions, ExtensionUIHost, SessionStartEvent } from "../../core/extensions/index.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
@@ -37,7 +38,9 @@ import {
 } from "../../core/output-guard.ts";
 import { type SessionInfo as PiSessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
+import { writeDiagnosticsToStderr } from "../../modes/diagnostics-stderr.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
+import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { clientUIContext, settleWithin } from "../client-ui.ts";
 import { errorText, isRecord, JsonRpcConnection, JsonRpcError } from "../json-rpc.ts";
@@ -145,6 +148,7 @@ export async function runAcpMode(options: AcpModeOptions): Promise<never> {
 			void shutdown(signal === "SIGHUP" ? 129 : 143, false);
 		});
 	}
+	exitOnUncaughtErrors();
 	const detach = agent.attach(process.stdin, () => void shutdown(0, true));
 	return new Promise<never>(() => {});
 }
@@ -154,6 +158,8 @@ export class AcpAgent {
 	readonly connection: JsonRpcConnection;
 	private readonly options: AcpModeOptions;
 	private readonly sessions = new Map<string, AcpSession>();
+	/** Sessions being opened from their files by `session/load` or `session/resume`, by id. */
+	private readonly loading = new Map<string, Promise<AcpSession>>();
 	private clientCapabilities: ClientCapabilities = {};
 	/** Session creation runs one at a time: extensions load and project trust is decided per session. */
 	private creating: Promise<unknown> = Promise.resolve();
@@ -286,19 +292,25 @@ export class AcpAgent {
 	private async loadSession(params: Record<string, unknown>, replay: boolean) {
 		const id = requireString(params, "sessionId");
 		const cwd = requireDirectory(params);
-		const open = this.sessions.get(id);
-		if (open) {
-			if (replay) open.replay();
-			return open.settings();
-		}
-		const path = await this.findSession(id, cwd);
-		if (!path) throw new JsonRpcError(AcpErrorCode.ResourceNotFound, `Session not found: ${id}`);
-		const session = await this.open(SessionManager.open(path, this.sessionDirFor(cwd), cwd), mcpServersOf(params), {
-			type: "session_start",
-			reason: "resume",
-		});
+		// A load of a session another load is still opening waits for that one: one runtime per session file.
+		const session =
+			this.sessions.get(id) ?? (await (this.loading.get(id) ?? this.openById(id, cwd, mcpServersOf(params))));
 		if (replay) session.replay();
 		return session.settings();
+	}
+
+	/** Opens a session from its file. */
+	private openById(id: string, cwd: string, mcpServers: McpServer[]): Promise<AcpSession> {
+		const opening = (async () => {
+			const path = await this.findSession(id, cwd);
+			if (!path) throw new JsonRpcError(AcpErrorCode.ResourceNotFound, `Session not found: ${id}`);
+			return this.open(SessionManager.open(path, this.sessionDirFor(cwd), cwd), mcpServers, {
+				type: "session_start",
+				reason: "resume",
+			});
+		})().finally(() => this.loading.delete(id));
+		this.loading.set(id, opening);
+		return opening;
 	}
 
 	private async listSessions(params: Record<string, unknown>) {
@@ -385,13 +397,13 @@ export class AcpAgent {
 				sessionManager,
 				sessionStartEvent,
 			});
-			for (const diagnostic of runtime.diagnostics) {
-				console.error(`${diagnostic.type === "error" ? "Error" : "Warning"}: ${diagnostic.message}`);
-			}
+			// Taking them marks them reported, so a reload reports only what is new.
+			const diagnostics = runtime.takeUnreportedDiagnostics();
 			// As the other modes exit on them: a session whose extension failed to load, or whose `--provider` is unknown
 			// (it would run on another model), is not the session asked for.
-			const errors = runtime.diagnostics.filter((diagnostic) => diagnostic.type === "error");
+			const errors = diagnostics.filter((diagnostic) => diagnostic.type === "error");
 			if (errors.length > 0) {
+				writeDiagnosticsToStderr(diagnostics);
 				setSessionMcpServers(id, undefined);
 				await runtime.dispose();
 				throw new JsonRpcError(AcpErrorCode.InternalError, errors.map((error) => error.message).join("\n"));
@@ -404,7 +416,10 @@ export class AcpAgent {
 				void runtime.services.modelRuntime.refresh({ signal: AbortSignal.timeout(15_000) }).catch(() => {});
 			}
 			// After the response that tells the client the session exists (and has its settings).
-			setTimeout(() => session.announce(false), 0);
+			setTimeout(() => {
+				session.announce(false);
+				session.reportDiagnostics(diagnostics);
+			}, 0);
 			return session;
 		});
 		this.creating = create.catch(() => {});
@@ -421,7 +436,13 @@ class AcpSession {
 	private unsubscribeBackpressure?: () => void;
 	/** Prompts of this session, one after the other. */
 	private queue: Promise<unknown> = Promise.resolve();
-	private cancelled = false;
+	/**
+	 * Aborted by `session/cancel`, which cancels every prompt received before it (queued ones too, as ACP asks); each
+	 * prompt keeps the signal of its arrival.
+	 */
+	private cancelling = new AbortController();
+	/** The signal of the prompt that runs: its cancellation also ends the dialogs the prompt opened. */
+	private promptSignal: AbortSignal | undefined;
 	private messageCount = 0;
 	private messageId: string | undefined;
 	/** File contents before an edit or write, for its diff. */
@@ -474,6 +495,7 @@ class AcpSession {
 			await this.rebind();
 			this.applyMode();
 			this.announce();
+			this.reportDiagnostics(this.runtime.takeUnreportedDiagnostics());
 		});
 		await this.rebind();
 	}
@@ -502,9 +524,7 @@ class AcpSession {
 				},
 				switchSession: async (sessionPath, options) => this.runtime.switchSession(sessionPath, options),
 				reload: async () => {
-					await this.session.reload();
-					this.applyMode();
-					this.announce();
+					await this.reload();
 				},
 			},
 			onError: (err) => console.error(`Extension error (${err.extensionPath}): ${err.error}`),
@@ -545,36 +565,50 @@ class AcpSession {
 	}
 
 	cancel(): void {
-		this.cancelled = true;
+		this.cancelling.abort();
+		this.cancelling = new AbortController();
 		void this.session.abort();
 	}
 
 	prompt(blocks: ContentBlock[]): Promise<{ stopReason: StopReason }> {
-		const run = this.queue.then(() => this.runPrompt(blocks));
+		const signal = this.cancelling.signal;
+		const run = this.queue.then(async () => {
+			// (A cancel that came before the prompt started had nothing to abort.)
+			if (signal.aborted) return { stopReason: "cancelled" as const };
+			this.promptSignal = signal;
+			try {
+				return await this.runPrompt(blocks, signal);
+			} finally {
+				this.promptSignal = undefined;
+			}
+		});
 		this.queue = run.catch(() => {});
 		return run;
 	}
 
-	private async runPrompt(blocks: ContentBlock[]): Promise<{ stopReason: StopReason }> {
-		this.cancelled = false;
+	private async runPrompt(blocks: ContentBlock[], signal: AbortSignal): Promise<{ stopReason: StopReason }> {
 		// Tools registered since the mode was set (an MCP server that connected) are not offered in read-only mode.
 		this.applyMode();
 		const { text, images } = promptToPi(blocks);
 		const command = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
 		if (command && ACP_COMMAND_NAMES.has(command[1]) && images.length === 0) {
-			await this.runCommand(command[1], command[2]?.trim() ?? "");
-			return { stopReason: this.cancelled ? "cancelled" : "end_turn" };
+			await this.runCommand(command[1], command[2]?.trim() ?? "", signal);
+			return { stopReason: signal.aborted ? "cancelled" : "end_turn" };
 		}
 		const session = this.session;
 		if (!session.model) {
 			throw new JsonRpcError(AcpErrorCode.InternalError, `No models available. ${setupHelp()}`);
 		}
 		const start = session.messages.length;
+		// A cancel while the prompt is checked (input handlers, credentials) finds no run to abort: abort it as it starts.
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "agent_start" && signal.aborted) void session.abort();
+		});
 		try {
 			await session.prompt(text, { images: images.length > 0 ? images : undefined, source: "rpc" });
 			await session.waitForIdle();
 		} catch (error) {
-			if (this.cancelled) return { stopReason: "cancelled" };
+			if (signal.aborted) return { stopReason: "cancelled" };
 			// Pi's own message points to /login, which the editor does not have. (Not AuthRequired: Zed shows its own
 			// message for that, and ACP mode has no authentication methods to offer.)
 			const provider = session.model?.provider;
@@ -585,15 +619,16 @@ class AcpSession {
 			}
 			throw error;
 		} finally {
+			unsubscribe();
 			this.sendUsage();
 		}
 		const messages = session.messages.slice(start);
-		const error = this.cancelled ? undefined : runError(messages);
+		const error = signal.aborted ? undefined : runError(messages);
 		if (error) throw new JsonRpcError(AcpErrorCode.InternalError, error);
-		return { stopReason: stopReasonOf(messages, this.cancelled) };
+		return { stopReason: stopReasonOf(messages, signal.aborted) };
 	}
 
-	private async runCommand(name: string, argument: string): Promise<void> {
+	private async runCommand(name: string, argument: string, signal: AbortSignal): Promise<void> {
 		const reply = (text: string) =>
 			this.send({ sessionUpdate: "agent_message_chunk", messageId: randomUUID(), content: { type: "text", text } });
 		const session = this.session;
@@ -660,9 +695,7 @@ class AcpSession {
 				return;
 			}
 			case "reload":
-				await session.reload();
-				this.applyMode();
-				this.announce();
+				await this.reload();
 				reply("Reloaded extensions, skills, prompt templates and context files.");
 				return;
 			default:
@@ -674,7 +707,7 @@ class AcpSession {
 			if (!this.agent.capabilities.session?.compaction)
 				reply(`Compacted the conversation (${result.tokensBefore.toLocaleString("en-US")} tokens before).`);
 		} catch (error) {
-			if (this.cancelled) return;
+			if (signal.aborted) return;
 			throw new JsonRpcError(AcpErrorCode.InternalError, errorText(error));
 		} finally {
 			this.sendUsage();
@@ -952,6 +985,28 @@ class AcpSession {
 		}
 	}
 
+	/** Reloads the session as `/reload` does, and reports the settings errors the reload found. */
+	private async reload(): Promise<void> {
+		await this.runtime.reload();
+		this.applyMode();
+		this.announce();
+		this.reportDiagnostics(this.runtime.takeUnreportedDiagnostics());
+	}
+
+	/**
+	 * Problems the runtime found (settings, extensions) at startup, after a reload or after a session change: notices
+	 * for clients that show them, else the log on stderr.
+	 */
+	reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
+		if (!this.agent.capabilities.session?.notices) {
+			writeDiagnosticsToStderr(diagnostics);
+			return;
+		}
+		for (const diagnostic of diagnostics) {
+			this.send({ sessionUpdate: "notice", severity: diagnostic.type, title: diagnostic.message });
+		}
+	}
+
 	private notice(severity: "info" | "warning" | "error", title: string, description?: string): void {
 		if (this.agent.capabilities.session?.notices) {
 			this.send({ sessionUpdate: "notice", severity, title, ...(description ? { description } : {}) });
@@ -1079,19 +1134,20 @@ class AcpSession {
 		options: PermissionOption[],
 		opts: ExtensionUIDialogOptions | undefined,
 	): Promise<string | undefined> {
-		if (opts?.signal?.aborted) return undefined;
+		if (opts?.signal?.aborted || this.promptSignal?.aborted) return undefined;
 		const running = [...this.runningTools.keys()].at(-1);
 		const toolCallId = running ?? `dialog_${randomUUID()}`;
 		const content = message ? { content: [textContent(message)] } : {};
 		const toolCall = running
 			? { toolCallId, title, ...content }
 			: { toolCallId, title, kind: "other" as const, status: "pending" as const, ...content };
-		const request = this.agent.connection.request<RequestPermissionResponse>("session/request_permission", {
-			sessionId: this.id,
-			toolCall,
-			options,
-		});
-		const response = await settleWithin(request, opts);
+		const params = { sessionId: this.id, toolCall, options };
+		const response = await settleWithin(
+			(signal) =>
+				this.agent.connection.request<RequestPermissionResponse>("session/request_permission", params, signal),
+			opts,
+			this.promptSignal,
+		);
 		const selected = response && response.outcome.outcome === "selected" ? response.outcome.optionId : undefined;
 		// Clients keep what a permission request changes on the tool call: give a running tool its own title and output
 		// back, and end a dialog's own entry.
@@ -1124,9 +1180,10 @@ class AcpSession {
 		field: { description?: string; default?: string },
 		opts: ExtensionUIDialogOptions | undefined,
 	): Promise<string | undefined> {
-		if (!this.agent.capabilities.elicitation?.form || opts?.signal?.aborted) return undefined;
+		if (!this.agent.capabilities.elicitation?.form || opts?.signal?.aborted || this.promptSignal?.aborted)
+			return undefined;
 		const running = [...this.runningTools.keys()].at(-1);
-		const request = this.agent.connection.request<CreateElicitationResponse>("elicitation/create", {
+		const params = {
 			sessionId: this.id,
 			...(running ? { toolCallId: running } : {}),
 			mode: "form",
@@ -1136,8 +1193,12 @@ class AcpSession {
 				properties: { value: { type: "string", title, ...field } },
 				required: ["value"],
 			},
-		});
-		const response = await settleWithin(request, opts);
+		};
+		const response = await settleWithin(
+			(signal) => this.agent.connection.request<CreateElicitationResponse>("elicitation/create", params, signal),
+			opts,
+			this.promptSignal,
+		);
 		const value = response?.action === "accept" ? response.content?.value : undefined;
 		return typeof value === "string" ? value : undefined;
 	}

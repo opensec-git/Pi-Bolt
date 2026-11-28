@@ -364,7 +364,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const providerRetrySettings = settingsManager.getProviderRetrySettings();
 		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-		const headerRunner = extensionRunnerRef.current;
 		return {
 			...options,
 			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
@@ -373,10 +372,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			maxRetryDelayMs: options.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
 			// Replaces the agent loop's default identity.
 			identity: getClientIdentity(),
-			transformHeaders: async (headers) =>
-				headerRunner?.hasHandlers("before_provider_headers")
+			// The runner of the moment of each call, as in the other hooks: the cache warmer replays these options
+			// later, also after a /reload replaced the runner (claim A4).
+			transformHeaders: async (headers) => {
+				const headerRunner = extensionRunnerRef.current;
+				return headerRunner?.hasHandlers("before_provider_headers")
 					? headerRunner.emitBeforeProviderHeaders(headers)
-					: headers,
+					: headers;
+			},
 		};
 	};
 	// Warm only requests for the selected model. Requests a virtual selection routed, or that an

@@ -2697,6 +2697,96 @@ describe("openai-codex streaming", () => {
 		expect(getOpenAICodexWebSocketDebugStats(sessionId)).toMatchObject({ fullContextRequests: 1, deltaRequests: 2 });
 	});
 
+	// Regression test for https://github.com/earendil-works/pi/issues/12444: past about 125k input tokens the context clamp
+	// changes max_output_tokens every turn, which dropped previous_response_id and resent the whole input.
+	it("keeps sending input deltas in websocket-cached mode when max_output_tokens changes", async () => {
+		const token = mockToken();
+		const sentBodies: Array<{ input: unknown[]; previous_response_id?: string; max_output_tokens?: number }> = [];
+
+		class MockWebSocket {
+			static OPEN = 1;
+			readyState = MockWebSocket.OPEN;
+			private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+			constructor(_url: string, _protocols?: string | string[] | { headers?: Record<string, string> }) {
+				queueMicrotask(() => this.dispatch("open", {}));
+			}
+
+			addEventListener(type: string, listener: (event: unknown) => void): void {
+				const listeners = this.listeners.get(type) ?? new Set();
+				listeners.add(listener);
+				this.listeners.set(type, listeners);
+			}
+
+			removeEventListener(type: string, listener: (event: unknown) => void): void {
+				this.listeners.get(type)?.delete(listener);
+			}
+
+			send(data: string): void {
+				sentBodies.push(JSON.parse(data));
+				const responseId = `resp_${sentBodies.length}`;
+				const item = {
+					type: "message",
+					id: `msg_${sentBodies.length}`,
+					role: "assistant",
+					status: "completed",
+					content: [{ type: "output_text", text: "OK" }],
+				};
+				const events = [
+					{ type: "response.created", response: { id: responseId } },
+					{ type: "response.output_item.added", item: { ...item, status: "in_progress", content: [] } },
+					{ type: "response.content_part.added", part: { type: "output_text", text: "" } },
+					{ type: "response.output_text.delta", delta: "OK" },
+					{ type: "response.output_item.done", item },
+					{
+						type: "response.completed",
+						response: {
+							id: responseId,
+							status: "completed",
+							usage: { input_tokens: 5, output_tokens: 1, total_tokens: 6 },
+						},
+					},
+				];
+				queueMicrotask(() => {
+					for (const event of events) this.dispatch("message", { data: JSON.stringify(event) });
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+
+			private dispatch(type: string, event: unknown): void {
+				for (const listener of this.listeners.get(type) ?? []) listener(event);
+			}
+		}
+
+		vi.stubGlobal("WebSocket", MockWebSocket);
+
+		const model = buildCodexModel("gpt-6.2-sol");
+		const sessionId = "session-max-tokens-deltas";
+		const messages: Context["messages"] = [];
+		for (const [turn, maxTokens] of [128000, 122789, 128000].entries()) {
+			messages.push({ role: "user", content: `Turn ${turn + 1}`, timestamp: turn });
+			const reply = await streamOpenAICodexResponses(model, normalizeContext({ messages }), {
+				apiKey: token,
+				sessionId,
+				transport: "websocket-cached",
+				maxTokens,
+			}).result();
+			messages.push(reply);
+		}
+
+		expect(sentBodies.map((body) => body.max_output_tokens)).toEqual([128000, 122789, 128000]);
+		expect(sentBodies.map((body) => body.previous_response_id)).toEqual([undefined, "resp_1", "resp_2"]);
+		expect(sentBodies.map((body) => summarizeInput(body as Record<string, unknown>))).toEqual([
+			["user"],
+			["user"],
+			["user"],
+		]);
+		expect(getOpenAICodexWebSocketDebugStats(sessionId)).toMatchObject({ fullContextRequests: 1, deltaRequests: 2 });
+	});
+
 	it("sends only response input deltas in websocket-cached mode", async () => {
 		const token = mockToken();
 		const sentBodies: unknown[] = [];

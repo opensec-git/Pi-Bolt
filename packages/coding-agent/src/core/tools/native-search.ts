@@ -4,12 +4,16 @@
  * process and needs nothing installed.
  *
  * It follows ripgrep's and fd's rules for what is searched: the ignore files (.gitignore in a git repository, or anywhere for
- * find, as Pi runs fd with --no-require-git outside one; .ignore; .git/info/exclude; git's global excludes file), the parent
- * folders' up to the repository's root, a nested repository starting afresh; hidden files searched; symbolic links not
- * followed; binary files (with a NUL byte) skipped. Unlike them it never looks inside .git, and it returns results in path
- * order. Regular expressions are JavaScript's, with ripgrep's (?i) and (?P<name>...) understood; like ripgrep, a match is
- * within one line. An expression is run only where it cannot take long (regex-work.ts); the lines it could take long on are
- * reported instead (`slowLines`), for the grep tool to search with ripgrep.
+ * find, as Pi runs fd with --no-require-git outside one; .ignore, which decides over them; .git/info/exclude; git's global
+ * excludes file, in every repository), the parent folders' up to the repository's root (outside one, up to the disk's), a
+ * nested repository starting afresh (but for find outside a repository); a --glob matched against folders too; hidden files
+ * searched; symbolic links not followed; binary files (with a NUL byte) skipped, but for UTF-16 text with a byte order mark;
+ * find's smart case; and, as they do, a search ends at its limit without walking the rest of a large tree (walkInParts).
+ * Unlike them it never looks inside .git, and it returns results in path order (within each part of the walk). Regular expressions are
+ * JavaScript's, with ripgrep's forms that have a counterpart translated (translatePattern) and the others left to ripgrep;
+ * like ripgrep, a match is within one line, and only "\n" ends one (a CRLF ending counts as the line's end too). An
+ * expression is run only where it cannot take long (regex-work.ts); the lines it could take long on are reported instead
+ * (`slowLines`), for the grep tool to search with ripgrep.
  */
 import {
 	closeSync,
@@ -375,12 +379,10 @@ interface IgnoreRule {
 	dirOnly: boolean;
 	/** Matched against the path below `base`, not against the name alone. */
 	anchored: boolean;
-	/** From git's files (.gitignore, info/exclude, the excludes file), which a nested repository does not inherit. */
-	git: boolean;
 }
 
 /** The rules of a .gitignore-style file (gitignore(5)). */
-export function parseIgnoreFile(text: string, base: string, git: boolean): IgnoreRule[] {
+export function parseIgnoreFile(text: string, base: string): IgnoreRule[] {
 	const rules: IgnoreRule[] = [];
 	for (const raw of text.split(/\r?\n/)) {
 		let line = raw.replace(/(?<!\\) +$/, "");
@@ -397,7 +399,7 @@ export function parseIgnoreFile(text: string, base: string, git: boolean): Ignor
 		if (!line) continue;
 		const anchored = line.includes("/");
 		if (line.startsWith("/")) line = line.slice(1);
-		rules.push({ base, pattern: line, matches: compileGlob(line), negate, dirOnly, anchored, git });
+		rules.push({ base, pattern: line, matches: compileGlob(line), negate, dirOnly, anchored });
 	}
 	return rules;
 }
@@ -444,9 +446,9 @@ function readSmallFile(file: string): string {
 	}
 }
 
-function readRules(file: string, base: string, git: boolean): IgnoreRule[] {
+function readRules(file: string, base: string): IgnoreRule[] {
 	try {
-		return parseIgnoreFile(readSmallFile(file), base, git);
+		return parseIgnoreFile(readSmallFile(file), base);
 	} catch {
 		return [];
 	}
@@ -516,8 +518,10 @@ export interface WalkOptions {
 	root: string;
 	/** Use git's ignore files only in a git repository (ripgrep), or anywhere (fd --no-require-git). */
 	requireGit: boolean;
-	/** Files this takes are walked even when an ignore file leaves them out (ripgrep's --glob overrides them). */
+	/** Entries this takes are walked even when an ignore file leaves them out (ripgrep's --glob overrides them). */
 	override?: (rel: string) => boolean;
+	/** Folders this takes are not walked (ripgrep's --glob with `!`, which leaves out folders too). */
+	skipDir?: (rel: string) => boolean;
 	/**
 	 * The entries returned (default: all). Folders are walked whether or not they are kept: what a search does not want is not
 	 * held while the walk goes on (a walk through a whole disk finds millions of entries).
@@ -526,36 +530,96 @@ export interface WalkOptions {
 	signal?: AbortSignal;
 }
 
+/**
+ * The ignore rules in force in a folder, by where they are from. As in ripgrep and fd, a match in a .ignore file decides over
+ * git's files, and git's own files (info/exclude, then the .gitignore files) over its global excludes file; within each, the
+ * last rule that matches. `all` holds them in that order, so that the last rule of it that matches decides.
+ */
+interface RuleSets {
+	global: IgnoreRule[];
+	git: IgnoreRule[];
+	ignore: IgnoreRule[];
+	all: IgnoreRule[];
+}
+
+function ruleSets(global: IgnoreRule[], git: IgnoreRule[], ignore: IgnoreRule[]): RuleSets {
+	return { global, git, ignore, all: [...global, ...git, ...ignore] };
+}
+
 interface DirTask {
 	abs: string;
 	rel: string;
-	rules: IgnoreRule[];
+	rules: RuleSets;
 	git: boolean;
+}
+
+/**
+ * The highest folder above `root` (not `root` itself) with one of `names` in it, outside a repository: ripgrep and fd read
+ * the ignore files of every folder above the search folder.
+ */
+function highestWith(root: string, names: readonly string[]): string | undefined {
+	let highest: string | undefined;
+	for (let dir = path.dirname(root); ; dir = path.dirname(dir)) {
+		if (names.some((name) => existsSync(path.join(dir, name)))) highest = dir;
+		if (path.dirname(dir) === dir) return highest;
+	}
 }
 
 /** Every entry below `root` that the ignore files leave in (and `keep` takes), in no particular order. */
 export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
+	const entries: WalkEntry[] = [];
+	for await (const part of walkInParts(options, Number.POSITIVE_INFINITY)) {
+		for (const entry of part) entries.push(entry);
+	}
+	return entries;
+}
+
+/**
+ * How many entries (of those the ignore files leave in) a walk goes through before it hands on what it kept: a search that
+ * has its results then stops there, as ripgrep and fd stop at their limit. A tree within it is searched whole, in path
+ * order. (Walking the whole tree first took 27 s for a grep with the default limit in a folder of a million files, where
+ * ripgrep took 44 ms, and over two minutes for a find in a home folder, where fd took 0.2 s.)
+ */
+const WALK_PART_ENTRIES = 10_000;
+
+/**
+ * `walk` a part at a time: what `keep` took, each time the walk has gone through `partEntries` more entries, and at its
+ * end. Leaving the loop over it stops the walk.
+ */
+export async function* walkInParts(
+	options: WalkOptions,
+	partEntries: number = WALK_PART_ENTRIES,
+): AsyncGenerator<WalkEntry[]> {
 	const root = path.resolve(options.root);
 	const repository = repositoryOf(root);
-	// Paths are matched relative to the top folder: the repository's, whose ignore files above the search folder apply too.
-	const top = repository ?? root;
-	const rootRel = toPosix(path.relative(top, root));
 	const git = repository !== undefined || !options.requireGit;
-	const rules: IgnoreRule[] = [];
-	if (repository) {
-		rules.push(...readRules(globalExcludesFile(), "", true));
-		rules.push(...readRules(excludeFileOf(repository), "", true));
-		// The ignore files of the folders from the repository's down to the search folder's parent.
-		let dir = repository;
-		for (const segment of rootRel ? rootRel.split("/") : []) {
-			const base = toPosix(path.relative(top, dir));
-			rules.push(...readRules(path.join(dir, ".gitignore"), base, true));
-			rules.push(...readRules(path.join(dir, ".ignore"), base, false));
-			dir = path.join(dir, segment);
-		}
+	// Paths are matched relative to the top folder: the repository's, whose ignore files above the search folder apply too;
+	// outside one, the highest folder above with an ignore file (.ignore; .gitignore too where git's files count anywhere).
+	const top = repository ?? highestWith(root, git ? [".ignore", ".gitignore"] : [".ignore"]) ?? root;
+	const rootRel = toPosix(path.relative(top, root));
+	// git's global excludes file counts in every repository, nested ones too, and anywhere where git's files do (find).
+	let globalRules: IgnoreRule[] | undefined;
+	const globalExcludes = () => {
+		globalRules ??= readRules(globalExcludesFile(), "");
+		return globalRules;
+	};
+	const gitRules = repository ? readRules(excludeFileOf(repository), "") : [];
+	const ignoreRules: IgnoreRule[] = [];
+	// The ignore files of the folders from the top folder down to the search folder's parent.
+	let dir = top;
+	for (const segment of rootRel ? rootRel.split("/") : []) {
+		const base = toPosix(path.relative(top, dir));
+		if (git) gitRules.push(...readRules(path.join(dir, ".gitignore"), base));
+		ignoreRules.push(...readRules(path.join(dir, ".ignore"), base));
+		dir = path.join(dir, segment);
 	}
+	const rules = ruleSets(git ? globalExcludes() : [], gitRules, ignoreRules);
+	// fd outside a repository (Pi runs it with --no-require-git there) keeps the .gitignore files above a nested repository
+	// in force inside it; ripgrep, and fd in a repository, start afresh in a nested one.
+	const nestedStartsAfresh = options.requireGit || repository !== undefined;
 
-	const entries: WalkEntry[] = [];
+	let entries: WalkEntry[] = [];
+	let walked = 0;
 	const visit = async (task: DirTask): Promise<DirTask[]> => {
 		let dirents: Dirent[];
 		try {
@@ -568,15 +632,17 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 		const topRel = (rel: string) => (rootRel ? (rel ? `${rootRel}/${rel}` : rootRel) : rel);
 		const base = topRel(task.rel);
 		if (task.rel !== "" && names.has(".git")) {
-			// A repository of its own: the ignore rules of the one around it stop here.
-			taskRules = taskRules.filter((rule) => !rule.git);
-			taskRules.push(...readRules(excludeFileOf(task.abs), base, true));
+			// A repository of its own: the git rules of the one around it stop here (see nestedStartsAfresh).
+			const outer = nestedStartsAfresh ? [] : taskRules.git;
+			const exclude = readRules(excludeFileOf(task.abs), base);
+			taskRules = ruleSets(taskGit ? taskRules.global : globalExcludes(), [...outer, ...exclude], taskRules.ignore);
 			taskGit = true;
 		}
-		if (taskGit && names.has(".gitignore")) {
-			taskRules = [...taskRules, ...readRules(path.join(task.abs, ".gitignore"), base, true)];
+		const gitignore = taskGit && names.has(".gitignore") ? readRules(path.join(task.abs, ".gitignore"), base) : [];
+		const ignore = names.has(".ignore") ? readRules(path.join(task.abs, ".ignore"), base) : [];
+		if (gitignore.length > 0 || ignore.length > 0) {
+			taskRules = ruleSets(taskRules.global, [...taskRules.git, ...gitignore], [...taskRules.ignore, ...ignore]);
 		}
-		if (names.has(".ignore")) taskRules = [...taskRules, ...readRules(path.join(task.abs, ".ignore"), base, false)];
 
 		const subdirs: DirTask[] = [];
 		for (const dirent of dirents) {
@@ -590,9 +656,11 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 						: undefined;
 			if (!kind) continue;
 			const rel = task.rel ? `${task.rel}/${dirent.name}` : dirent.name;
-			if (taskRules.length > 0 && isIgnored(taskRules, topRel(rel), kind === "dir")) {
-				if (kind === "dir" || !options.override?.(rel)) continue;
+			if (taskRules.all.length > 0 && isIgnored(taskRules.all, topRel(rel), kind === "dir")) {
+				if (!options.override?.(rel)) continue;
 			}
+			if (kind === "dir" && options.skipDir?.(rel)) continue;
+			walked++;
 			const abs = path.join(task.abs, dirent.name);
 			if (!options.keep || options.keep(rel, kind)) entries.push({ rel, abs, kind });
 			if (kind === "dir") subdirs.push({ abs, rel, rules: taskRules, git: taskGit });
@@ -607,8 +675,14 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 		const batch = pending.splice(0, 64);
 		const found = await Promise.all(batch.map(visit));
 		for (const subdirs of found) pending.push(...subdirs);
+		if (walked >= partEntries && pending.length > 0) {
+			const part = entries;
+			entries = [];
+			walked = 0;
+			yield part;
+		}
 	}
-	return entries;
+	yield entries;
 }
 
 const byPath = (a: WalkEntry, b: WalkEntry) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0);
@@ -624,9 +698,14 @@ export interface NativeFindOptions {
 	pattern: string;
 	limit: number;
 	signal?: AbortSignal;
+	/** How many entries the walk goes through at a time (default: WALK_PART_ENTRIES). */
+	walkPartEntries?: number;
 }
 
-/** The entries that match, in path order, folders with a trailing `/`, at most `limit`. */
+/**
+ * The entries that match, folders with a trailing `/`, at most `limit`: in path order, within the parts of the walk it took
+ * to find `limit` (walkInParts). As fd's smart case, a pattern without capital letters matches names in any case.
+ */
 export async function nativeFind(options: NativeFindOptions): Promise<string[]> {
 	// A leading "./" is the search folder itself (#12020).
 	const pattern = options.pattern.replace(/^(?:\.\/)+(?=.)/, "");
@@ -634,11 +713,20 @@ export async function nativeFind(options: NativeFindOptions): Promise<string[]> 
 	const rootPrefix =
 		fullPath && path.isAbsolute(pattern) ? `${options.root.split(path.sep).join("/").replace(/\/+$/, "")}/` : "";
 	const patterns = expandBraces(pattern).map(compileGlob);
+	// (A pattern without letters is the same in either case: no subject is lowered for it.)
+	const anyCase = pattern === pattern.toLowerCase() && pattern !== pattern.toUpperCase();
 	const keep = (rel: string) => {
-		const subject = fullPath ? rootPrefix + rel : rel.slice(rel.lastIndexOf("/") + 1);
+		const name = fullPath ? rootPrefix + rel : rel.slice(rel.lastIndexOf("/") + 1);
+		const subject = anyCase ? name.toLowerCase() : name;
 		return patterns.some((matches) => matches(subject));
 	};
-	return (await walk({ root: options.root, requireGit: false, keep, signal: options.signal }))
+	const found: WalkEntry[] = [];
+	const walkOptions = { root: options.root, requireGit: false, keep, signal: options.signal };
+	for await (const part of walkInParts(walkOptions, options.walkPartEntries)) {
+		for (const entry of part) found.push(entry);
+		if (found.length >= options.limit) break;
+	}
+	return found
 		.sort(byPath)
 		.slice(0, Math.max(0, options.limit))
 		.map((entry) => (entry.kind === "dir" ? `${entry.rel}/` : entry.rel));
@@ -674,6 +762,10 @@ export interface NativeGrepOptions {
 	/** Files larger than this are read a piece at a time, of `pieceBytes` (defaults: WHOLE_FILE_BYTES, PIECE_BYTES). */
 	wholeFileBytes?: number;
 	pieceBytes?: number;
+	/** How many entries the walk goes through at a time (default: WALK_PART_ENTRIES). */
+	walkPartEntries?: number;
+	/** How a file named on its own that has NUL bytes is searched (default: NAMED_FILE_NULS, this platform's ripgrep's). */
+	namedFileNuls?: NamedFileNuls;
 }
 
 /** A line of a file. */
@@ -699,10 +791,12 @@ export interface NativeGrepResult {
 const SLOW_LINES_KEPT = 20;
 
 /**
- * A ripgrep (Rust) regular expression as JavaScript's: (?i), (?P<name>...) and \x{...}/\u{...} code points, the forms that
- * differ and are common.
+ * A ripgrep (Rust) regular expression as JavaScript's: (?i), (?P<name>...), \x{...}/\u{...} code points, POSIX classes
+ * (`[[:space:]]`), `\<` and `\>`, and a `]` first in a class, the forms that differ and are common. `ripgrepOnly` names a
+ * form that has no JavaScript counterpart here and that JavaScript would take in another meaning or refuse (`\p{L}`, which
+ * without the u flag is the text "p{L}"; an inline flag group; a class inside a class): only ripgrep searches for it.
  */
-export function translatePattern(pattern: string): { source: string; ignoreCase: boolean } {
+export function translatePattern(pattern: string): { source: string; ignoreCase: boolean; ripgrepOnly?: string } {
 	let source = pattern;
 	let ignoreCase = false;
 	if (source.startsWith("(?i)")) {
@@ -721,7 +815,99 @@ export function translatePattern(pattern: string): { source: string; ignoreCase:
 			.join("");
 		return `${slashes}${units.length > 1 ? `(?:${escaped})` : escaped}`;
 	});
-	return { source, ignoreCase };
+	if (!/[[\\(]/.test(source)) return { source, ignoreCase };
+	return { ...translateForms(source), ignoreCase };
+}
+
+/** ripgrep's POSIX classes, of ASCII characters as there, as the inside of a JavaScript class. */
+const POSIX_CLASSES: Record<string, string> = {
+	alnum: "0-9A-Za-z",
+	alpha: "A-Za-z",
+	ascii: "\\x00-\\x7F",
+	blank: "\\t ",
+	cntrl: "\\x00-\\x1F\\x7F",
+	digit: "0-9",
+	graph: "!-~",
+	lower: "a-z",
+	print: " -~",
+	punct: "!-/:-@\\[-`{-~",
+	space: "\\t\\n\\v\\f\\r ",
+	upper: "A-Z",
+	word: "0-9A-Za-z_",
+	xdigit: "0-9A-Fa-f",
+};
+
+/** A character that `\b` next to it makes `\<` or `\>`: a plain word character, not made optional. */
+const isWordChar = (c: string | undefined) => c !== undefined && /^[0-9A-Za-z_]$/.test(c);
+
+/** `translatePattern`'s pass over classes, escapes and groups. */
+function translateForms(source: string): { source: string; ripgrepOnly?: string } {
+	let out = "";
+	let ripgrepOnly: string | undefined;
+	// Where the class being read starts its members (after `[` and a `^`); -1 outside a class.
+	let classFrom = -1;
+	for (let i = 0; i < source.length; i++) {
+		const c = source[i];
+		const next = source[i + 1];
+		if (c === "\\") {
+			if (next === "p" || next === "P") ripgrepOnly ??= `\\${next}`;
+			else if (classFrom === -1 && (next === "A" || next === "z")) ripgrepOnly ??= `\\${next}`;
+			else if (classFrom === -1 && next === "b" && source[i + 2] === "{") ripgrepOnly ??= "\\b{...}";
+			if (classFrom === -1 && next === "<") {
+				// The start of a word: a word character after a place that is not one.
+				const plain = isWordChar(source[i + 2]) && !"?*{".includes(source[i + 3] ?? "");
+				out += plain ? "\\b" : "\\b(?=\\w)";
+			} else if (classFrom === -1 && next === ">") {
+				const plain = isWordChar(out[out.length - 1]) && out[out.length - 2] !== "\\";
+				out += plain ? "\\b" : "\\b(?<=\\w)";
+			} else {
+				out += c + (next ?? "");
+			}
+			i++;
+			continue;
+		}
+		if (classFrom !== -1) {
+			if (c === "]" && i > classFrom) {
+				classFrom = -1;
+			} else if (c === "]") {
+				// (First in a class it is a member, as in ripgrep: in JavaScript `[]` would end the class.)
+				out += "\\]";
+				continue;
+			} else if (c === "[") {
+				const posix = /^\[:(\^?)([a-z]+):\]/.exec(source.slice(i));
+				const members = posix && !posix[1] ? POSIX_CLASSES[posix[2]] : undefined;
+				if (posix && members) {
+					out += members;
+					i += posix[0].length - 1;
+					continue;
+				}
+				ripgrepOnly ??= posix ? `[:${posix[1]}${posix[2]}:]` : "a class inside a class";
+			} else if ((c === "&" || c === "~" || c === "-") && next === c) {
+				ripgrepOnly ??= `${c}${c} in a class`;
+			}
+			out += c;
+			continue;
+		}
+		if (c === "[") {
+			classFrom = next === "^" ? i + 2 : i + 1;
+			out += next === "^" ? "[^" : "[";
+			if (next === "^") i++;
+			continue;
+		}
+		if (c === "(" && next === "?" && !/^\(\?(?:[:=!]|<[=!]|<[A-Za-z_])/.test(source.slice(i))) {
+			ripgrepOnly ??= "an inline flag group";
+		}
+		out += c;
+	}
+	return ripgrepOnly ? { source, ripgrepOnly } : { source: out };
+}
+
+/**
+ * The form of `pattern` (not a literal) that only ripgrep searches for (`translatePattern`), or undefined: the grep tool
+ * then searches with ripgrep, as Pi does.
+ */
+export function ripgrepOnlySyntax(pattern: string): string | undefined {
+	return translatePattern(pattern).ripgrepOnly;
 }
 
 /**
@@ -763,8 +949,10 @@ export function requiredLiteral(source: string): string | undefined {
 		}
 		if (c === "[") {
 			end();
-			const close = source.indexOf("]", i + 2);
-			if (close === -1) return undefined;
+			// The class ends at the first `]` not escaped (in JavaScript, `[]` is a class of its own and `[^]` one too).
+			let close = i + 1;
+			while (close < source.length && source[close] !== "]") close += source[close] === "\\" ? 2 : 1;
+			if (close >= source.length) return undefined;
 			i = close;
 			continue;
 		}
@@ -990,13 +1178,19 @@ function literalMatcher(pattern: string, ignoreCase: boolean): Matcher {
 
 function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 	const flags = ignoreCase ? "i" : "";
+	// One line at a time, without the m flag: in it `^` and `$` also match after and before a CR (and U+2028, U+2029),
+	// where for ripgrep, as here, only "\n" ends a line. A line's CRLF ending counts as its end too (ripgrep's --crlf):
+	// `bar$` finds "bar\r\n", and `^$` the empty lines of a file with CRLF line endings, not all of them.
 	let one: RegExp;
 	try {
-		one = new RegExp(source, `${flags}m`);
+		one = new RegExp(source, flags);
 	} catch (error) {
 		throw new Error(`regex parse error: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	const test = (line: string) => one.test(line);
+	const anchored = /[$^]/.test(source);
+	const test = anchored
+		? (line: string) => one.test(line) || (line.endsWith("\r") && one.test(line.slice(0, -1)))
+		: (line: string) => one.test(line);
 	const work = regexWork(source, ignoreCase);
 	// What every match contains: only the lines that have it are run through the expression.
 	const literal = requiredLiteral(source);
@@ -1105,10 +1299,12 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 						const start = at === 0 ? 0 : text.lastIndexOf("\n", at - 1) + 1;
 						let end = text.indexOf("\n", at);
 						if (end === -1) end = text.length;
-						// Within one line, as ripgrep matches: a match that runs past it counts if the line alone has one.
+						// Within one line, as ripgrep matches: a match that runs past it counts if the line alone has one. So
+						// does one of an expression with `^` or `$`, which the m flag the window is searched with lets match at a
+						// CR too. A line that has none is passed over whole: each place in it tried again would test it again.
 						const pastLine = at + match[0].length > end || (at === end && end < text.length);
-						if (pastLine && !one.test(text.slice(start, end))) {
-							lastIndex = at + 1;
+						if ((pastLine || anchored) && !test(text.slice(start, end))) {
+							lastIndex = end + 1;
 						} else {
 							if (line === -1) {
 								line = lineAtFrom();
@@ -1136,9 +1332,14 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 
 /**
  * The files a --glob takes: one glob, `!` before it to leave those out; against the name, or with a `/` the path. As in
- * ripgrep, a file it takes is searched even if an ignore file leaves it out (`include`).
+ * ripgrep, it is matched against folders too: a folder it takes is walked, and a file it takes searched, even if an ignore
+ * file leaves them out (`include`); with `!`, a folder it matches is not walked (`skipDir`).
  */
-function globFilter(glob: string | undefined): { take: (rel: string) => boolean; include?: (rel: string) => boolean } {
+function globFilter(glob: string | undefined): {
+	take: (rel: string) => boolean;
+	include?: (rel: string) => boolean;
+	skipDir?: (rel: string) => boolean;
+} {
 	if (!glob) return { take: () => true };
 	const exclude = glob.startsWith("!");
 	const pattern = exclude ? glob.slice(1) : glob;
@@ -1148,7 +1349,7 @@ function globFilter(glob: string | undefined): { take: (rel: string) => boolean;
 		const subject = fullPath ? rel : rel.slice(rel.lastIndexOf("/") + 1);
 		return patterns.some((matchesPattern) => matchesPattern(subject));
 	};
-	return { take: (rel) => matches(rel) !== exclude, include: exclude ? undefined : matches };
+	return exclude ? { take: (rel) => !matches(rel), skipDir: matches } : { take: matches, include: matches };
 }
 
 /** How much of a file an expression without a literal is run over at once (whole lines). */
@@ -1209,7 +1410,7 @@ const PIECE_BYTES = 1024 * 1024;
  * `matcher.search` over a file read a piece at a time, with the outcome of a search of the file read whole: each piece is
  * searched up to its last line break and the rest goes with the next, so a match is within a line as before; and a file with
  * a NUL byte anywhere (binary) has no matches, so it is read to its end, or to its first NUL byte. Undefined for a binary
- * file or one that could not be read. Memory: a piece, and the line a piece ends inside of.
+ * file or one that could not be read. A file named on its own is searched whole instead (`binary`, NAMED_FILE_NULS). Memory: a piece, and the line a piece ends inside of.
  *
  * Its speed is that of a search of the file read whole: one buffer, read into again (the start of a line a piece ends inside
  * of is moved to its front); and line breaks are counted only up to the last piece that can have a match, as a file read
@@ -1224,6 +1425,7 @@ async function searchInPieces(
 	pieceBytes: number,
 	turns: Turns,
 	slow: SlowLine,
+	binary: Binary,
 ): Promise<NativeGrepMatch[] | undefined> {
 	let handle: FileHandle;
 	try {
@@ -1270,7 +1472,8 @@ async function searchInPieces(
 			}
 			readAt += bytesRead;
 			const filled = kept + bytesRead;
-			if (buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
+			if (binary === "skip" && buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
+			if (binary === "nulIsLineBreak") nulsToLineBreaks(buffer.subarray(kept, filled));
 			const end = bytesRead === 0;
 			// The lines this piece ends: up to its last line break; at the end of the file, the last line, if it has no break.
 			// (Looked for in the piece only: what was kept has none, and a long line would be searched again for each piece.)
@@ -1312,11 +1515,14 @@ async function searchInPieces(
 						return undefined;
 					}
 					if (count === 0) return undefined; // (Cut short since: as a file that could not be read.)
+					if (binary === "nulIsLineBreak") nulsToLineBreaks(again.subarray(0, count));
 					line += countLines(again, 0, count);
 					countedAt += count;
 				}
+				// (A UTF-8 byte order mark is left out, as in a file read whole: withoutByteOrderMark.)
+				const bom = bufferAt === 0 && lines[0] === 0xef && lines[1] === 0xbb && lines[2] === 0xbf ? 3 : 0;
 				const rest = matcher.search(
-					lines,
+					bom > 0 ? lines.subarray(bom) : lines,
 					file,
 					budget - found.length,
 					keepChars,
@@ -1359,19 +1565,13 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 				? regexMatcher(options.pattern.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&"), true)
 				: literalMatcher(options.pattern, Boolean(options.ignoreCase));
 	} else {
-		const { source, ignoreCase } = translatePattern(options.pattern);
+		const { source, ignoreCase, ripgrepOnly } = translatePattern(options.pattern);
+		if (ripgrepOnly) {
+			throw new Error(
+				`regex parse error: ${ripgrepOnly} is ripgrep's syntax, which the built-in search does not have, and ripgrep (rg) is not available`,
+			);
+		}
 		matcher = regexMatcher(source, Boolean(options.ignoreCase) || ignoreCase);
-	}
-
-	let files: string[];
-	if (options.isDirectory) {
-		const { take, include } = globFilter(options.glob);
-		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
-		files = (await walk({ root: options.root, requireGit: true, override: include, keep, signal: options.signal }))
-			.sort(byPath)
-			.map((entry) => entry.abs);
-	} else {
-		files = [options.root];
 	}
 
 	const matches: NativeGrepMatch[] = [];
@@ -1383,12 +1583,76 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 		if (options.slowLines !== "skip") throw new StopAtSlowLine();
 	};
 	try {
-		const limitReached = await searchFiles(files, matcher, matches, slow, options);
-		return { matches, limitReached, slowLines, slowLineCount };
+		if (!options.isDirectory) {
+			// A file named on its own is searched even with a NUL byte, as ripgrep searches it (NAMED_FILE_NULS).
+			const nuls = options.namedFileNuls ?? NAMED_FILE_NULS;
+			const limitReached = await searchFiles([options.root], matcher, matches, slow, nuls, options);
+			return { matches, limitReached, slowLines, slowLineCount };
+		}
+		// A part of the walk at a time, each in path order: the search ends at the limit without walking the rest.
+		const { take, include, skipDir } = globFilter(options.glob);
+		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
+		const walkOptions = {
+			root: options.root,
+			requireGit: true,
+			override: include,
+			skipDir,
+			keep,
+			signal: options.signal,
+		};
+		for await (const part of walkInParts(walkOptions, options.walkPartEntries)) {
+			const files = part.sort(byPath).map((entry) => entry.abs);
+			if (await searchFiles(files, matcher, matches, slow, "skip", options)) {
+				return { matches, limitReached: true, slowLines, slowLineCount };
+			}
+		}
+		return { matches, limitReached: false, slowLines, slowLineCount };
 	} catch (error) {
 		if (error instanceof StopAtSlowLine) return { matches, limitReached: false, slowLines, slowLineCount };
 		throw error;
 	}
+}
+
+/**
+ * A file's text as UTF-8 without a byte order mark, as ripgrep searches it: a UTF-8 one left out, and a file that starts
+ * with a UTF-16 one decoded (a Windows tool's output, PowerShell's `>`); any other as it is. Line numbers stay the file's.
+ */
+export function withoutByteOrderMark(contents: Buffer): Buffer {
+	if (contents[0] === 0xef && contents[1] === 0xbb && contents[2] === 0xbf) return contents.subarray(3);
+	if (contents[0] === 0xff && contents[1] === 0xfe) {
+		return Buffer.from(new TextDecoder("utf-16le").decode(contents.subarray(2)), "utf8");
+	}
+	if (contents[0] === 0xfe && contents[1] === 0xff) {
+		return Buffer.from(new TextDecoder("utf-16be").decode(contents.subarray(2)), "utf8");
+	}
+	return contents;
+}
+
+/**
+ * What a search does with a file that has a NUL byte: passes it over as binary (a file found by the walk, as ripgrep), or
+ * searches it (a file named on its own, as ripgrep: NAMED_FILE_NULS) with each NUL byte as a line break
+ * (`nulsToLineBreaks`) or as a character of its line.
+ */
+type Binary = "skip" | NamedFileNuls;
+
+/** How a file named on its own that has NUL bytes is searched (NAMED_FILE_NULS). */
+export type NamedFileNuls = "nulIsLineBreak" | "nulIsText";
+
+/**
+ * How ripgrep, which Pi runs, searches a file named on its own that has NUL bytes. It maps such a file into memory where
+ * it can, which it never does on macOS (grep-searcher's MmapChoice::open). A file it reads is searched with each NUL byte as
+ * a line break, and its lines numbered so: on macOS, "needle" after "abc\0def\n" is on line 3, in "def needle". A mapped
+ * one is searched as text, the NUL bytes characters of their lines: on Linux and Windows the same "needle" is on line 2,
+ * in "abc\0def needle". (Checked with ripgrep 14.1.0 to 15.2.0, with --mmap and --no-mmap.)
+ */
+export const NAMED_FILE_NULS: NamedFileNuls = process.platform === "darwin" ? "nulIsLineBreak" : "nulIsText";
+
+/**
+ * Each NUL byte of `bytes` made a line break, in place: ripgrep searches a file named on its own that has NUL bytes so,
+ * and numbers its lines so ("needle" after "abc\0def\n" is on line 3).
+ */
+export function nulsToLineBreaks(bytes: Buffer): void {
+	for (let at = bytes.indexOf(0); at !== -1; at = bytes.indexOf(0, at + 1)) bytes[at] = NEWLINE;
 }
 
 /** Searches `files` in order into `matches`; whether the limit stopped the search. */
@@ -1397,6 +1661,7 @@ async function searchFiles(
 	matcher: Matcher,
 	matches: NativeGrepMatch[],
 	slow: SlowLine,
+	binary: Binary,
 	options: NativeGrepOptions,
 ): Promise<boolean> {
 	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
@@ -1426,17 +1691,30 @@ async function searchFiles(
 				sizes[requested] = undefined;
 			}
 		}
-		const contents = await reads[index];
+		let contents = await reads[index];
 		reads[index] = undefined; // (Done with it: let it go.)
 		if (typeof contents === "number") {
 			const budget = options.limit - matches.length;
 			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
-			const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns, slow);
+			const found = await searchInPieces(
+				files[index],
+				matcher,
+				budget,
+				options.keepChars,
+				pieceBytes,
+				turns,
+				slow,
+				binary,
+			);
 			if (found) matches.push(...found);
 		} else {
 			if (!contents || contents.length === 0) continue;
+			contents = withoutByteOrderMark(contents);
 			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
-			if (contents.indexOf(0) !== -1) continue; // (Binary.)
+			if (binary !== "nulIsText" && contents.indexOf(0) !== -1) {
+				if (binary === "skip") continue; // (Binary.)
+				nulsToLineBreaks(contents);
+			}
 			const budget = options.limit - matches.length;
 			const rest = matcher.search(
 				contents,

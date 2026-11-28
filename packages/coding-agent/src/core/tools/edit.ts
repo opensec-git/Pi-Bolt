@@ -10,6 +10,7 @@ import {
 	type Edit,
 	generateEditDiff,
 	normalizeToLF,
+	releaseFuzzyMatchCache,
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
@@ -134,6 +135,8 @@ export function createEditToolDefinition(
 		promptGuidelines: [...editToolSystemPromptContribution.guidelines],
 		parameters: editSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
+		// Later calls of the same message see the edited file (upstream #11950).
+		executionMode: "sequential",
 		renderShell: "self",
 		prepareArguments: prepareEditArguments,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, ctx?: ExtensionContext) {
@@ -197,6 +200,7 @@ export function createEditToolDefinition(
 				const finalContent =
 					bom + (content === normalizedContent ? newContent : applyReplacementsToOriginal(content, replacements));
 				await ops.writeFile(absolutePath, finalContent);
+				releaseFuzzyMatchCache(normalizedContent);
 				throwIfAborted();
 
 				return {

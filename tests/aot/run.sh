@@ -18,12 +18,13 @@ OUT="$PIBOLT_WORK/tests/aot"
 mkdir -p "$OUT"
 
 tests=("$@")
-[ ${#tests[@]} -eq 0 ] && tests=(liveness.mjs mapset.mjs realms.mjs workers.mjs workers-many.mjs spread-loops.mjs number-encoding.mjs helper-calls.mjs callbacks.mjs methods.mjs dictionaries.mjs variables.mjs polymorphic.mjs strings.mjs unicode-regexps.mjs builtins.mjs declined.mjs deferred-builtins.mjs wide-constants.mjs intl-locales.mjs edge-cases.mjs sort-comparators.mjs json-stringify.mjs await-order.mjs string-or-array.mjs)
+[ ${#tests[@]} -eq 0 ] && tests=(liveness.mjs mapset.mjs realms.mjs workers.mjs workers-many.mjs spread-loops.mjs number-encoding.mjs helper-calls.mjs callbacks.mjs methods.mjs dictionaries.mjs variables.mjs polymorphic.mjs strings.mjs unicode-regexps.mjs builtins.mjs declined.mjs deferred-builtins.mjs wide-constants.mjs intl-locales.mjs edge-cases.mjs sort-comparators.mjs json-stringify.mjs await-order.mjs string-or-array.mjs deferred-namespace.mjs)
 status=0
 for t in "${tests[@]}"; do
 	name=${t%.mjs}
-	# Of this tree's engine: the 14th worker of an older one ends the process.
-	if [ "$name" = workers-many ] && runtime_is_older "$BUN"; then
+	# Of this tree's engine: the 14th worker of an older one ends the process, and an older one gives a built-in's namespace in a
+	# module loaded later as a plain object.
+	if { [ "$name" = workers-many ] || [ "$name" = deferred-namespace ]; } && runtime_is_older "$BUN"; then
 		echo "SKIP $name: the runtime is an older engine than this tree's"
 		continue
 	fi

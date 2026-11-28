@@ -50,6 +50,7 @@ import {
 	resolveGrammarConstrainedSampling,
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
+import { collectReasoningDrops, droppedBlocksOf, isDroppedBlock, type ReasoningDropFormat } from "./reasoning-drops.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -265,6 +266,7 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 		cache ? sources : undefined,
 		{ preserveTextOnlyReplies: true },
 	);
+	const drops = collectReasoningDrops(normalizedContext.messages, OPENAI_REASONING_DROPS, model);
 	/**
 	 * Converts one message with `convert`, which pushes what it converts to and returns what the loop needs besides;
 	 * with the cache, the values of an unchanged message are reused. `extra` is what the conversion reads besides the
@@ -389,8 +391,11 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 		} else if (msg.role === "assistant") {
 			// Text items without an id of their own are named after the message's index. The conversion gives the
 			// effort to switch to before the message; the switch depends on the efforts before it, so it is added here.
+			// Reasoning items the API removed for good are left out (#346); only the messages that have one convert again.
 			const start = messages.length;
-			const converted = unit(sources[index], msgIndex, (out): { effort: string | undefined } | undefined => {
+			const dropped = droppedBlocksOf(msg as AssistantMessage, drops, OPENAI_REASONING_DROPS);
+			const extra = dropped === undefined ? msgIndex : `${msgIndex}\u0000${dropped}`;
+			const converted = unit(sources[index], extra, (out): { effort: string | undefined } | undefined => {
 				const firstItem = out.length;
 				const assistantMsg = msg as AssistantMessage;
 				const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
@@ -400,7 +405,7 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 
 				for (const block of msg.content) {
 					if (block.type === "thinking") {
-						if (block.thinkingSignature) {
+						if (block.thinkingSignature && !(dropped && isDroppedBlock(block, drops, OPENAI_REASONING_DROPS))) {
 							const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
 							out.push(reasoningItem);
 						}
@@ -469,7 +474,8 @@ export function convertResolvedResponsesInput<TApi extends Api>(
 							out.push({
 								type: "function_call",
 								...replayedCall,
-								arguments: JSON.stringify(toolCall.arguments),
+								// The text the model sent, when serializing the parsed arguments would differ from it (#12444).
+								arguments: toolCall.rawArguments ?? JSON.stringify(toolCall.arguments),
 							});
 						}
 					}
@@ -851,7 +857,14 @@ export async function processResponsesStream<TApi extends Api>(
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall" && slot.input.kind === "json") {
 				if (item.arguments) slot.input.arguments.replaceFor(slot.block, item.arguments);
-				Object.assign(slot.block, slot.input.arguments.finish());
+				const finished = slot.input.arguments.finish();
+				Object.assign(slot.block, finished);
+				// Keep the exact text for replay when it does not serialize back the same (#12444). Malformed or empty
+				// text keeps the old replay of the parsed (empty) arguments.
+				const text = slot.input.arguments.text;
+				if (finished.argumentsError === undefined && text.trim() && text !== JSON.stringify(finished.arguments)) {
+					slot.block.rawArguments = text;
+				}
 				if (item.namespace !== undefined) slot.block.namespace = item.namespace;
 				unfinishedToolCalls.delete(slot.block);
 				stream.push({
@@ -909,7 +922,8 @@ export async function processResponsesStream<TApi extends Api>(
  * Record the replayed reasoning items the API withheld from the model, with the reason for each.
  * From GPT-6.2 on, OpenAI removes reasoning that follows an edit of earlier input (`prefix_mismatch`)
  * and reasoning created under another organization, end user, or model. A removal is reported again
- * on every later request that replays the item.
+ * on every later request that replays the item, so the converter stops replaying the items removed for
+ * good (OPENAI_REASONING_DROPS).
  *
  * `turn_boundary` removals are left out: models that use only current-turn reasoning (all models
  * before GPT-5.6) report every earlier turn's reasoning item on every request. That is their normal
@@ -933,6 +947,25 @@ function appendReasoningRemovals(output: AssistantMessage, transformations: Resp
 		},
 	});
 }
+
+/** OpenAI names a removed reasoning item by its id, which the replayed item carries in its signature. */
+const OPENAI_REASONING_DROPS: ReasoningDropFormat = {
+	diagnostic: "openai_input_transformations",
+	droppedType: "reasoning",
+	keyField: "id",
+	prefixReason: "prefix_mismatch",
+	modelReason: "model_mismatch",
+	blockKey(block) {
+		if (!block.thinkingSignature) return undefined;
+		// Session data: the signature is the reasoning item's JSON as the API returned it.
+		try {
+			const id = (JSON.parse(block.thinkingSignature) as { id?: unknown }).id;
+			return typeof id === "string" ? id : undefined;
+		} catch {
+			return undefined;
+		}
+	},
+};
 
 type CustomInput = Extract<ToolCallInput, { kind: "custom" }>;
 
