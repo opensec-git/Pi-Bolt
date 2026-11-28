@@ -38,6 +38,26 @@
         byId.set(entry.id, entry);
       }
 
+      // Parent links that form a cycle (a damaged session) would keep every walk below going. The link that closes a
+      // cycle is cut as the session manager cuts it: walking up from the last entry first, the entry whose parent is
+      // already on the walk becomes a root.
+      const cycleDone = new Set();
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const onPath = new Set();
+        let current = byId.get(entries[i].id);
+        let last;
+        while (current && !cycleDone.has(current.id)) {
+          if (onPath.has(current.id)) {
+            last.parentId = null;
+            break;
+          }
+          onPath.add(current.id);
+          last = current;
+          current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        for (const id of onPath) cycleDone.add(id);
+      }
+
       // Tool call lookup (toolCallId -> {name, arguments})
       const toolCallMap = new Map();
       for (const entry of entries) {
@@ -83,8 +103,10 @@
           });
         }
 
-        // Build parent-child relationships
+        // Build parent-child relationships. A repeated ID is placed once, from the entry byId holds: its other
+        // occurrences would add links the cycle cut above does not see.
         for (const entry of entries) {
+          if (byId.get(entry.id) !== entry) continue;
           const node = nodeMap.get(entry.id);
           if (entry.parentId === null || entry.parentId === undefined || entry.parentId === entry.id) {
             roots.push(node);
