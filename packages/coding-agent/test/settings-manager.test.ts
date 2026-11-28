@@ -492,6 +492,15 @@ describe("SettingsManager", () => {
 		});
 	});
 
+	describe("websocketConnectTimeoutMs", () => {
+		it("disables the timeout above the longest delay a timer holds", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ websocketConnectTimeoutMs: 2 ** 31 - 1 }));
+			expect(SettingsManager.create(projectDir, agentDir).getWebSocketConnectTimeoutMs()).toBe(2 ** 31 - 1);
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ websocketConnectTimeoutMs: 3_000_000_000 }));
+			expect(SettingsManager.create(projectDir, agentDir).getWebSocketConnectTimeoutMs()).toBe(0);
+		});
+	});
+
 	describe("cacheWarming", () => {
 		// Pi-Bolt keeps "streaming" as the default: "idle" re-sends the last request while the user is away, which spends
 		// their tokens without being asked, so it is opt-in (global settings only).
