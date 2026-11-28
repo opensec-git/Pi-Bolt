@@ -95,7 +95,13 @@ if [ "$PIBOLT_OS" = linux ] && ! runtime_is_older "$BUN"; then
 fi
 
 # hunt-engine-1
-check "blob-parts: fetch() sends a slice of a Blob made of Blobs" "whole=ok head=ok middle=ok tail=ok" "$("$BUN" blob-parts.mjs 2>&1)"
+if runtime_is_older "$BUN"; then
+	echo "SKIP blob-parts: the runtime is an older engine than this tree's"
+else
+	check "blob-parts: fetch() sends a slice of a Blob made of Blobs" \
+		"whole=ok head=ok middle=ok tail=ok within=ok nested=ok empty=ok fetch; read: whole=ok head=ok middle=ok tail=ok within=ok nested=ok empty=ok" \
+		"$("$BUN" blob-parts.mjs 2>&1)"
+fi
 
 port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 servers=()
