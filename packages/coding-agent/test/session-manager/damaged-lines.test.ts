@@ -1,7 +1,9 @@
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
+import { pathToFileURL } from "url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import { assistantMsg, userMsg } from "../utilities.ts";
@@ -201,4 +203,74 @@ describe("SessionManager with damaged lines", () => {
 			expect(session.buildSessionContext().messages[0]).toMatchObject({ role: "user", content: "original prompt" });
 		},
 	);
+
+	it("cuts parent links that form a cycle like a missing parent", () => {
+		// e1 and e2 name each other; e3 hangs below the cycle. In a second file a repeated id closes a cycle (the last
+		// definition of "a" names "b", whose parent is "a"). Walking the parent links never ended before, so the session
+		// is opened in a child process that is killed when it does not finish in time.
+		const message = (id: string, parentId: string | null) => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: userMsg(id),
+		});
+		const header = { type: "session", version: 3, id: "cycle", timestamp: "2026-01-01T00:00:00.000Z", cwd: dir };
+		const write = (name: string, entries: object[]) => {
+			const file = join(dir, name);
+			writeFileSync(file, `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+			return file;
+		};
+		const cycle = write("cycle.jsonl", [
+			message("r", null),
+			message("e1", "e2"),
+			message("e2", "e1"),
+			message("e3", "e2"),
+		]);
+		const repeated = write("repeated.jsonl", [message("a", null), message("b", "a"), message("a", "b")]);
+		const resolverUrl = pathToFileURL(resolve(__dirname, "../../src/experimental/source-resolver.ts")).href;
+		const managerUrl = pathToFileURL(resolve(__dirname, "../../src/core/session-manager.ts")).href;
+		const summaryUrl = pathToFileURL(resolve(__dirname, "../../src/core/compaction/branch-summarization.ts")).href;
+		const script = `
+			const { SessionManager } = await import(${JSON.stringify(managerUrl)});
+			const { collectEntriesForBranchSummary } = await import(${JSON.stringify(summaryUrl)});
+			const ids = (entries) => entries.map((entry) => entry.id);
+			const tree = (nodes) => nodes.map((node) => [node.entry.id, tree(node.children)]);
+			const result = {};
+			for (const [name, file] of Object.entries(${JSON.stringify({ cycle, repeated })})) {
+				const session = SessionManager.open(file, ${JSON.stringify(dir)});
+				result[name] = {
+					branch: ids(session.getBranch()),
+					fromE2: name === "cycle" ? ids(session.getBranch("e2")) : undefined,
+					tree: tree(session.getTree()),
+					messages: session.buildSessionContext().messages.length,
+					summary: name === "cycle" ? ids(collectEntriesForBranchSummary(session, "e3", "r").entries) : undefined,
+				};
+			}
+			process.stdout.write(JSON.stringify(result));
+		`;
+		const output = execFileSync(
+			process.execPath,
+			["--import", resolverUrl, "--input-type=module", "--eval", script],
+			{
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 15_000,
+			},
+		);
+
+		expect(JSON.parse(output)).toEqual({
+			cycle: {
+				branch: ["e1", "e2", "e3"],
+				fromE2: ["e1", "e2"],
+				tree: [
+					["r", []],
+					["e1", [["e2", [["e3", []]]]]],
+				],
+				messages: 3,
+				summary: ["e1", "e2", "e3"],
+			},
+			repeated: expect.objectContaining({ branch: ["b", "a"], messages: 2 }),
+		});
+	}, 30_000);
 });

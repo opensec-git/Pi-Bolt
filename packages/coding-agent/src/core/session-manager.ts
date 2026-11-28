@@ -480,14 +480,38 @@ function buildSessionPath(
 		return [];
 	}
 
+	return walkToRoot(leaf, index);
+}
+
+/**
+ * The path from the root to `leaf`. Parent links that form a cycle (only a damaged file has one) are cut where the walk
+ * meets an entry already on the path, as if that entry's parent were missing.
+ */
+function walkToRoot(leaf: SessionEntry | undefined, byId: ReadonlyMap<string, SessionEntry>): SessionEntry[] {
 	const path: SessionEntry[] = [];
-	let current: SessionEntry | undefined = leaf;
+	let current = leaf;
 	while (current) {
+		// A walk longer than the index has met an entry twice. Only then are the ids on the path tracked.
+		if (path.length > byId.size) return walkToRootCuttingCycle(leaf, byId);
 		path.push(current);
-		current = current.parentId ? index.get(current.parentId) : undefined;
+		current = current.parentId ? byId.get(current.parentId) : undefined;
 	}
-	path.reverse();
-	return path;
+	return path.reverse();
+}
+
+function walkToRootCuttingCycle(
+	leaf: SessionEntry | undefined,
+	byId: ReadonlyMap<string, SessionEntry>,
+): SessionEntry[] {
+	const path: SessionEntry[] = [];
+	const seen = new Set<string>();
+	let current = leaf;
+	while (current && !seen.has(current.id)) {
+		seen.add(current.id);
+		path.push(current);
+		current = current.parentId ? byId.get(current.parentId) : undefined;
+	}
+	return path.reverse();
 }
 
 function getSessionContextSettings(path: SessionEntry[]): Pick<SessionContext, "thinkingLevel" | "model"> {
@@ -1589,6 +1613,11 @@ export class SessionManager {
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 	/**
+	 * Whether the parent links may form a cycle: set by _buildIndex() when an entry names a parent that is not before it
+	 * in the file, or an id repeats. Appends cannot make one, so a healthy file never pays for the check in getTree().
+	 */
+	private linksMayCycle = false;
+	/**
 	 * The root-to-leaf path of `leafId`, kept between calls: an append extends it by one entry, so
 	 * the per-request projection does not walk the whole history. Never handed out; callers get copies.
 	 */
@@ -1696,6 +1725,7 @@ export class SessionManager {
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
 		this.leafId = null;
+		this.linksMayCycle = false;
 		this.flushed = false;
 
 		if (this.persist) {
@@ -1754,6 +1784,7 @@ export class SessionManager {
 				}
 			}
 		}
+		this.linksMayCycle = unlinked || this.byId.size + 1 !== this.fileEntries.length;
 		return unlinked;
 	}
 
@@ -2152,14 +2183,7 @@ export class SessionManager {
 	}
 
 	private _walkBranch(startId: string | null): SessionEntry[] {
-		const path: SessionEntry[] = [];
-		let current = startId ? this.byId.get(startId) : undefined;
-		while (current) {
-			path.push(current);
-			current = current.parentId ? this.byId.get(current.parentId) : undefined;
-		}
-		path.reverse();
-		return path;
+		return walkToRoot(startId ? this.byId.get(startId) : undefined, this.byId);
 	}
 
 	/** The cached path to the current leaf. Must not be modified or returned to callers. */
@@ -2367,6 +2391,7 @@ export class SessionManager {
 			previousId = entry.id;
 		}
 
+		const cuts = this.linksMayCycle ? this._cycleCuts() : undefined;
 		const roots: SessionTreeNode[] = [];
 		const forks: SessionTreeNode[] = [];
 		let previous: SessionTreeNode | undefined;
@@ -2374,7 +2399,7 @@ export class SessionManager {
 			if (entry.type === "session") continue;
 			const node = indexed.get(entry.id) ?? makeNode(entry);
 			const parentId = entry.parentId;
-			if (parentId === null || entry.id === parentId) {
+			if (parentId === null || entry.id === parentId || cuts?.has(entry.id)) {
 				roots.push(node);
 			} else {
 				const parent = previous?.entry.id === parentId ? previous : indexed.get(parentId);
@@ -2392,6 +2417,34 @@ export class SessionManager {
 			parent.children.sort((a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime());
 		}
 		return roots;
+	}
+
+	/**
+	 * The ids of entries whose parent link closes a cycle, found by walking up from every entry. getTree() makes each a
+	 * root, as walkToRoot() does for a branch: without the cut, a cycle and everything below it would be unreachable.
+	 * The walks start at the last entry, so a cycle above the leaf is cut where the leaf's branch cuts it.
+	 */
+	private _cycleCuts(): Set<string> {
+		const cuts = new Set<string>();
+		const done = new Set<string>();
+		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
+			const entry = this.fileEntries[i];
+			if (entry.type === "session") continue;
+			const onPath = new Set<string>();
+			let current = this.byId.get(entry.id);
+			let last: SessionEntry | undefined;
+			while (current && !done.has(current.id)) {
+				if (onPath.has(current.id)) {
+					if (last) cuts.add(last.id);
+					break;
+				}
+				onPath.add(current.id);
+				last = current;
+				current = current.parentId ? this.byId.get(current.parentId) : undefined;
+			}
+			for (const id of onPath) done.add(id);
+		}
+		return cuts;
 	}
 
 	// =========================================================================
