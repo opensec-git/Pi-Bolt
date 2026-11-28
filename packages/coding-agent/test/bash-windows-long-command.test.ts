@@ -15,13 +15,18 @@ import { MSYS_SHELL_GROUP_VARIABLE, SHELL_COMMAND_ENV_VAR } from "../src/utils/s
 // there is no Windows host here; windows-shell-config.test.ts runs real commands through Git Bash on the Windows CI runner.
 
 // Git for Windows: bin\bash.exe is the launcher, usr\bin\bash.exe the Cygwin-runtime bash, mingw64 its one subsystem.
+// Under a folder no machine has, and nothing under it is looked up on disk: on the Windows runner the real
+// C:\Program Files\Git answered for the paths the mock left out, and getDirectGitBash did not take the layout.
 const { spawnMock, spawnSyncMock, accessSyncMock, GIT_FILES } = vi.hoisted(() => {
-	const git = "C:\\Program Files\\Git";
+	const programFiles = "C:\\PiBoltTest Program Files";
+	const git = `${programFiles}\\Git`;
 	return {
 		spawnMock: vi.fn(),
 		spawnSyncMock: vi.fn(),
 		accessSyncMock: vi.fn(),
 		GIT_FILES: {
+			programFiles,
+			root: git,
 			launcher: `${git}\\bin\\bash.exe`,
 			bash: `${git}\\usr\\bin\\bash.exe`,
 			all: new Set([
@@ -39,7 +44,10 @@ vi.mock("node:fs", async (importOriginal) => {
 	return {
 		...actual,
 		accessSync: accessSyncMock,
-		existsSync: (path: Fs.PathLike) => GIT_FILES.all.has(String(path)) || actual.existsSync(path),
+		existsSync: (path: Fs.PathLike) =>
+			String(path).toLowerCase().startsWith(GIT_FILES.programFiles.toLowerCase())
+				? GIT_FILES.all.has(String(path))
+				: actual.existsSync(path),
 	};
 });
 
@@ -93,6 +101,8 @@ async function runBashTool(command: string, shellPath: string): Promise<SpawnCal
 beforeEach(() => {
 	Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 	vi.stubEnv("SystemRoot", "C:\\Windows");
+	// Git Bash is looked up under ProgramFiles first (getShellConfig without a shellPath, for `!command` values).
+	vi.stubEnv("ProgramFiles", GIT_FILES.programFiles);
 	accessSyncMock.mockReset();
 	spawnMock.mockReset().mockImplementation(fakeChild);
 	spawnSyncMock.mockReset().mockReturnValue({ status: 0, stdout: "resolved\n", stderr: "", pid: 1, output: [] });
@@ -145,7 +155,6 @@ describe("Windows Git Bash: long commands (upstream #12340)", () => {
 
 	it("passes a `!command` config value's command in the environment too", () => {
 		const command = `${LONG_COMMAND}\nprintf resolved`;
-		vi.stubEnv("ProgramFiles", "C:\\Program Files");
 
 		expect(resolveConfigValueUncached(`!${command}`)).toBe("resolved");
 		expect(spawnSyncMock).toHaveBeenCalledTimes(1);

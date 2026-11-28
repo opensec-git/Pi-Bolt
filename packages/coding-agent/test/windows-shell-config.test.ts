@@ -2,6 +2,7 @@ import type * as ChildProcess from "node:child_process";
 import type * as Fs from "node:fs";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { win32 } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLocalShellOperations } from "../src/core/tools/bash.ts";
 import { getShellConfig, SHELL_COMMAND_ENV_VAR, type ShellConfig } from "../src/utils/shell.ts";
@@ -63,8 +64,12 @@ describe("legacy WSL bash detection", () => {
 });
 
 // #12408: find Git Bash of a Git for Windows installed outside Program Files through git on PATH.
+// Every lookup is answered by the mocks (files, PATH, the per-user folders), so the tests do not depend on the host: on a
+// Windows runner the host's own Git for Windows is never seen. git.exe is a package manager's shim, as in #12408: the
+// Git Bash beside a portable Git's git.exe (gitBashCandidates) is then not there, and only `git var GIT_SHELL_PATH`
+// finds it.
 describe("Git Bash discovery through git on PATH", () => {
-	const git = "G:\\Programmi Aggiuntivi\\Git\\cmd\\git.exe";
+	const git = "G:\\Scoop\\shims\\git.exe";
 	const gitBash = "G:\\Programmi Aggiuntivi\\Git\\bin\\bash.exe";
 	const wslBash = "C:\\Windows\\System32\\bash.exe";
 
@@ -72,6 +77,8 @@ describe("Git Bash discovery through git on PATH", () => {
 		vi.stubEnv("ProgramFiles", "C:\\Program Files");
 		vi.stubEnv("ProgramFiles(x86)", "C:\\Program Files (x86)");
 		vi.stubEnv("SystemRoot", "C:\\Windows");
+		vi.stubEnv("LOCALAPPDATA", "C:\\Users\\me\\AppData\\Local");
+		vi.stubEnv("USERPROFILE", "C:\\Users\\me");
 	});
 
 	function installed(...paths: string[]): void {
@@ -84,10 +91,10 @@ describe("Git Bash discovery through git on PATH", () => {
 	}
 
 	// Pi-Bolt looks programs up in PATH's directories itself, not with `where`.
-	function onPath(gitShellPath: string | null): void {
-		vi.stubEnv("PATH", "G:\\Programmi Aggiuntivi\\Git\\cmd;C:\\Windows\\System32");
+	function onPath(gitExe: string, gitShellPath: string | null): void {
+		vi.stubEnv("PATH", `${win32.dirname(gitExe)};C:\\Windows\\System32`);
 		spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-			if (command === git && args.join(" ") === "var GIT_SHELL_PATH") {
+			if (command === gitExe && args.join(" ") === "var GIT_SHELL_PATH") {
 				return gitShellPath === null ? { status: 1, stdout: "" } : { status: 0, stdout: `${gitShellPath}\n` };
 			}
 			throw new Error(`unexpected spawn: ${command} ${args.join(" ")}`);
@@ -96,7 +103,7 @@ describe("Git Bash discovery through git on PATH", () => {
 
 	it("prefers Git Bash of git on PATH over the WSL launcher on PATH", () => {
 		installed(git, gitBash, wslBash);
-		onPath("G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
+		onPath(git, "G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
 
 		expect(getShellConfig()).toEqual(envTransport(gitBash));
 	});
@@ -104,7 +111,7 @@ describe("Git Bash discovery through git on PATH", () => {
 	it("keeps Git Bash under ProgramFiles first without running git", () => {
 		const programFilesBash = "C:\\Program Files\\Git\\bin\\bash.exe";
 		installed(programFilesBash, git, gitBash);
-		onPath("G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
+		onPath(git, "G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
 
 		expect(getShellConfig()).toEqual(envTransport(programFilesBash));
 		expect(spawnSyncMock).not.toHaveBeenCalled();
@@ -116,10 +123,25 @@ describe("Git Bash discovery through git on PATH", () => {
 		["a Git for Windows root without its Bash launcher", "G:/Programmi Aggiuntivi/Other/usr/bin/sh.exe"],
 	])("falls back to bash.exe on PATH for %s", (_name, gitShellPath) => {
 		installed(git, gitBash, wslBash);
-		onPath(gitShellPath);
+		onPath(git, gitShellPath);
 
 		expect(getShellConfig()).toEqual({ shell: wslBash, args: ["-s"], commandTransport: "stdin" });
 	});
+
+	// Pi-Bolt: a portable Git puts only its cmd folder on PATH; its Git Bash is <git>\bin\bash.exe, found without running
+	// git. (Windows path rules: gitBashCandidates takes the folders with the host's node:path.)
+	it.skipIf(hostPlatform !== "win32")(
+		"takes the Git Bash beside a portable Git's git.exe on PATH without running git",
+		() => {
+			const portableGit = "G:\\Portable\\Git\\cmd\\git.exe";
+			const portableBash = "G:\\Portable\\Git\\bin\\bash.exe";
+			installed(portableGit, portableBash, wslBash);
+			onPath(portableGit, null);
+
+			expect(getShellConfig()).toEqual(envTransport(portableBash));
+			expect(spawnSyncMock).not.toHaveBeenCalled();
+		},
+	);
 });
 
 // Upstream #12340 (PR #12369): the Cygwin runtime of Windows bash builds silently cuts quoted argv arguments after
