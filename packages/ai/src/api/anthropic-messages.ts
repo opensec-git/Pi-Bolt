@@ -40,7 +40,7 @@ import type {
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { ShortHash } from "../utils/hash.ts";
+import { ShortHash, shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -72,6 +72,7 @@ import {
 	type UnsupportedStrictSchemaKeywordCheck,
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import { collectReasoningDrops, droppedBlocksOf, isDroppedBlock, type ReasoningDropFormat } from "./reasoning-drops.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
 import { splitErrorToolResultImages, toolCallIds, transformMessages } from "./transform-messages.ts";
 
@@ -919,6 +920,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			// SDK serializes itself; a full request (with or without `thread: create`) is sent as bytes.
 			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId, cache);
 			const reuseThreadContent = cache !== undefined && options?.client === undefined;
+			// The messages of the last attempt as sent, which the paths of `input_transformations` index: a thread
+			// `continue` sends only the new messages.
+			let sentMessages = params.messages;
 			const send = (body: ThreadedParams, prepared?: PreparedThreadRequest): Promise<ThreadResponse> =>
 				retryProviderRequest(
 					async () => {
@@ -927,6 +931,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						const fingerprint =
 							prepared && (prepared.prefix?.copy() ?? threadFingerprint(model, body, reuseThreadContent));
 						fingerprint?.append(body.messages.slice());
+						sentMessages = body.messages;
 						const response = await client.beta.messages.create(body, requestOptions).asResponse();
 						return {
 							response,
@@ -1166,11 +1171,15 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					type: "anthropic_input_transformations",
 					timestamp: Date.now(),
 					details: {
-						transformations: inputTransformations.map((transformation) => ({
-							type: transformation.type ?? undefined,
-							path: transformation.path ?? undefined,
-							reason: transformation.reason ?? undefined,
-						})),
+						transformations: inputTransformations.map((transformation) => {
+							const signatureHash = droppedSignatureHash(sentMessages, transformation);
+							return {
+								type: transformation.type ?? undefined,
+								path: transformation.path ?? undefined,
+								reason: transformation.reason ?? undefined,
+								...(signatureHash === undefined ? {} : { signatureHash }),
+							};
+						}),
 					},
 				});
 			}
@@ -1423,6 +1432,45 @@ function getBetaFeatures(
 	return [...new Set(features)];
 }
 
+/**
+ * Anthropic names a removed thinking block only by its place in the request (`messages.{i}.content.{j}`), and that
+ * place moves as soon as anything before it changes. The reply records a hash of the block's signature instead
+ * (`signatureHash`, from `droppedSignatureHash`), and the converter leaves out the blocks whose signature hashes to a
+ * recorded one (#346).
+ */
+const ANTHROPIC_REASONING_DROPS: ReasoningDropFormat = {
+	diagnostic: "anthropic_input_transformations",
+	droppedType: "thinking_dropped",
+	keyField: "signatureHash",
+	prefixReason: "prefix_binding_mismatch",
+	modelReason: "model_binding_mismatch",
+	// A redacted block is sent with its signature as `data`.
+	blockKey: (block) => (block.thinkingSignature ? shortHash(block.thinkingSignature) : undefined),
+};
+
+const TRANSFORMATION_PATH = /^messages\.(\d+)\.content\.(\d+)$/;
+
+/**
+ * The hash of the signature of the thinking block a `thinking_dropped` transformation names in the messages that
+ * were sent; undefined for other transformations and for a path that names no signed thinking block, which then
+ * stays in later requests.
+ */
+function droppedSignatureHash(
+	sent: readonly MessageParam[],
+	transformation: BetaInputTransformation,
+): string | undefined {
+	// Wire input: the path is the API's.
+	if (transformation.type !== "thinking_dropped" || typeof transformation.path !== "string") return undefined;
+	const match = TRANSFORMATION_PATH.exec(transformation.path);
+	if (!match) return undefined;
+	const content = sent[Number(match[1])]?.content;
+	if (!Array.isArray(content)) return undefined;
+	const block = content[Number(match[2])];
+	const signature =
+		block?.type === "thinking" ? block.signature : block?.type === "redacted_thinking" ? block.data : undefined;
+	return signature ? shortHash(signature) : undefined;
+}
+
 interface BuildParamsFlags {
 	/** The session uses message threads, so the threads beta is sent. */
 	messageThreads: boolean;
@@ -1476,6 +1524,7 @@ function buildParams(
 		nativeToolChanges ? convertToolDefinitions : undefined,
 		cache,
 		conversationSources,
+		collectReasoningDrops(context.messages, ANTHROPIC_REASONING_DROPS, model),
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, options, {
@@ -1631,6 +1680,8 @@ function convertMessages(
 	/** Reuse what unchanged messages converted to before (request-cache.ts); `sources` as transformMessages fills it. */
 	cache?: RequestCacheRun,
 	sources?: (Message | undefined)[],
+	/** Thinking blocks the API removed for good, which are left out (ANTHROPIC_REASONING_DROPS). */
+	drops?: ReadonlySet<string>,
 ): ConvertedAnthropicMessages {
 	const params: MessageParam[] = [];
 	/**
@@ -1726,7 +1777,9 @@ function convertMessages(
 			const held = pendingSystemMessages.length > 0;
 			const assistantParams: MessageParam[] = held ? [] : params;
 			const before = assistantParams.length;
-			unit(i, i + 1, undefined, assistantParams, (out) => {
+			// Only the messages that have a removed block convert again when it is first reported.
+			const dropped = droppedBlocksOf(msg, drops, ANTHROPIC_REASONING_DROPS);
+			unit(i, i + 1, dropped, assistantParams, (out) => {
 				const blocks: ContentBlockParam[] = [];
 
 				for (const block of msg.content) {
@@ -1737,6 +1790,7 @@ function convertMessages(
 							text: sanitizeSurrogates(block.text),
 						});
 					} else if (block.type === "thinking") {
+						if (dropped && isDroppedBlock(block, drops, ANTHROPIC_REASONING_DROPS)) continue;
 						// Redacted thinking: pass the opaque payload back as redacted_thinking
 						if (block.redacted) {
 							blocks.push({

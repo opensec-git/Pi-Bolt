@@ -137,6 +137,13 @@ describe.each(targets)("$name reasoning replay conformance", (target) => {
 			expect(removals(afterEdit)).toEqual(
 				followingReasoning.map((id) => ({ type: "reasoning", id, action: "removed", reason: "prefix_mismatch" })),
 			);
+
+			// #346: removed items are not replayed again, so the next request removes nothing, while the reasoning
+			// minted after the edit keeps binding.
+			context.messages.push(afterEdit, { role: "user", content: "Say ok again.", timestamp: 7 });
+			const afterReport = await request(context, "high");
+			expect(reasoningIds(afterEdit).length).toBeGreaterThan(0);
+			expect(removals(afterReport)).toEqual([]);
 		},
 	);
 });
