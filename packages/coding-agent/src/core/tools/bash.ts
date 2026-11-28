@@ -12,6 +12,7 @@ import {
 	killProcessTree,
 	MSYS_SHELL_GROUP_VARIABLE,
 	msysShellSpawn,
+	SHELL_COMMAND_ENV_VAR,
 	type ShellConfig,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
@@ -120,7 +121,8 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute ${shellName} commands.`);
 			}
 
-			const commandFromStdin = shellConfig.commandTransport === "stdin";
+			const transport = shellConfig.commandTransport ?? "argv";
+			const commandFromStdin = transport === "stdin";
 			// Windows, Git Bash (or MSYS2, Cygwin): a variable of this command's own that its processes inherit, by which
 			// stopping it finds them all (getMsysBash, killProcessTree).
 			const msysBash = getMsysBash(shellConfig.shell);
@@ -129,12 +131,21 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			const direct = commandFromStdin ? undefined : getDirectGitBash(shellConfig.shell);
 			const shellExe = direct?.bash ?? shellConfig.shell;
 			const shellEnv = direct ? direct.environment(env ?? getShellEnv()) : (env ?? getShellEnv());
-			const shellArgs = commandFromStdin ? shellConfig.args : [...shellConfig.args, command];
+			// Windows bash builds get the command in SHELL_COMMAND_ENV_VAR: their runtime cuts a long argument
+			// (see WINDOWS_ENV_COMMAND_RUNNER in utils/shell.ts).
+			const shellArgs = transport === "argv" ? [...shellConfig.args, command] : shellConfig.args;
 			const msysSpawn = commandFromStdin ? undefined : msysShellSpawn(shellExe, shellArgs);
 			const child = spawn(shellExe, msysSpawn?.args ?? shellArgs, {
 				cwd,
 				detached: process.platform !== "win32",
-				env: msys ? { ...shellEnv, [MSYS_SHELL_GROUP_VARIABLE]: msys.group } : shellEnv,
+				env:
+					msys || transport === "env"
+						? {
+								...shellEnv,
+								...(msys && { [MSYS_SHELL_GROUP_VARIABLE]: msys.group }),
+								...(transport === "env" && { [SHELL_COMMAND_ENV_VAR]: command }),
+							}
+						: shellEnv,
 				stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 				windowsHide: true,
 				...(msysSpawn && { windowsVerbatimArguments: true, argv0: msysSpawn.argv0 }),

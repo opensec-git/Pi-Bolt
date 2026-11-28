@@ -1,7 +1,10 @@
 import type * as ChildProcess from "node:child_process";
 import type * as Fs from "node:fs";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getShellConfig } from "../src/utils/shell.ts";
+import { createLocalShellOperations } from "../src/core/tools/bash.ts";
+import { getShellConfig, SHELL_COMMAND_ENV_VAR, type ShellConfig } from "../src/utils/shell.ts";
 
 const { accessSyncMock, spawnSyncMock, statSyncMock } = vi.hoisted(() => ({
 	accessSyncMock: vi.fn(),
@@ -22,6 +25,12 @@ vi.mock("child_process", async (importOriginal) => ({
 }));
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+const hostPlatform = process.platform;
+
+/** What a Windows bash build (Git Bash, MSYS2, Cygwin) resolves to: the command goes in SHELL_COMMAND_ENV_VAR. */
+function envTransport(shell: string): ShellConfig {
+	return { shell, args: ["-c", expect.stringContaining(SHELL_COMMAND_ENV_VAR)], commandTransport: "env" };
+}
 
 beforeEach(() => {
 	Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
@@ -48,7 +57,7 @@ describe("legacy WSL bash detection", () => {
 		vi.stubEnv("SystemRoot", systemRoot);
 
 		expect(getShellConfig(shell)).toEqual(
-			stdin ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] },
+			stdin ? { shell, args: ["-s"], commandTransport: "stdin" } : envTransport(shell),
 		);
 	});
 });
@@ -89,7 +98,7 @@ describe("Git Bash discovery through git on PATH", () => {
 		installed(git, gitBash, wslBash);
 		onPath("G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
 
-		expect(getShellConfig()).toEqual({ shell: gitBash, args: ["-c"] });
+		expect(getShellConfig()).toEqual(envTransport(gitBash));
 	});
 
 	it("keeps Git Bash under ProgramFiles first without running git", () => {
@@ -97,7 +106,7 @@ describe("Git Bash discovery through git on PATH", () => {
 		installed(programFilesBash, git, gitBash);
 		onPath("G:/Programmi Aggiuntivi/Git/usr/bin/sh.exe");
 
-		expect(getShellConfig()).toEqual({ shell: programFilesBash, args: ["-c"] });
+		expect(getShellConfig()).toEqual(envTransport(programFilesBash));
 		expect(spawnSyncMock).not.toHaveBeenCalled();
 	});
 
@@ -110,5 +119,72 @@ describe("Git Bash discovery through git on PATH", () => {
 		onPath(gitShellPath);
 
 		expect(getShellConfig()).toEqual({ shell: wslBash, args: ["-s"], commandTransport: "stdin" });
+	});
+});
+
+// Upstream #12340 (PR #12369): the Cygwin runtime of Windows bash builds silently cuts quoted argv arguments after
+// about 8 KB and splits unquoted ones at newlines.
+describe("Windows bash command transport", () => {
+	it.each([
+		["C:\\Program Files\\Git\\bin\\bash.exe", "env"],
+		["C:\\msys64\\usr\\bin\\bash", "env"],
+		// (Pi-Bolt takes the WSL Store alias for WSL's launcher, which reads the command from stdin.)
+		["C:\\Users\\me\\AppData\\Local\\Microsoft\\WindowsApps\\bash.exe", "stdin"],
+		["C:\\Users\\me\\AppData\\Local\\Other\\WindowsApps\\bash.exe", undefined],
+		["C:\\Program Files\\Git\\usr\\bin\\dash.exe", undefined],
+		// (Not pwsh.exe: Pi-Bolt refuses PowerShell and cmd.exe for shellPath.)
+		["C:\\msys64\\usr\\bin\\zsh.exe", undefined],
+	] as const)("resolves %j to transport %j", (shell, transport) => {
+		expect(getShellConfig(shell).commandTransport).toBe(transport);
+	});
+
+	it.skipIf(hostPlatform === "win32")("keeps argv transport off Windows", () => {
+		Object.defineProperty(process, "platform", platformDescriptor);
+
+		expect(getShellConfig("/usr/bin/bash")).toEqual({ shell: "/usr/bin/bash", args: ["-c"] });
+	});
+
+	const hostBash = hostPlatform === "win32" ? `${process.env.ProgramFiles}\\Git\\bin\\bash.exe` : "/bin/bash";
+
+	async function runCommand(
+		command: string,
+		config?: ShellConfig,
+	): Promise<{ exitCode: number | null; output: string }> {
+		const shellConfig = config ?? getShellConfig(hostBash);
+		Object.defineProperty(process, "platform", platformDescriptor);
+		const chunks: Buffer[] = [];
+		const operations = createLocalShellOperations("bash", () => shellConfig);
+		const { exitCode } = await operations.exec(command, tmpdir(), { onData: (data) => chunks.push(data) });
+		return { exitCode, output: Buffer.concat(chunks).toString("utf8") };
+	}
+
+	it.skipIf(!existsSync(hostBash))("runs commands longer than the argv truncation limit in full", async () => {
+		const command = `printf 'START\\n'; # ${"a ".repeat(10_000)}\nprintf 'DONE\\n'`;
+
+		expect(await runCommand(command)).toEqual({ exitCode: 0, output: "START\nDONE\n" });
+	});
+
+	it.skipIf(!existsSync(hostBash))("runs newline-separated commands without spaces in full", async () => {
+		// Split at the newline, `bash -c true` would run with `$0` set to `false` and exit 0.
+		expect(await runCommand("true\nfalse")).toEqual({ exitCode: 1, output: "" });
+	});
+
+	it.skipIf(!existsSync(hostBash))("keeps argv command semantics for status, stdin and exit", async () => {
+		const command = `printf 'status=%s\\n' "$?"; [ -c /dev/stdin ] && echo stdin=device\nexit 7`;
+
+		expect(await runCommand(command)).toEqual({ exitCode: 7, output: "status=0\nstdin=device\n" });
+	});
+
+	it.skipIf(!existsSync(hostBash))("hides the command variable from the command and its children", async () => {
+		const command = `printf '%s\\n' "\${${SHELL_COMMAND_ENV_VAR}-unset}"; env | grep -c ${SHELL_COMMAND_ENV_VAR}`;
+
+		expect(await runCommand(command)).toEqual({ exitCode: 1, output: "unset\n0\n" });
+	});
+
+	it.skipIf(!existsSync(hostBash))("fails when a caller appends the command to args instead", async () => {
+		const config = getShellConfig(hostBash);
+		const argvConfig: ShellConfig = { ...config, commandTransport: "argv" };
+
+		expect((await runCommand("echo appended", argvConfig)).exitCode).not.toBe(0);
 	});
 });
