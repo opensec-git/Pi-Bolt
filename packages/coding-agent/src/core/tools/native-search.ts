@@ -8,7 +8,8 @@
  * excludes file, in every repository), the parent folders' up to the repository's root (outside one, up to the disk's), a
  * nested repository starting afresh (but for find outside a repository); a --glob matched against folders too; hidden files
  * searched; symbolic links not followed; binary files (with a NUL byte) skipped, but for UTF-16 text with a byte order mark;
- * find's smart case. Unlike them it never looks inside .git, and it returns results in path order. Regular expressions are
+ * find's smart case; and, as they do, a search ends at its limit without walking the rest of a large tree (walkInParts).
+ * Unlike them it never looks inside .git, and it returns results in path order (within each part of the walk). Regular expressions are
  * JavaScript's, with ripgrep's forms that have a counterpart translated (translatePattern) and the others left to ripgrep;
  * like ripgrep, a match is within one line, and only "\n" ends one (a CRLF ending counts as the line's end too). An
  * expression is run only where it cannot take long (regex-work.ts); the lines it could take long on are reported instead
@@ -566,6 +567,29 @@ function highestWith(root: string, names: readonly string[]): string | undefined
 
 /** Every entry below `root` that the ignore files leave in (and `keep` takes), in no particular order. */
 export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
+	const entries: WalkEntry[] = [];
+	for await (const part of walkInParts(options, Number.POSITIVE_INFINITY)) {
+		for (const entry of part) entries.push(entry);
+	}
+	return entries;
+}
+
+/**
+ * How many entries (of those the ignore files leave in) a walk goes through before it hands on what it kept: a search that
+ * has its results then stops there, as ripgrep and fd stop at their limit. A tree within it is searched whole, in path
+ * order. (Walking the whole tree first took 27 s for a grep with the default limit in a folder of a million files, where
+ * ripgrep took 44 ms, and over two minutes for a find in a home folder, where fd took 0.2 s.)
+ */
+const WALK_PART_ENTRIES = 10_000;
+
+/**
+ * `walk` a part at a time: what `keep` took, each time the walk has gone through `partEntries` more entries, and at its
+ * end. Leaving the loop over it stops the walk.
+ */
+export async function* walkInParts(
+	options: WalkOptions,
+	partEntries: number = WALK_PART_ENTRIES,
+): AsyncGenerator<WalkEntry[]> {
 	const root = path.resolve(options.root);
 	const repository = repositoryOf(root);
 	const git = repository !== undefined || !options.requireGit;
@@ -594,7 +618,8 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 	// in force inside it; ripgrep, and fd in a repository, start afresh in a nested one.
 	const nestedStartsAfresh = options.requireGit || repository !== undefined;
 
-	const entries: WalkEntry[] = [];
+	let entries: WalkEntry[] = [];
+	let walked = 0;
 	const visit = async (task: DirTask): Promise<DirTask[]> => {
 		let dirents: Dirent[];
 		try {
@@ -635,6 +660,7 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 				if (!options.override?.(rel)) continue;
 			}
 			if (kind === "dir" && options.skipDir?.(rel)) continue;
+			walked++;
 			const abs = path.join(task.abs, dirent.name);
 			if (!options.keep || options.keep(rel, kind)) entries.push({ rel, abs, kind });
 			if (kind === "dir") subdirs.push({ abs, rel, rules: taskRules, git: taskGit });
@@ -649,8 +675,14 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 		const batch = pending.splice(0, 64);
 		const found = await Promise.all(batch.map(visit));
 		for (const subdirs of found) pending.push(...subdirs);
+		if (walked >= partEntries && pending.length > 0) {
+			const part = entries;
+			entries = [];
+			walked = 0;
+			yield part;
+		}
 	}
-	return entries;
+	yield entries;
 }
 
 const byPath = (a: WalkEntry, b: WalkEntry) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0);
@@ -666,11 +698,13 @@ export interface NativeFindOptions {
 	pattern: string;
 	limit: number;
 	signal?: AbortSignal;
+	/** How many entries the walk goes through at a time (default: WALK_PART_ENTRIES). */
+	walkPartEntries?: number;
 }
 
 /**
- * The entries that match, in path order, folders with a trailing `/`, at most `limit`. As fd's smart case, a pattern without
- * capital letters matches names in any case.
+ * The entries that match, folders with a trailing `/`, at most `limit`: in path order, within the parts of the walk it took
+ * to find `limit` (walkInParts). As fd's smart case, a pattern without capital letters matches names in any case.
  */
 export async function nativeFind(options: NativeFindOptions): Promise<string[]> {
 	// A leading "./" is the search folder itself (#12020).
@@ -686,7 +720,13 @@ export async function nativeFind(options: NativeFindOptions): Promise<string[]> 
 		const subject = anyCase ? name.toLowerCase() : name;
 		return patterns.some((matches) => matches(subject));
 	};
-	return (await walk({ root: options.root, requireGit: false, keep, signal: options.signal }))
+	const found: WalkEntry[] = [];
+	const walkOptions = { root: options.root, requireGit: false, keep, signal: options.signal };
+	for await (const part of walkInParts(walkOptions, options.walkPartEntries)) {
+		for (const entry of part) found.push(entry);
+		if (found.length >= options.limit) break;
+	}
+	return found
 		.sort(byPath)
 		.slice(0, Math.max(0, options.limit))
 		.map((entry) => (entry.kind === "dir" ? `${entry.rel}/` : entry.rel));
@@ -722,6 +762,8 @@ export interface NativeGrepOptions {
 	/** Files larger than this are read a piece at a time, of `pieceBytes` (defaults: WHOLE_FILE_BYTES, PIECE_BYTES). */
 	wholeFileBytes?: number;
 	pieceBytes?: number;
+	/** How many entries the walk goes through at a time (default: WALK_PART_ENTRIES). */
+	walkPartEntries?: number;
 }
 
 /** A line of a file. */
@@ -1527,19 +1569,6 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 		matcher = regexMatcher(source, Boolean(options.ignoreCase) || ignoreCase);
 	}
 
-	let files: string[];
-	if (options.isDirectory) {
-		const { take, include, skipDir } = globFilter(options.glob);
-		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
-		files = (
-			await walk({ root: options.root, requireGit: true, override: include, skipDir, keep, signal: options.signal })
-		)
-			.sort(byPath)
-			.map((entry) => entry.abs);
-	} else {
-		files = [options.root];
-	}
-
 	const matches: NativeGrepMatch[] = [];
 	const slowLines: NativeGrepLine[] = [];
 	let slowLineCount = 0;
@@ -1549,8 +1578,28 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 		if (options.slowLines !== "skip") throw new StopAtSlowLine();
 	};
 	try {
-		const limitReached = await searchFiles(files, matcher, matches, slow, options);
-		return { matches, limitReached, slowLines, slowLineCount };
+		if (!options.isDirectory) {
+			const limitReached = await searchFiles([options.root], matcher, matches, slow, options);
+			return { matches, limitReached, slowLines, slowLineCount };
+		}
+		// A part of the walk at a time, each in path order: the search ends at the limit without walking the rest.
+		const { take, include, skipDir } = globFilter(options.glob);
+		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
+		const walkOptions = {
+			root: options.root,
+			requireGit: true,
+			override: include,
+			skipDir,
+			keep,
+			signal: options.signal,
+		};
+		for await (const part of walkInParts(walkOptions, options.walkPartEntries)) {
+			const files = part.sort(byPath).map((entry) => entry.abs);
+			if (await searchFiles(files, matcher, matches, slow, options)) {
+				return { matches, limitReached: true, slowLines, slowLineCount };
+			}
+		}
+		return { matches, limitReached: false, slowLines, slowLineCount };
 	} catch (error) {
 		if (error instanceof StopAtSlowLine) return { matches, limitReached: false, slowLines, slowLineCount };
 		throw error;

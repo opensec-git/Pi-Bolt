@@ -214,4 +214,20 @@ describe("grep", () => {
 		);
 		expect(await grep("^start", { wholeFileBytes: 1024, pieceBytes: 4096 })).toEqual(["big.txt:1:start"]);
 	});
+
+	// hunt-tools-9: ripgrep and fd stop at their limit; the walk of the whole tree came first, and took minutes in a home
+	// folder. A part of the walk that has the results is the last one walked: "0/0x" in the second part is not reached.
+	test("a search that has its results in the first part of the walk walks no further", async () => {
+		for (const name of ["x1", "x2", "x3", "x4", "x5"]) write(`ws/${name}`);
+		write("ws/0/0x");
+		const parts = { walkPartEntries: 3 };
+		expect(await nativeFind({ root: join(root, "ws"), pattern: "*x*", limit: 3, ...parts })).toEqual([
+			"x1",
+			"x2",
+			"x3",
+		]);
+		expect(await grep("needle", { limit: 3, ...parts })).toEqual(["x1:1:needle", "x2:1:needle", "x3:1:needle"]);
+		// Within one part, as without parts: in path order.
+		expect(await nativeFind({ root: join(root, "ws"), pattern: "*x*", limit: 3 })).toEqual(["0/0x", "x1", "x2"]);
+	});
 });
