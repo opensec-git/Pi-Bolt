@@ -2421,18 +2421,28 @@ export class SessionManager {
 			if (entry.parentId !== null && entry.parentId !== previousId && entry.parentId !== entry.id) {
 				index(entry.parentId);
 			}
-			// The last definition supplies the node for every occurrence of a repeated ID.
+			// The last definition supplies the node of a repeated ID (as getEntry() returns it).
 			if (mayRepeat) index(entry.id);
 			previousId = entry.id;
 		}
 
 		const cuts = this.linksMayCycle ? this._cycleCuts() : undefined;
+		const placed = mayRepeat ? new Set<string>() : undefined;
 		const roots: SessionTreeNode[] = [];
 		const forks: SessionTreeNode[] = [];
 		let previous: SessionTreeNode | undefined;
 		for (const entry of this.fileEntries) {
 			if (entry.type === "session") continue;
 			const node = indexed.get(entry.id) ?? makeNode(entry);
+			// A repeated ID is placed once, by that definition's parent: the links of its other occurrences could close a
+			// cycle that _cycleCuts() does not see.
+			if (placed) {
+				if (this.byId.get(entry.id) !== entry || placed.has(entry.id)) {
+					previous = node;
+					continue;
+				}
+				placed.add(entry.id);
+			}
 			const parentId = entry.parentId;
 			if (parentId === null || entry.id === parentId || cuts?.has(entry.id)) {
 				roots.push(node);

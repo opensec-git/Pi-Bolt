@@ -204,7 +204,7 @@ describe("SessionManager append and tree traversal", () => {
 			expect(session.getTree()[1].children).toHaveLength(3);
 		});
 
-		it("uses the last definition for each occurrence of a repeated ID in imported files", () => {
+		it("places a repeated ID in imported files once, by its last definition", () => {
 			const parent = SessionManager.inMemory();
 			const root = parent.appendMessage(userMsg("root"));
 			parent.appendMessage(userMsg("child"));
@@ -213,11 +213,11 @@ describe("SessionManager append and tree traversal", () => {
 			const session = SessionManager.inMemory(process.cwd(), undefined, [...entries, duplicate]);
 			const [first, second] = session.getTree();
 			expect(first.entry.id).toBe(root);
-			expect(first.children[0]).toBe(second);
+			expect(first.children).toEqual([]);
 			expect(second.entry).toBe(duplicate);
 
 			const repeated = SessionManager.inMemory(process.cwd(), undefined, [entries[0], entries[0]]).getTree();
-			expect(repeated[0]).toBe(repeated[1]);
+			expect(repeated).toHaveLength(1);
 		});
 
 		it("returns single root for linear session", () => {
