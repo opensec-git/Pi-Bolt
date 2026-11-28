@@ -22,6 +22,7 @@
 #   - a download that stops part of the way, the connection left open, is given up and tried again;
 #   - a PIBOLT_BIN_DIR with a trailing slash that is on PATH is taken for the folder on PATH; a relative one is made absolute;
 #   - uninstall uninstalls the remote control service of this installation, and leaves another Pi-Bolt's;
+#   - the npm package's first run keeps a build another first run, started at the same time, installed before it;
 #   - OpenSSL 3 installed as openssl3, beside an older openssl (AlmaLinux 8), checks the signature;
 #   - the Paseo step (tests/installer/paseo.py) with each of sh, dash and BusyBox's sh that is installed.
 # Needs curl, python3 and gh (or a GitHub token for gh), and OpenSSL 3 for the verified case.
@@ -339,6 +340,17 @@ elif installed; then pass "a download that stops part of the way: given up and t
 	fail "a download that stops part of the way: given up and tried again"; cat "$WORK/stall.log"; fi
 wait "$installer" 2>/dev/null || true
 kill "$stall_server" 2>/dev/null || true
+
+# (The npm package's first run, started twice at once: the run that finishes second keeps the build the first one installed,
+# which a session may run from already, rather than take it away.) hunt-install-10
+rm -rf "${WORK:?}/home" && mkdir -p "$WORK/home/inst/$NAME"
+printf '#!/bin/sh\necho "the first run'"'"'s build"\n' >"$WORK/home/inst/$NAME/pi" && chmod 755 "$WORK/home/inst/$NAME/pi"
+out=$(env HOME="$WORK/home" PIBOLT_LAUNCHER=1 PIBOLT_VERSION="bolt-v$(head -n 1 "$WORK/good/SHA256SUMS" | sed 's/^# pi-bolt //')" \
+	PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port/good" PIBOLT_INSTALL="$WORK/home/inst" sh "$ROOT/install.sh" </dev/null 2>&1 || true)
+left=$(find "$WORK/home/inst" -mindepth 1 -maxdepth 1 ! -name "$NAME" 2>/dev/null)
+if grep -q "install complete" <<<"$out" && grep -q "the first run's build" "$WORK/home/inst/$NAME/pi" && [ -z "$left" ]; then
+	pass "two first runs of the npm package at once: the second keeps the first one's build"; else
+	fail "two first runs of the npm package at once: the second keeps the first one's build"; printf '%s\nleft: %s\n' "$out" "$left"; fi
 
 # (Uninstall: the remote control service that runs this installation's executable is uninstalled with it, by that executable;
 # one that runs another Pi-Bolt is left alone. The installer's functions, without its main body.) hunt-install-7

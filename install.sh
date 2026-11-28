@@ -976,19 +976,25 @@ install_release() {
 	fi
 	"$TMP/$NAME/pi" --version >/dev/null 2>&1 || fail "the downloaded executable does not run on this system"
 	mkdir -p "$INSTALL"
-	rm -rf "$INSTALL/$NAME.old"
-	# The build this replaces is kept as $NAME.previous, for `pi-bolt update --rollback`; the same build installed again
-	# (the same pi-bolt.txt) is not, and the one kept before stays.
-	if [ -d "$INSTALL/$NAME" ]; then
-		if [ "$LAUNCHER" != 1 ] && ! cmp -s "$INSTALL/$NAME/pi-bolt.txt" "$TMP/$NAME/pi-bolt.txt"; then
-			rm -rf "$INSTALL/$NAME.previous"
-			mv "$INSTALL/$NAME" "$INSTALL/$NAME.previous"
-		else
-			mv "$INSTALL/$NAME" "$INSTALL/$NAME.old"
+	if [ "$LAUNCHER" = 1 ] && [ -x "$INSTALL/$NAME/pi" ]; then
+		# (The npm package's first run, started twice at once: the other one installed this version first, and its session may
+		# run from that folder already. Replacing it would take the folder from under that session: this download goes instead.)
+		rm -rf "$TMP"
+	else
+		rm -rf "$INSTALL/$NAME.old"
+		# The build this replaces is kept as $NAME.previous, for `pi-bolt update --rollback`; the same build installed again
+		# (the same pi-bolt.txt) is not, and the one kept before stays.
+		if [ -d "$INSTALL/$NAME" ]; then
+			if [ "$LAUNCHER" != 1 ] && ! cmp -s "$INSTALL/$NAME/pi-bolt.txt" "$TMP/$NAME/pi-bolt.txt"; then
+				rm -rf "$INSTALL/$NAME.previous"
+				mv "$INSTALL/$NAME" "$INSTALL/$NAME.previous"
+			else
+				mv "$INSTALL/$NAME" "$INSTALL/$NAME.old"
+			fi
 		fi
+		mv "$TMP/$NAME" "$INSTALL/$NAME"
+		rm -rf "$INSTALL/$NAME.old" "$TMP"
 	fi
-	mv "$TMP/$NAME" "$INSTALL/$NAME"
-	rm -rf "$INSTALL/$NAME.old" "$TMP"
 	trap - EXIT INT TERM HUP
 	finish_progress
 	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "$PLATFORM-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
@@ -1005,9 +1011,11 @@ uninstall() {
 		[ -d "$dir" ] && rm -rf "$dir"
 	done
 	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed; what
-	# automatic updates keep: when the last one ran, its output, and its lock; and the download of an installer that was killed.)
+	# automatic updates keep: when the last one ran, its output, its lock and the release a rollback skips; and the download of an
+	# installer that was killed.)
 	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-* \
-		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock" "$INSTALL"/.download.*
+		"$INSTALL/auto-update.json" "$INSTALL/auto-update.log" "$INSTALL/auto-update.lock" "$INSTALL/auto-update.skip" \
+		"$INSTALL"/.download.*
 	rm -f "$INSTALL/pi-bolt-linux-x64.start"
 	target=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
 	case "$target" in
