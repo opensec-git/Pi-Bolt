@@ -764,6 +764,8 @@ export interface NativeGrepOptions {
 	pieceBytes?: number;
 	/** How many entries the walk goes through at a time (default: WALK_PART_ENTRIES). */
 	walkPartEntries?: number;
+	/** How a file named on its own that has NUL bytes is searched (default: NAMED_FILE_NULS, this platform's ripgrep's). */
+	namedFileNuls?: NamedFileNuls;
 }
 
 /** A line of a file. */
@@ -1408,8 +1410,7 @@ const PIECE_BYTES = 1024 * 1024;
  * `matcher.search` over a file read a piece at a time, with the outcome of a search of the file read whole: each piece is
  * searched up to its last line break and the rest goes with the next, so a match is within a line as before; and a file with
  * a NUL byte anywhere (binary) has no matches, so it is read to its end, or to its first NUL byte. Undefined for a binary
- * file or one that could not be read. With `binary: "nulIsLineBreak"` (a file named on its own) a NUL byte is a line break
- * instead (`nulsToLineBreaks`). Memory: a piece, and the line a piece ends inside of.
+ * file or one that could not be read. A file named on its own is searched whole instead (`binary`, NAMED_FILE_NULS). Memory: a piece, and the line a piece ends inside of.
  *
  * Its speed is that of a search of the file read whole: one buffer, read into again (the start of a line a piece ends inside
  * of is moved to its front); and line breaks are counted only up to the last piece that can have a match, as a file read
@@ -1583,8 +1584,9 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 	};
 	try {
 		if (!options.isDirectory) {
-			// A file named on its own is searched even with a NUL byte, as ripgrep searches it (nulsToLineBreaks).
-			const limitReached = await searchFiles([options.root], matcher, matches, slow, "nulIsLineBreak", options);
+			// A file named on its own is searched even with a NUL byte, as ripgrep searches it (NAMED_FILE_NULS).
+			const nuls = options.namedFileNuls ?? NAMED_FILE_NULS;
+			const limitReached = await searchFiles([options.root], matcher, matches, slow, nuls, options);
 			return { matches, limitReached, slowLines, slowLineCount };
 		}
 		// A part of the walk at a time, each in path order: the search ends at the limit without walking the rest.
@@ -1628,9 +1630,22 @@ export function withoutByteOrderMark(contents: Buffer): Buffer {
 
 /**
  * What a search does with a file that has a NUL byte: passes it over as binary (a file found by the walk, as ripgrep), or
- * searches it with each NUL byte as a line break (a file named on its own, as ripgrep: `nulsToLineBreaks`).
+ * searches it (a file named on its own, as ripgrep: NAMED_FILE_NULS) with each NUL byte as a line break
+ * (`nulsToLineBreaks`) or as a character of its line.
  */
-type Binary = "skip" | "nulIsLineBreak";
+type Binary = "skip" | NamedFileNuls;
+
+/** How a file named on its own that has NUL bytes is searched (NAMED_FILE_NULS). */
+export type NamedFileNuls = "nulIsLineBreak" | "nulIsText";
+
+/**
+ * How ripgrep, which Pi runs, searches a file named on its own that has NUL bytes. It maps such a file into memory where
+ * it can, which it never does on macOS (grep-searcher's MmapChoice::open). A file it reads is searched with each NUL byte as
+ * a line break, and its lines numbered so: on macOS, "needle" after "abc\0def\n" is on line 3, in "def needle". A mapped
+ * one is searched as text, the NUL bytes characters of their lines: on Linux and Windows the same "needle" is on line 2,
+ * in "abc\0def needle". (Checked with ripgrep 14.1.0 to 15.2.0, with --mmap and --no-mmap.)
+ */
+export const NAMED_FILE_NULS: NamedFileNuls = process.platform === "darwin" ? "nulIsLineBreak" : "nulIsText";
 
 /**
  * Each NUL byte of `bytes` made a line break, in place: ripgrep searches a file named on its own that has NUL bytes so,
@@ -1696,7 +1711,7 @@ async function searchFiles(
 			if (!contents || contents.length === 0) continue;
 			contents = withoutByteOrderMark(contents);
 			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
-			if (contents.indexOf(0) !== -1) {
+			if (binary !== "nulIsText" && contents.indexOf(0) !== -1) {
 				if (binary === "skip") continue; // (Binary.)
 				nulsToLineBreaks(contents);
 			}

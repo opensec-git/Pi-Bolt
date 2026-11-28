@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { createGrepTool } from "../src/core/tools/grep.ts";
-import { nativeFind, nativeGrep, requiredLiteral } from "../src/core/tools/native-search.ts";
+import { NAMED_FILE_NULS, nativeFind, nativeGrep, requiredLiteral } from "../src/core/tools/native-search.ts";
 
 let root: string;
 
@@ -232,11 +232,14 @@ describe("grep", () => {
 		expect(await nativeFind({ root: join(root, "ws"), pattern: "*x*", limit: 3 })).toEqual(["0/0x", "x1", "x2"]);
 	});
 
-	// hunt-tools-10: ripgrep searches a file named on its own even when it has NUL bytes, each one a line break (its lines
-	// numbered so); a file with one that the walk finds is passed over, as before.
+	// hunt-tools-10: ripgrep searches a file named on its own even when it has NUL bytes; a file with one that the walk finds
+	// is passed over, as before. How depends on how it reads the file (NAMED_FILE_NULS): on macOS each NUL byte is a line
+	// break and the lines are numbered so; on Linux and Windows, where it maps the file into memory, the NUL bytes are
+	// characters of their lines. (Linux CI, ripgrep 14.1.0, failed the macOS expectation: PR #351.)
 	test("a file named on its own with NUL bytes", async () => {
 		write("ws/bin.dat", Buffer.from("needle one\nabc\0def needle\nneedle two\nx\0\0y\nlast needle"));
-		const expected = ["1:needle one", "3:def needle", "4:needle two", "8:last needle"];
+		const asLineBreaks = ["1:needle one", "3:def needle", "4:needle two", "8:last needle"];
+		const asText = ["1:needle one", "2:abc\0def needle", "3:needle two", "5:last needle"];
 		const named = {
 			root: join(root, "ws", "bin.dat"),
 			isDirectory: false,
@@ -246,8 +249,15 @@ describe("grep", () => {
 		};
 		const lines = (result: Awaited<ReturnType<typeof nativeGrep>>) =>
 			result.matches.map((m) => `${m.lineNumber}:${m.lineText}`);
-		expect(lines(await nativeGrep(named))).toEqual(expected);
-		expect(lines(await nativeGrep({ ...named, wholeFileBytes: 8, pieceBytes: 16 }))).toEqual(expected);
+		for (const [namedFileNuls, expected] of [
+			["nulIsLineBreak", asLineBreaks],
+			["nulIsText", asText],
+		] as const) {
+			expect(lines(await nativeGrep({ ...named, namedFileNuls }))).toEqual(expected);
+			const pieces = { ...named, namedFileNuls, wholeFileBytes: 8, pieceBytes: 16 };
+			expect(lines(await nativeGrep(pieces))).toEqual(expected);
+		}
+		expect(NAMED_FILE_NULS).toBe(process.platform === "darwin" ? "nulIsLineBreak" : "nulIsText");
 		expect(await grep("needle")).toEqual([]);
 		const withContext = await createGrepTool(join(root, "ws"), { native: true }).execute("t", {
 			pattern: "needle",
@@ -256,15 +266,24 @@ describe("grep", () => {
 		});
 		const text = (withContext.content[0] as { text: string }).text;
 		expect(text).toBe(
-			[
-				"bin.dat:1: needle one",
-				"bin.dat-2- abc",
-				"bin.dat:3: def needle",
-				"bin.dat:4: needle two",
-				"bin.dat-5- x",
-				"bin.dat-7- y",
-				"bin.dat:8: last needle",
-			].join("\n"),
+			(NAMED_FILE_NULS === "nulIsLineBreak"
+				? [
+						"bin.dat:1: needle one",
+						"bin.dat-2- abc",
+						"bin.dat:3: def needle",
+						"bin.dat:4: needle two",
+						"bin.dat-5- x",
+						"bin.dat-7- y",
+						"bin.dat:8: last needle",
+					]
+				: [
+						"bin.dat:1: needle one",
+						"bin.dat:2: abc\0def needle",
+						"bin.dat:3: needle two",
+						"bin.dat-4- x\0\0y",
+						"bin.dat:5: last needle",
+					]
+			).join("\n"),
 		);
 		if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
 			const withRg = await createGrepTool(join(root, "ws"), { native: false }).execute("t", {
