@@ -208,9 +208,11 @@ const ADAPTERS: Adapter[] = [
 			model("google-generative-ai", "gemini-3-pro", "google"),
 			model("google-generative-ai", "gemini-3-pro", "google", { input: ["text"] }),
 			model("google-generative-ai", "claude-x", "google"),
+			// Unsigned calls of the current turn are signed after conversion (#12420).
+			model("google-generative-ai", "gemini-4-argon", "google"),
 		] as Model<Api>[],
 		send: (m, context, o) => streamGoogle(m as Model<"google-generative-ai">, context, common(o)).result(),
-		signature: (rng) => pick(rng, ["c2lnbmF0dXJl", "", undefined]),
+		signature: (rng) => pick(rng, ["c2lnbmF0dXJl", "c2ln_bmF0-dXJl", "", undefined]),
 	},
 ];
 
