@@ -19859,3 +19859,99 @@ index 0ed0e1c9..8a5a7c06 100644
 -- 
 2.53.0
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sat, 28 Nov 2026 02:29:29 -0600
+Subject: [PATCH] Blob: a slice of a Blob made of Blobs keeps only the parts it
+ covers
+
+A slice took its parent's parts whole (StoreSlot::dupe()) with its own offset and size, so every
+reader of the slice (arrayBuffer(), text(), fetch()) joined all of the parent's parts to read a
+window of them: 64 slices of 4 MB of a 256 MB Blob of four parts took 3.2 s, and 2.6 GB at 8
+fetches at once. The slice now gets the parts it covers, the first and last cut to it, with
+offset 0 and its own size: fetch() sends them as parts, and a reader joins only those bytes. A
+slice within one part is a slice of that part's store; an empty slice has none.
+---
+ src/runtime/webcore/Blob.rs | 59 +++++++++++++++++++++++++++++++++++--
+ 1 file changed, 56 insertions(+), 3 deletions(-)
+
+diff --git a/src/runtime/webcore/Blob.rs b/src/runtime/webcore/Blob.rs
+index d73735c0..5a21c74f 100644
+--- a/src/runtime/webcore/Blob.rs
++++ b/src/runtime/webcore/Blob.rs
+@@ -1799,9 +1799,18 @@ impl BlobExt for Blob {
+ 
+         // This copies over the charset field
+         // which is okay because this will only be a <= slice
+-        let blob = self.dupe();
+-        blob.offset.set(offset);
+-        blob.size.set(len);
++        let mut blob = self.dupe();
++        if let Some(parts) = self.store.parts() {
++            // A Blob made of other Blobs: the slice keeps only the parts it covers, so that reading it (or sending it) handles
++            // its own bytes, not a join of the whole Blob's.
++            let (store, offset, size) = slice_of_parts(parts, offset as usize, len as usize);
++            blob.store = store;
++            blob.offset.set(offset);
++            blob.size.set(size);
++        } else {
++            blob.offset.set(offset);
++            blob.size.set(len);
++        }
+ 
+         let content_type_was_allocated = content_type.is_owned() && !content_type.is_empty();
+         // infer the content type if it was not specified
+@@ -3470,6 +3479,50 @@ impl BlobExt for Blob {
+ // JSC-integration methods (host fns, to_js/from_js, S3/file I/O state machines)
+ // ──────────────────────────────────────────────────────────────────────────
+ 
++/// The slice `[offset, offset + len)` of a Blob made of other Blobs (`get_slice_from`): a slot with only the parts it covers, the
++/// first and the last cut to it, and the slice's offset and size in that slot. A slice within one part is a slice of that part's
++/// store; an empty one has no store.
++fn slice_of_parts(
++    parts: &webcore_types::BlobParts,
++    offset: usize,
++    len: usize,
++) -> (webcore_types::StoreSlot, SizeType, SizeType) {
++    let start = offset.min(parts.len);
++    let end = start.saturating_add(len).min(parts.len);
++    let mut window: Vec<webcore_types::BlobPart> = Vec::new();
++    let mut position: usize = 0;
++    for part in parts.parts.iter() {
++        let from = position.max(start);
++        let to = (position + part.len).min(end);
++        if from < to {
++            window.push(webcore_types::BlobPart {
++                store: part.store.clone(),
++                offset: part.offset + (from - position),
++                len: to - from,
++            });
++        }
++        position += part.len;
++        if position >= end {
++            break;
++        }
++    }
++    match window.len() {
++        0 => (webcore_types::StoreSlot::new(None), 0, 0),
++        1 => {
++            let part = window.pop().expect("one part");
++            (webcore_types::StoreSlot::new(Some(part.store)), part.offset as SizeType, part.len as SizeType)
++        }
++        _ => (
++            webcore_types::StoreSlot::with_parts(webcore_types::BlobParts {
++                parts: window.into_boxed_slice(),
++                len: end - start,
++            }),
++            0,
++            (end - start) as SizeType,
++        ),
++    }
++}
++
+ /// `new Blob([blob, blob, ...])` of in-memory Blobs, 256 KiB or more: a Blob whose bytes are those Blobs' stores, kept
+ /// as parts instead of copied into one (`StoreSlot`). Blobs cannot change, so it is the same bytes either way;
+ /// fetch() sends the parts one after the other, and whatever else needs the bytes joins them then, once. `None`
+-- 
+2.53.0
+
