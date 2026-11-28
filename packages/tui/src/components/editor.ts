@@ -2664,6 +2664,8 @@ export class Editor implements Component, Focusable {
 	): Promise<void> {
 		const previousTask = this.autocompleteRequestTask;
 		this.autocompleteRequestTask = (async () => {
+			// upstream #12566: this task never rejects (see the catch below), so one failed request cannot stop
+			// the requests chained after it.
 			await previousTask;
 			if (startToken !== this.autocompleteStartToken || !this.autocompleteProvider) {
 				return;
@@ -2676,7 +2678,18 @@ export class Editor implements Component, Focusable {
 			const snapshotLine = this.state.cursorLine;
 			const snapshotCol = this.state.cursorCol;
 
-			await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			try {
+				await this.runAutocompleteRequest(requestId, controller, snapshotText, snapshotLine, snapshotCol, options);
+			} catch {
+				// upstream #12566: a provider that rejects or throws (getSuggestions, getArgumentCompletions,
+				// applyCompletion) means "no suggestions". Requests are started with `void`, so a rejection here would
+				// be unhandled, and the Bun runtime ends the process on an unhandled rejection.
+				if (this.isAutocompleteRequestCurrent(requestId, controller, snapshotText, snapshotLine, snapshotCol)) {
+					this.autocompleteAbort = undefined;
+					this.cancelAutocomplete();
+					this.tui.requestRender();
+				}
+			}
 		})();
 		await this.autocompleteRequestTask;
 	}
