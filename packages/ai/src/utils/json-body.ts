@@ -14,10 +14,10 @@
  * The array, not the request body, carries the toJSON: SDKs copy the body (`{ ...params }`, `const { betas, ...body } =
  * params`) before they serialize it, and those copies keep the array but not a property that is not enumerable.
  *
- * Strings are cached by value within their session, and closing a session releases its escaped text. Serializations
- * in the same task (one request body, read synchronously) make one
- * generation; a string that the latest generation did not use is kept for one more, then dropped. So the cache holds
- * about one request's long strings, and two conversations that take turns still reuse theirs.
+ * Strings are cached by value within their session, and closing a session releases its escaped text. A session's
+ * serializations in the same task (one request body, read synchronously) make one generation of that session; a string
+ * that its latest generation did not use is kept for one more, then dropped. So the cache holds about one request's long
+ * strings per session, for the last few sessions, and conversations that take turns still reuse theirs.
  */
 import { registerSessionResourceCleanup } from "../session-resources.ts";
 
@@ -29,51 +29,61 @@ const { rawJSON, isRawJSON } = JSON as unknown as {
 /** Shorter strings are cheap to escape again; caching them would cost more in entries than it saves. */
 const MIN_CACHED_LENGTH = 1024;
 
-type Generation = Map<string | undefined, Map<string, unknown>>;
+/** One session's escaped strings: those its latest generation used, and those of the generation before. */
+interface SessionStrings {
+	current: Map<string, unknown>;
+	previous: Map<string, unknown> | undefined;
+	/** A generation of this session started in the current task. */
+	open: boolean;
+}
+
+/** Sessions whose strings are kept, least recently used first. */
+const MAX_SESSIONS = 4;
+const sessions = new Map<string | undefined, SessionStrings>();
 const sessionOf = new WeakMap<unknown[], string>();
-let current: Generation = new Map();
-let previous: Generation = new Map();
-let generationOpen = false;
 
 registerSessionResourceCleanup((sessionId, retainedStrings) => {
 	if (sessionId === undefined) {
-		current.clear();
-		previous.clear();
-	} else {
-		const latest = current.get(sessionId);
-		const last = previous.get(sessionId);
-		current.delete(sessionId);
-		previous.delete(sessionId);
-		if (retainedStrings && (latest || last)) {
-			const kept = new Map<string, unknown>();
-			for (const text of retainedStrings()) {
-				if (text.length < MIN_CACHED_LENGTH) continue;
-				const raw = latest?.get(text) ?? last?.get(text);
-				if (raw !== undefined) kept.set(text, raw);
-			}
-			if (kept.size) current.set(sessionId, kept);
-		}
+		sessions.clear();
+		return;
 	}
+	const strings = sessions.get(sessionId);
+	sessions.delete(sessionId);
+	if (!retainedStrings || !strings) return;
+	const kept = new Map<string, unknown>();
+	for (const text of retainedStrings()) {
+		if (text.length < MIN_CACHED_LENGTH) continue;
+		const raw = strings.current.get(text) ?? strings.previous?.get(text);
+		if (raw !== undefined) kept.set(text, raw);
+	}
+	if (kept.size) sessions.set(sessionId, { current: kept, previous: undefined, open: false });
 }, "request-cache");
 
-function startGeneration(): void {
-	if (generationOpen) return;
-	generationOpen = true;
-	previous = current;
-	current = new Map();
-	queueMicrotask(() => {
-		generationOpen = false;
-	});
+/** The session's strings, with a generation of it started unless one already started in this task. */
+function sessionStrings(sessionId: string | undefined): SessionStrings {
+	let strings = sessions.get(sessionId);
+	if (strings) {
+		sessions.delete(sessionId);
+	} else {
+		strings = { current: new Map(), previous: undefined, open: false };
+		if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
+	}
+	sessions.set(sessionId, strings);
+	if (!strings.open) {
+		const started = strings;
+		started.open = true;
+		started.previous = started.current;
+		started.current = new Map();
+		queueMicrotask(() => {
+			started.open = false;
+		});
+	}
+	return strings;
 }
 
 function stringEncoder(sessionId: string | undefined, toRaw: (text: string) => unknown): (value: string) => unknown {
-	let values = current.get(sessionId);
-	const last = previous.get(sessionId);
+	const { current: values, previous: last } = sessionStrings(sessionId);
 	return (value) => {
-		if (!values) {
-			values = new Map();
-			current.set(sessionId, values);
-		}
 		let raw = values.get(value);
 		if (raw === undefined) {
 			raw = last?.get(value) ?? toRaw(JSON.stringify(value));
@@ -139,7 +149,6 @@ function substituteItems(
 export function cachedArrayToJSON(this: unknown[]): unknown {
 	try {
 		if (!rawJSON) return this;
-		startGeneration();
 		return substituteItems(this, stringEncoder(sessionOf.get(this), rawJSON), new Set());
 	} catch {
 		// JSON.stringify serializes what toJSON returns without calling it again: the array as it is.

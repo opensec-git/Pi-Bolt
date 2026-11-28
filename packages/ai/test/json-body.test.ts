@@ -171,6 +171,27 @@ describe("cacheJsonSerialization", () => {
 		cacheJsonSerialization(notArray);
 		expect(Object.getOwnPropertyNames(notArray)).toEqual(["messages"]);
 	});
+
+	// hunt-ai-1: json-body.ts says "two conversations that take turns still reuse theirs", but a request of one
+	// session starts a generation for every session, so the other session's strings are dropped.
+	it("reuses each conversation's encodings when two conversations take turns", async () => {
+		const text = long("tool output of a file\n");
+		const first = (session: string) => {
+			const items = [{ role: "tool", content: text }];
+			cacheJsonSerialization(items, session);
+			return ((cachedArrayToJSON.call(items) as unknown[])[0] as { content: unknown }).content;
+		};
+		const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+		first("turns-a");
+		await nextTask();
+		const b = first("turns-b");
+		await nextTask();
+		const a = first("turns-a");
+		await nextTask();
+		expect(first("turns-b")).toBe(b);
+		await nextTask();
+		expect(first("turns-a")).toBe(a);
+	});
 });
 
 const history: TranscriptContext = normalizeContext({
