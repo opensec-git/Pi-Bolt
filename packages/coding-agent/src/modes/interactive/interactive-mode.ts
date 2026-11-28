@@ -2677,6 +2677,15 @@ export class InteractiveMode {
 		return true;
 	}
 
+	/**
+	 * Forget the tool rows waiting for a result. They get no final result after this, so their elapsed-time timers are
+	 * stopped (claim T5): a dropped row's timer would otherwise ask for a frame every second for the rest of the session.
+	 */
+	private clearPendingTools(): void {
+		for (const component of this.pendingTools.values()) component.dispose();
+		this.pendingTools.clear();
+	}
+
 	private renderCurrentSessionState(): void {
 		this.loadedResourcesContainer.clear();
 		clearTranscriptForRebuild(this.renderer, this.chatContainer);
@@ -2685,7 +2694,7 @@ export class InteractiveMode {
 		this.compactionQueuedMessages = [];
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		this.renderInitialMessages();
 	}
 
@@ -4067,7 +4076,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.idleCollector?.cancel();
-				this.pendingTools.clear();
+				this.clearPendingTools();
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
@@ -4243,7 +4252,7 @@ export class InteractiveMode {
 								isError: true,
 							});
 						}
-						this.pendingTools.clear();
+						this.clearPendingTools();
 						this.maybeSuggestBugReport(this.streamingMessage);
 					} else {
 						// Args are now complete - trigger diff computation for edit tools
@@ -4334,7 +4343,7 @@ export class InteractiveMode {
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
 				}
-				this.pendingTools.clear();
+				this.clearPendingTools();
 
 				requestTurnEndRender(this.ui);
 				this.idleCollector?.schedule();
@@ -4700,7 +4709,7 @@ export class InteractiveMode {
 		messageMeta?: Map<AgentMessage, { id: string; timestamp: string }>,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
+		this.clearPendingTools();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
 		const fullscreen = this.renderer?.mode === "fullscreen";
 		// Extensions can run stateful code while constructing a row. Preserve that construction order.
