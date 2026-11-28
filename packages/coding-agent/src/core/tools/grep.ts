@@ -7,7 +7,13 @@ import { createInterface } from "../../utils/readline.ts";
 import { detachString } from "../../utils/text.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { type NativeGrepMatch, type NativeGrepResult, nativeGrep } from "./native-search.ts";
+import {
+	type NativeGrepMatch,
+	type NativeGrepResult,
+	nativeGrep,
+	ripgrepOnlySyntax,
+	withoutByteOrderMark,
+} from "./native-search.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { grepRenderers } from "./renderers/grep.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
@@ -168,6 +174,8 @@ const CONTEXT_READ_BYTES = 64 * 1024;
  * each cut to `keepChars`. The file is read a piece at a time up to the last range, so memory stays that of the lines kept
  * (a 95 MB log with a match near its start is not read whole: #11705). Lines are split at `\n` only, as ripgrep does: a
  * lone CR is content. A line past the end of the file is missing from the result; undefined if the file cannot be read.
+ * A byte order mark is handled as the search handles it (withoutByteOrderMark): a UTF-8 one left out, and a UTF-16 file, which
+ * the search reads whole, decoded whole.
  */
 async function readLineRanges(
 	filePath: string,
@@ -184,6 +192,7 @@ async function readLineRanges(
 	const lines = new Map<number, string>();
 	const lastLine = ranges[ranges.length - 1][1];
 	const buffer = Buffer.allocUnsafe(CONTEXT_READ_BYTES);
+	let position = 0;
 	// The kept start of the line being read, as bytes (at most keepChars * 4: enough for keepChars characters).
 	let pending: Buffer[] = [];
 	let pendingBytes = 0;
@@ -191,7 +200,6 @@ async function readLineRanges(
 	let lineHasBytes = false;
 	let lineNumber = 1;
 	let rangeIndex = 0;
-	let position = 0;
 	const wanted = () => {
 		while (rangeIndex < ranges.length && ranges[rangeIndex][1] < lineNumber) rangeIndex++;
 		return rangeIndex < ranges.length && ranges[rangeIndex][0] <= lineNumber;
@@ -213,6 +221,21 @@ async function readLineRanges(
 		lineNumber++;
 	};
 	try {
+		const { bytesRead: head } = await handle.read(buffer, 0, 3, 0);
+		if (head >= 2 && ((buffer[0] === 0xff && buffer[1] === 0xfe) || (buffer[0] === 0xfe && buffer[1] === 0xff))) {
+			const text = withoutByteOrderMark(await handle.readFile())
+				.toString("utf-8")
+				.split("\n");
+			if (text[text.length - 1] === "") text.pop(); // (Nothing after the last line break: no line there.)
+			for (const [from, to] of ranges) {
+				for (let number = from; number <= Math.min(to, text.length); number++) {
+					const line = text[number - 1];
+					lines.set(number, (line.endsWith("\r") ? line.slice(0, -1) : line).slice(0, keepChars));
+				}
+			}
+			return lines;
+		}
+		if (head === 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) position = 3;
 		let isWanted = wanted();
 		while (lineNumber <= lastLine) {
 			if (signal?.aborted) throw new Error("Operation aborted");
@@ -404,7 +427,12 @@ export function createGrepToolDefinition(
 							return path.basename(filePath);
 						};
 
-						if (native) {
+						// A pattern in a form of ripgrep's own that the in-process search does not have (`\p{L}`, `(?s)`) is searched
+						// with ripgrep, found or downloaded as Pi does; without it, the in-process search says what it lacks.
+						if (native && !literal && ripgrepOnlySyntax(pattern) !== undefined) {
+							rgPath = (await unlessAborted(ensureTool("rg"), signal)) ?? "";
+						}
+						if (native && !rgPath) {
 							// One match past the limit tells "exactly N matches" apart from "more than N".
 							const search = (slowLines: "stop" | "skip") =>
 								nativeGrep({

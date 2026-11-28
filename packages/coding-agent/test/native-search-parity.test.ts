@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createGrepTool } from "../src/core/tools/grep.ts";
 import { nativeFind, nativeGrep, requiredLiteral } from "../src/core/tools/native-search.ts";
 
 let root: string;
@@ -97,7 +98,7 @@ describe("grep", () => {
 		write("ws/outer/inner/c.txt");
 		write("ws/loose.log");
 		expect(await grep("needle")).toEqual(["loose.log:1:needle", "outer/inner/c.txt:1:needle"]);
-		expect(await grep("needle", { root: join(root, "ws", "outer") })).toEqual([]);
+		expect(await grep("needle", { root: join(root, "ws", "outer") })).toEqual(["outer/inner/c.txt:1:needle"]);
 	});
 
 	// hunt-tools-5: a `]` escaped inside a class does not end it. `[\]a-z]+bc` has no literal "a-z]" every match contains.
@@ -144,5 +145,73 @@ describe("grep", () => {
 			"utf16be.txt:1:using big endian",
 			"utf16le.txt:2:using utf16",
 		]);
+	});
+
+	// hunt-tools-7: ripgrep's POSIX classes, `\<` and `\>`, and a `]` first in a class.
+	test("forms of ripgrep's own syntax that have a JavaScript counterpart", async () => {
+		write("ws/a.txt", "hello  there\nthere\nthereafter\n]x\n");
+		expect(await grep("[[:space:]]{2}")).toEqual(["a.txt:1:hello  there"]);
+		expect(await grep("^[[:alpha:]]+$")).toEqual(["a.txt:2:there", "a.txt:3:thereafter"]);
+		expect(await grep("\\<there\\>")).toEqual(["a.txt:1:hello  there", "a.txt:2:there"]);
+		expect(await grep("\\<\\w+after\\>")).toEqual(["a.txt:3:thereafter"]);
+		expect(await grep("[]]x")).toEqual(["a.txt:4:]x"]);
+	});
+
+	// hunt-tools-4: outside a repository, ripgrep reads the .ignore files of the folders above the search folder; and a
+	// .ignore file decides over a .gitignore file, a deeper one too.
+	test("the .ignore files above the search folder outside a repository, and .ignore over .gitignore", async () => {
+		write("top/.ignore", "*.tmp\n");
+		write("top/ws/a.tmp");
+		write("top/ws/b.txt");
+		const below = await nativeGrep({
+			root: join(root, "top", "ws"),
+			isDirectory: true,
+			pattern: "needle",
+			limit: 10,
+			keepChars: 100,
+		});
+		expect(below.matches.map((m) => m.filePath.slice(root.length + 1))).toEqual(["top/ws/b.txt"]);
+		mkdirSync(join(root, "ws", ".git"), { recursive: true });
+		write("ws/.ignore", "!keep.log\n");
+		write("ws/sub/.gitignore", "*.log\n");
+		write("ws/sub/keep.log");
+		write("ws/sub/other.log");
+		expect(await grep("needle")).toEqual(["sub/keep.log:1:needle"]);
+	});
+
+	// hunt-tools-6: a line of many CRs is passed over at once when it has no match, not tested again from each place.
+	test("an anchored expression over lines of many CRs ends quickly", async () => {
+		write("ws/cr.txt", `${"x\r".repeat(4000)}y\n`.repeat(200));
+		const start = performance.now();
+		expect(await grep("y?x$")).toEqual([]);
+		expect(performance.now() - start).toBeLessThan(2000);
+	});
+
+	// hunt-tools-8: the context lines of a match in a file with a byte order mark, and a UTF-8 one in a file read a piece at
+	// a time.
+	test("context lines and large files with a byte order mark", async () => {
+		write(
+			"ws/utf16.txt",
+			Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("one\r\ntwo needle\r\nthree\r\n", "utf16le")]),
+		);
+		write("ws/bom8.txt", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("one\nneedle two\n")]));
+		const result = await createGrepTool(join(root, "ws"), { native: true }).execute("t", {
+			pattern: "needle",
+			context: 1,
+		});
+		expect((result.content[0] as { text: string }).text).toBe(
+			[
+				"bom8.txt-1- one",
+				"bom8.txt:2: needle two",
+				"utf16.txt-1- one",
+				"utf16.txt:2: two needle",
+				"utf16.txt-3- three",
+			].join("\n"),
+		);
+		write(
+			"ws/big.txt",
+			Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`start\n${"line\n".repeat(1_000_000)}`)]),
+		);
+		expect(await grep("^start", { wholeFileBytes: 1024, pieceBytes: 4096 })).toEqual(["big.txt:1:start"]);
 	});
 });

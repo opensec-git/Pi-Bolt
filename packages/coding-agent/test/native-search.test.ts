@@ -310,10 +310,12 @@ describe("grep", () => {
 				["[0-9]{3}x", ""],
 				["W{3} [0-9]+5 LINE", "i"],
 			]) {
-				const regex = new RegExp(pattern, `${flags}m`);
+				// Line by line, as ripgrep: a CR is not a line break (`^\s*$` does not match "  11x\r"), and a line's CRLF
+				// ending counts as its end (w132 hunt-tools-6).
+				const regex = new RegExp(pattern, flags);
 				const expected = lines
 					.map((text, i) => ({ text, lineNumber: i + 1 }))
-					.filter(({ text }) => regex.test(text))
+					.filter(({ text }) => regex.test(text) || (text.endsWith("\r") && regex.test(text.slice(0, -1))))
 					.slice(0, 2000)
 					.map(({ text, lineNumber }) => `${lineNumber}:${text.replace(/\r$/, "")}`);
 				const result = await nativeGrep({
