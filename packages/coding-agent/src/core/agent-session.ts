@@ -3945,6 +3945,7 @@ export class AgentSession {
 			[...this._toolRegistry.keys()].filter((name) => this._isActivatedOnRegistration(name)),
 		);
 		const previousActiveToolNames = this.getActiveToolNames();
+		const previousDeclarable = new Set([...this._toolRegistry.keys()].filter((name) => this._isDeclarable(name)));
 		const allowedTools = this._allowedTools;
 
 		const registeredTools = this._extensionRunner.getAllRegisteredTools();
@@ -4027,8 +4028,14 @@ export class AgentSession {
 		if (allowedTools) {
 			for (const toolName of this._toolRegistry.keys()) {
 				// Naming or matching a tool activates it even when it is not active by default. MCP tools
-				// kept registered without being named stay inactive.
-				if (allowedTools(toolName) && this._isDeclarable(toolName)) {
+				// kept registered without being named stay inactive. A later refresh (a tool registered at
+				// runtime) activates only tools that are new, so a tool an extension turned off stays off
+				// (upstream #12399).
+				if (
+					allowedTools(toolName) &&
+					this._isDeclarable(toolName) &&
+					(options?.activeToolNames !== undefined || !previousDeclarable.has(toolName))
+				) {
 					nextActiveToolNames.push(toolName);
 				}
 			}
