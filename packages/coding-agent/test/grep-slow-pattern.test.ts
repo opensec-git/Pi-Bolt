@@ -96,3 +96,32 @@ describe("grep with a pattern that could backtrack too long in-process", () => {
 		expect(mocks.ensureTool).not.toHaveBeenCalled();
 	});
 });
+
+// w132 hunt-tools-7: a form of ripgrep's own regular expressions that JavaScript takes in another meaning (`\p{Lu}` is the
+// text "p{Lu}" without the u flag) or refuses (`(?s)`).
+describe("grep with a pattern in ripgrep's own syntax", () => {
+	test.skipIf(!rgPath)("is handed to ripgrep, with ripgrep's results", async () => {
+		mocks.ensureTool.mockResolvedValue(rgPath);
+		for (const pattern of ["\\p{Lu}nly", "(?s)only.key", "[[:^space:]]+ key operation"]) {
+			const inProcess = await createGrepTool(dir, { native: true }).execute("t", { pattern });
+			const withRg = await createGrepTool(dir, { native: false }).execute("t", { pattern });
+			expect(text(inProcess)).toBe(text(withRg));
+		}
+		expect(mocks.ensureTool).toHaveBeenCalledWith("rg");
+	});
+
+	test("without ripgrep, says what it lacks instead of searching for another text", async () => {
+		mocks.ensureTool.mockResolvedValue(undefined);
+		await expect(createGrepTool(dir, { native: true }).execute("t", { pattern: "\\p{Lu}nly" })).rejects.toThrow(
+			"\\p is ripgrep's syntax",
+		);
+	});
+
+	test("POSIX classes and word boundaries stay in-process", async () => {
+		const result = await createGrepTool(dir, { native: true }).execute("t", {
+			pattern: "[[:alpha:]]+[[:space:]]\\<key\\> operation",
+		});
+		expect(text(result)).toBe("notes.txt:2: only key operation here");
+		expect(mocks.ensureTool).not.toHaveBeenCalled();
+	});
+});
