@@ -494,6 +494,8 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
+	/** Calls of abort(), so a prompt can tell that an abort came while it was checked. */
+	private _abortCount = 0;
 	private _agentRunAbortRequested = false;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
@@ -1629,11 +1631,13 @@ export class AgentSession {
 	subscribe(listener: AgentSessionEventListener): () => void {
 		this._eventListeners.push(listener);
 
-		// Return unsubscribe function for this specific listener
+		// Return unsubscribe function for this specific listener. It replaces the array instead of splicing it: an
+		// _emit() in progress iterates the old one, so a listener that unsubscribes itself does not make the next
+		// listener miss the event (claim A5), as with Node's EventEmitter.
 		return () => {
 			const index = this._eventListeners.indexOf(listener);
 			if (index !== -1) {
-				this._eventListeners.splice(index, 1);
+				this._eventListeners = this._eventListeners.toSpliced(index, 1);
 			}
 		};
 	}
@@ -2381,13 +2385,34 @@ export class AgentSession {
 		// Reserve the context through async input hooks and auth checks so tree navigation cannot
 		// start meanwhile (#9154). _startRun marks the run active synchronously, so there is no gap.
 		this._promptPreflightCount++;
+		const abortsBefore = this._abortCount;
 		let trigger: BeforeAgentStartTrigger | undefined;
 		try {
 			trigger = await this._preparePrompt(text, options);
 		} finally {
 			this._promptPreflightCount--;
 		}
-		if (trigger) await this._startRun(trigger, () => preflightResult?.("started"));
+		if (!trigger) return;
+		// An abort while the prompt was checked (input handlers, credential check) found no run to abort: it cancels
+		// the prompt (RPC abort, the interactive Esc).
+		if (this._abortCount !== abortsBefore) {
+			preflightResult?.("handled");
+			return;
+		}
+		// Another prompt may have started while this one was checked (claim A8). Checked again here, in the same
+		// synchronous step as _startRun() marking the run active, so two prompts cannot both start.
+		if (this.isStreaming && trigger.messageType === "user") {
+			if (!options?.streamingBehavior) {
+				throw new Error(
+					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+				);
+			}
+			if (options.streamingBehavior === "followUp") await this._queueFollowUp(trigger.prompt, trigger.images);
+			else await this._queueSteer(trigger.prompt, trigger.images);
+			preflightResult?.("queued");
+			return;
+		}
+		await this._startRun(trigger, () => preflightResult?.("started"));
 	}
 
 	/**
@@ -2795,6 +2820,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._abortCount++;
 		if (this._isAgentRunActive) {
 			this._agentRunAbortRequested = true;
 		}
