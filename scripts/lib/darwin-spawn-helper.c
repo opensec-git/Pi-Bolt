@@ -342,7 +342,10 @@ static void serveUntilParentExits(int socket_, pid_t parent)
     if (queue < 0)
         _exit(0);
     struct kevent changes[2];
-    EV_SET(&changes[0], parent, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+    // NOTE_EXEC: pi-bin replaced by another program in the same process (`--herdr-pi` starts the launcher again, which forks a
+    // helper of its own) closes pi-bin's end of the socket, which pi-bin keeps close-on-exec. The launcher's own start of
+    // pi-bin keeps it open.
+    EV_SET(&changes[0], parent, EVFILT_PROC, EV_ADD, NOTE_EXIT | NOTE_EXEC, 0, NULL);
     EV_SET(&changes[1], socket_, EVFILT_READ, EV_ADD, 0, 0, NULL);
     if (kevent(queue, changes, 2, NULL, 0, NULL) < 0 || getppid() != parent)
         _exit(0);
@@ -354,7 +357,14 @@ static void serveUntilParentExits(int socket_, pid_t parent)
         if (got <= 0)
             _exit(0);
         for (int i = 0; i < got; i++) {
-            if (events[i].filter == EVFILT_PROC)
+            if (events[i].filter != EVFILT_PROC)
+                continue;
+            if (events[i].fflags & NOTE_EXIT)
+                _exit(0);
+            // (A datagram socket whose peer has closed is no longer connected.)
+            struct sockaddr_storage peer;
+            socklen_t length = sizeof(peer);
+            if (getpeername(socket_, (struct sockaddr*)&peer, &length) && errno == ENOTCONN)
                 _exit(0);
         }
         while (!serve(socket_)) { }
