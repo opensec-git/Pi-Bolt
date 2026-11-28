@@ -2051,8 +2051,12 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	requestRenderWithin(delayMs: number): void {
-		// (A frame asked for already draws the change, and so does one asked for within the time already.)
-		if (this.stopped || this.renderRequested || this.deferredRenderTimer) return;
+		if (this.stopped) return;
+		// The components changed: the next frame renders them again, also one asked for a view change (a scroll), which
+		// would otherwise reuse their output and drop the change. (A frame asked for already draws the change, and so does
+		// one asked for within the time already.)
+		this.contentChanged = true;
+		if (this.renderRequested || this.deferredRenderTimer) return;
 		this.deferredRenderTimer = setTimeout(() => {
 			this.deferredRenderTimer = undefined;
 			this.requestRender();
