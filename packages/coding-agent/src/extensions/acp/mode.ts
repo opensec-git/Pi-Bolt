@@ -154,6 +154,8 @@ export class AcpAgent {
 	readonly connection: JsonRpcConnection;
 	private readonly options: AcpModeOptions;
 	private readonly sessions = new Map<string, AcpSession>();
+	/** Sessions being opened from their files by `session/load` or `session/resume`, by id. */
+	private readonly loading = new Map<string, Promise<AcpSession>>();
 	private clientCapabilities: ClientCapabilities = {};
 	/** Session creation runs one at a time: extensions load and project trust is decided per session. */
 	private creating: Promise<unknown> = Promise.resolve();
@@ -286,19 +288,25 @@ export class AcpAgent {
 	private async loadSession(params: Record<string, unknown>, replay: boolean) {
 		const id = requireString(params, "sessionId");
 		const cwd = requireDirectory(params);
-		const open = this.sessions.get(id);
-		if (open) {
-			if (replay) open.replay();
-			return open.settings();
-		}
-		const path = await this.findSession(id, cwd);
-		if (!path) throw new JsonRpcError(AcpErrorCode.ResourceNotFound, `Session not found: ${id}`);
-		const session = await this.open(SessionManager.open(path, this.sessionDirFor(cwd), cwd), mcpServersOf(params), {
-			type: "session_start",
-			reason: "resume",
-		});
+		// A load of a session another load is still opening waits for that one: one runtime per session file.
+		const session =
+			this.sessions.get(id) ?? (await (this.loading.get(id) ?? this.openById(id, cwd, mcpServersOf(params))));
 		if (replay) session.replay();
 		return session.settings();
+	}
+
+	/** Opens a session from its file. */
+	private openById(id: string, cwd: string, mcpServers: McpServer[]): Promise<AcpSession> {
+		const opening = (async () => {
+			const path = await this.findSession(id, cwd);
+			if (!path) throw new JsonRpcError(AcpErrorCode.ResourceNotFound, `Session not found: ${id}`);
+			return this.open(SessionManager.open(path, this.sessionDirFor(cwd), cwd), mcpServers, {
+				type: "session_start",
+				reason: "resume",
+			});
+		})().finally(() => this.loading.delete(id));
+		this.loading.set(id, opening);
+		return opening;
 	}
 
 	private async listSessions(params: Record<string, unknown>) {
