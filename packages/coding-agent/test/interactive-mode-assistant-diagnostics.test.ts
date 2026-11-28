@@ -128,7 +128,65 @@ describe("InteractiveMode assistant diagnostics", () => {
 
 		maybeShowThinkingDropNotice.call(context, openAIMessage(["rs_1", "rs_2", "rs_3"], ["prefix_mismatch"]));
 		const output = stripAnsi(context.chatContainer.render(120).join("\n"));
-		expect(output).toContain("OpenAI dropped 3 reasoning items: prefix_mismatch (details in session)");
+		expect(output).toContain("OpenAI dropped 1 reasoning item: prefix_mismatch (details in session)");
+	});
+
+	// #346
+	test("announces each removed block once, also after responses without removals", () => {
+		initTheme("dark");
+		const branch: Array<{ type: "message"; message: AssistantMessage }> = [
+			{ type: "message", message: openAIMessage(["rs_1", "rs_2", "rs_3"], ["prefix_mismatch"]) },
+			{ type: "message", message: { ...message, diagnostics: undefined } },
+		];
+		const context = {
+			chatContainer: new Container(),
+			settingsManager: { getNotices: () => ({ reasoningDrops: true }) },
+			sessionManager: { getBranch: () => branch },
+		};
+
+		// Reported again (an item pi could not leave out): no notice, however many responses lie between.
+		maybeShowThinkingDropNotice.call(context, openAIMessage(["rs_2"], ["prefix_mismatch"]));
+		expect(context.chatContainer.children).toHaveLength(0);
+
+		// Fewer items than the last report, but a new one: announced, with only the new item's reason.
+		maybeShowThinkingDropNotice.call(context, openAIMessage(["rs_1", "rs_9"], ["prefix_mismatch", "model_mismatch"]));
+		const output = stripAnsi(context.chatContainer.render(120).join("\n"));
+		expect(output).toContain("OpenAI dropped 1 reasoning item: model_mismatch (details in session)");
+	});
+
+	// #346
+	test("names Anthropic blocks by their signature hash when the reply recorded one", () => {
+		initTheme("dark");
+		const reported = (path: string, signatureHash: string): AssistantMessage => ({
+			...message,
+			diagnostics: [
+				{
+					type: "anthropic_input_transformations",
+					timestamp: 1,
+					details: {
+						transformations: [
+							{ type: "thinking_dropped", path, reason: "prefix_binding_mismatch", signatureHash },
+						],
+					},
+				},
+			],
+		});
+		const context = {
+			chatContainer: new Container(),
+			settingsManager: { getNotices: () => ({ reasoningDrops: true }) },
+			sessionManager: {
+				getBranch: () => [{ type: "message" as const, message: reported("messages.4.content.0", "h1") }],
+			},
+		};
+
+		// The same block at another place in the request is the same block.
+		maybeShowThinkingDropNotice.call(context, reported("messages.2.content.0", "h1"));
+		expect(context.chatContainer.children).toHaveLength(0);
+
+		// Another block at the place the first one had is a new one.
+		maybeShowThinkingDropNotice.call(context, reported("messages.4.content.0", "h2"));
+		const output = stripAnsi(context.chatContainer.render(120).join("\n"));
+		expect(output).toContain("Anthropic dropped 1 thinking block: prefix_binding_mismatch (details in session)");
 	});
 });
 

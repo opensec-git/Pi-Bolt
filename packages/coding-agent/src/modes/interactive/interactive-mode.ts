@@ -600,6 +600,11 @@ interface ReasoningDropDiagnostic {
 	provider: string;
 	/** Transformation `type` of a withheld block. */
 	droppedType: string;
+	/**
+	 * Transformation fields that name a withheld block across requests, in order of preference: the first that is set
+	 * names it. Anthropic's `path` is a place in the request, which stays the same while only later messages are added.
+	 */
+	keyFields: readonly string[];
 	/** Singular and plural name of a withheld block. */
 	noun: [string, string];
 }
@@ -608,21 +613,26 @@ interface ReasoningDropDiagnostic {
 const REASONING_DROP_DIAGNOSTICS = new Map<string, ReasoningDropDiagnostic>([
 	[
 		"anthropic_input_transformations",
-		{ provider: "Anthropic", droppedType: "thinking_dropped", noun: ["thinking block", "thinking blocks"] },
+		{
+			provider: "Anthropic",
+			droppedType: "thinking_dropped",
+			keyFields: ["signatureHash", "path"],
+			noun: ["thinking block", "thinking blocks"],
+		},
 	],
 	[
 		"openai_input_transformations",
-		{ provider: "OpenAI", droppedType: "reasoning", noun: ["reasoning item", "reasoning items"] },
+		{ provider: "OpenAI", droppedType: "reasoning", keyFields: ["id"], noun: ["reasoning item", "reasoning items"] },
 	],
 ]);
 
 interface DroppedReasoning {
 	diagnostic: ReasoningDropDiagnostic;
-	count: number;
-	reasons: string[];
+	/** The withheld blocks, each named by its first key field that is set; undefined for a block without one. */
+	blocks: { key: string | undefined; reason: string | undefined }[];
 }
 
-/** Count the reasoning blocks a provider reported as withheld from the request that produced `message`. */
+/** The reasoning blocks a provider reported as withheld from the request that produced `message`. */
 function getDroppedReasoning(message: AssistantMessage): DroppedReasoning | undefined {
 	for (const diagnostic of message.diagnostics ?? []) {
 		const kind = REASONING_DROP_DIAGNOSTICS.get(diagnostic.type);
@@ -630,18 +640,22 @@ function getDroppedReasoning(message: AssistantMessage): DroppedReasoning | unde
 		// Session data: diagnostics details are untyped JSON.
 		const transformations = diagnostic.details?.transformations;
 		if (!Array.isArray(transformations)) continue;
-		const dropped = transformations.filter(
-			(transformation): transformation is Record<string, unknown> =>
-				typeof transformation === "object" &&
-				transformation !== null &&
-				(transformation as Record<string, unknown>).type === kind.droppedType,
-		);
-		if (dropped.length === 0) continue;
-		const reasons = new Set<string>();
-		for (const transformation of dropped) {
-			if (typeof transformation.reason === "string") reasons.add(transformation.reason);
+		const blocks: DroppedReasoning["blocks"] = [];
+		for (const transformation of transformations) {
+			if (typeof transformation !== "object" || transformation === null || Array.isArray(transformation)) continue;
+			if (transformation.type !== kind.droppedType) continue;
+			let key: string | undefined;
+			for (const field of kind.keyFields) {
+				const value = transformation[field];
+				if (typeof value === "string") {
+					key = `${field}:${value}`;
+					break;
+				}
+			}
+			const reason = transformation.reason;
+			blocks.push({ key, reason: typeof reason === "string" ? reason : undefined });
 		}
-		return { diagnostic: kind, count: dropped.length, reasons: [...reasons] };
+		if (blocks.length > 0) return { diagnostic: kind, blocks };
 	}
 	return undefined;
 }
@@ -4932,26 +4946,28 @@ export class InteractiveMode {
 		const dropped = getDroppedReasoning(message);
 		if (!dropped) return;
 
-		// Providers report a withheld block again on every later request that replays it, so only
-		// a count above the previous response's means new losses. message_end reaches the UI before
-		// the current message is persisted, so the branch's last assistant message is the previous response.
-		const branch = this.sessionManager.getBranch();
-		for (let i = branch.length - 1; i >= 0; i--) {
-			const entry = branch[i];
-			if (entry.type === "message" && entry.message.role === "assistant") {
-				const previous = getDroppedReasoning(entry.message);
-				if (previous?.diagnostic === dropped.diagnostic && dropped.count <= previous.count) return;
-				break;
-			}
+		// A block is announced once: pi stops replaying a block withheld for good, but one it cannot name, or one
+		// withheld for a reason that can change, is reported again on every later request that replays it (#346).
+		// message_end reaches the UI before the current message is persisted, so the branch holds only earlier responses.
+		const announced = new Set<string>();
+		for (const entry of this.sessionManager.getBranch()) {
+			if (entry.type !== "message" || entry.message.role !== "assistant" || !entry.message.diagnostics) continue;
+			const earlier = getDroppedReasoning(entry.message);
+			if (earlier?.diagnostic !== dropped.diagnostic) continue;
+			for (const block of earlier.blocks) if (block.key !== undefined) announced.add(block.key);
 		}
+		const fresh = dropped.blocks.filter((block) => block.key === undefined || !announced.has(block.key));
+		if (fresh.length === 0) return;
 
 		const { provider, noun: nouns } = dropped.diagnostic;
-		const noun = nouns[dropped.count === 1 ? 0 : 1];
-		const reasons = dropped.reasons.length > 0 ? `: ${dropped.reasons.join(", ")}` : "";
+		const noun = nouns[fresh.length === 1 ? 0 : 1];
+		const reasonSet = new Set<string>();
+		for (const block of fresh) if (block.reason !== undefined) reasonSet.add(block.reason);
+		const reasons = reasonSet.size > 0 ? `: ${[...reasonSet].join(", ")}` : "";
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(
 			new ThemedText(
-				() => theme.fg("warning", `${provider} dropped ${dropped.count} ${noun}${reasons} (details in session)`),
+				() => theme.fg("warning", `${provider} dropped ${fresh.length} ${noun}${reasons} (details in session)`),
 				1,
 				0,
 			),
