@@ -136,6 +136,11 @@ export class TranscriptContainer extends Container {
 		else for (const row of this.childView) if (filter(row)) row.invalidate();
 	}
 
+	/** The rows built so far: a walk over the tree (the TUI's mount check) must not build the deferred ones. */
+	override childComponents(): readonly Component[] {
+		return [...this.residents()];
+	}
+
 	/** The public, mutable child list always represents the whole document. */
 	override get children(): Component[] {
 		this.completeNow();

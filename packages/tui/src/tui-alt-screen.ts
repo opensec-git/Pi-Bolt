@@ -324,7 +324,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			render: (width) => super.renderShared(width),
 			handleMouse: (event) => super.handleMouse(event),
 			invalidate: () => {
-				for (const child of this.children) child.invalidate();
+				for (const child of this.childView) child.invalidate();
 			},
 		};
 		this.implicitScrollView = new ScrollView(this.implicitDocument, { follow: "end", primary: true });

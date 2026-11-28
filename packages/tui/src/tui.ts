@@ -909,6 +909,15 @@ export class Container implements Component {
 		return this.ownChildren();
 	}
 
+	/**
+	 * The children, read-only, for a walk over the tree (the TUI's mount check). Unlike `children`, reading them reports
+	 * no change: the container keeps reporting its changes, and a subclass that builds children on demand need not
+	 * build them.
+	 */
+	childComponents(): readonly Component[] {
+		return this.ownChildren();
+	}
+
 	protected replaceChildAt(index: number, component: Component): void {
 		this.ownChildren()[index] = component;
 		this.noteChildrenUsed();
@@ -1698,7 +1707,9 @@ export abstract class TuiBase extends Container implements TUI {
 	private containsComponent(root: Component, target: Component): boolean {
 		if (root === target) return true;
 		if (!(root instanceof Container)) return false;
-		return root.children.some((child) => this.containsComponent(child, target));
+		// Claim T1: `children` would mark every walked container as exposed (rendered again on every frame) and build
+		// the whole fullscreen transcript.
+		return root.childComponents().some((child) => this.containsComponent(child, target));
 	}
 
 	/**
