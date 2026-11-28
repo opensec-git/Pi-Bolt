@@ -18,12 +18,21 @@
  */
 
 import { EventEmitter } from "events";
+import { matchesKey } from "./keys.ts";
 
 const ESC = "\x1b";
 const DEFAULT_SEQUENCE_TIMEOUT_MS = 50;
 const DEFAULT_ESCAPE_TIMEOUT_MS = 10;
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
+// Upstream #11383: the end of a bracketed paste can be lost (another reader on the same tty took it, or the paste
+// was cut short). A terminal writes a paste without pauses, so a paste that has had no input for this long has ended.
+const PASTE_IDLE_TIMEOUT_MS = 1000;
+// A recognized reply header waits for its terminator, also across network delays. If the terminator was lost, the
+// buffered string is dropped after this much time without input, so later keys are read again.
+const REPLY_TERMINATOR_TIMEOUT_MS = 10_000;
+// Longer than any encoding of one key press, so a paste chunk is never parsed as a key.
+const MAX_KEY_SEQUENCE_LENGTH = 32;
 // Color and program-status OSC replies, XTVersion, and Kitty graphics replies.
 // Until their header is complete, the input may be batched legacy Alt keystrokes.
 const TERMINAL_REPLY_HEADER_PATTERN = /^\x1b(?:\](?:1[01];|4;\d{1,3};|7501;\?)|P>\||_G(?:[a-z]=\d+,)*[a-z]=\d+;)/;
@@ -117,8 +126,9 @@ export type StdinBufferOptions = {
 	/**
 	 * Maximum time to wait for an incomplete keyboard or mouse sequence
 	 * (default: 50ms). Strings with a recognized terminal reply header wait for
-	 * their terminator instead, so delayed replies cannot become keypresses.
-	 * Ambiguous legacy Alt-key input still uses this timeout.
+	 * their terminator instead (up to 10 s without input, or until Ctrl+C), so
+	 * delayed replies cannot become keypresses. Ambiguous legacy Alt-key input
+	 * still uses this timeout.
 	 */
 	timeout?: number;
 	/**
@@ -184,6 +194,21 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			return;
 		}
 
+		// Upstream #11383: Ctrl+C always reaches the app. It ends a paste whose end sequence has not come, and drops a
+		// terminal reply whose terminator has not come; otherwise both would take it in as content. A paste or a reply
+		// never comes as a read that holds only Ctrl+C. This is not a key binding: the key is passed on, not handled.
+		if (
+			(this.pasteMode || (this.buffer.length > 0 && TERMINAL_REPLY_HEADER_PATTERN.test(this.buffer))) &&
+			str.length <= MAX_KEY_SEQUENCE_LENGTH &&
+			matchesKey(str, "ctrl+c")
+		) {
+			if (this.pasteMode) {
+				this.endUnterminatedPaste();
+			} else {
+				this.buffer = "";
+			}
+		}
+
 		this.buffer += str;
 
 		if (this.pasteMode) {
@@ -223,7 +248,13 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 			// Flushing it would turn a delayed tail into text and an OSC's BEL
 			// terminator into Ctrl+G (the external editor shortcut). Other input,
 			// including Alt+] followed by text, must retain bounded recovery.
-			if (TERMINAL_REPLY_HEADER_PATTERN.test(this.buffer)) return;
+			if (TERMINAL_REPLY_HEADER_PATTERN.test(this.buffer)) {
+				this.timeout = setTimeout(() => {
+					this.timeout = null;
+					this.buffer = "";
+				}, REPLY_TERMINATOR_TIMEOUT_MS);
+				return;
+			}
 			const timeoutMs = this.buffer === ESC ? this.escapeTimeoutMs : this.timeoutMs;
 			this.timeout = setTimeout(() => {
 				const flushed = this.flush();
@@ -249,6 +280,11 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (end === -1) {
 			this.pasteChunks.push(chunk);
 			this.pasteTail = window.slice(-(BRACKETED_PASTE_END.length - 1));
+			// process() clears the timer on every chunk, so this measures the time since the last one.
+			this.timeout = setTimeout(() => {
+				this.timeout = null;
+				this.endUnterminatedPaste();
+			}, PASTE_IDLE_TIMEOUT_MS);
 			return;
 		}
 		const inChunk = end - this.pasteTail.length;
@@ -268,6 +304,20 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (remaining.length > 0) {
 			this.process(remaining);
 		}
+	}
+
+	/** End a paste whose end sequence never came, and emit what came of it as the paste. */
+	private endUnterminatedPaste(): void {
+		if (this.timeout) {
+			clearTimeout(this.timeout);
+			this.timeout = null;
+		}
+		const pastedContent = this.pasteChunks.join("");
+		this.pasteChunks = [];
+		this.pasteTail = "";
+		this.pasteMode = false;
+		this.pendingKittyPrintableCodepoint = undefined;
+		if (pastedContent.length > 0) this.emit("paste", pastedContent);
 	}
 
 	private emitDataSequence(sequence: string): void {
