@@ -547,6 +547,35 @@ describe("MCP mode", () => {
 		expect(requests.some((request) => request.users.at(-1) === prompt)).toBe(false);
 	});
 
+	it("logs the settings errors an extension's reload finds", async () => {
+		const extensionPath = join(root, "reload-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.registerCommand("reload-settings", {
+		description: "Reload",
+		handler: async (_args, ctx) => {
+			await ctx.reload();
+		},
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		const first = await client.call({ prompt: "[hello] start" });
+		const sessionId = first.structuredContent.sessionId;
+		const settingsPath = join(agentDir, "settings.json");
+		const settings = readFileSync(settingsPath, "utf8");
+		writeFileSync(settingsPath, "{ not json");
+		try {
+			await client.call({ prompt: "/reload-settings", sessionId });
+		} finally {
+			writeFileSync(settingsPath, settings);
+		}
+		await client.waitFor(() => client.stderr.includes("Invalid settings file"));
+		expect(client.stderr).toContain(`Warning: Invalid settings file ${settingsPath}`);
+	});
+
 	it("asks the client through elicitation when an extension asks the user", async () => {
 		const extensionPath = join(root, "ask-extension.ts");
 		const answerPath = join(root, "answer.txt");

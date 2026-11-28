@@ -2553,6 +2553,8 @@ export class InteractiveMode {
 
 	private showRuntimeDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]): void {
 		for (const diagnostic of diagnostics) {
+			// Phones of the terminal's /remote-control see them too, as they see extensions' notices.
+			this.remoteControl?.notify(diagnostic.message, diagnostic.type);
 			if (diagnostic.type === "error") {
 				this.showError(diagnostic.message);
 			} else if (diagnostic.type === "warning") {
