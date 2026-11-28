@@ -16,14 +16,21 @@ export function getStdinFirstDataTimeoutMs(env: NodeJS.ProcessEnv = process.env)
 	return Number.isFinite(value) && value >= 0 ? value : DEFAULT_STDIN_TIMEOUT_MS;
 }
 
+/** The stderr line for stdin that was not read because it sent nothing within `timeoutMs`. */
+export function formatStdinIgnoredNotice(timeoutMs: number): string {
+	return `stdin sent nothing within ${timeoutMs / 1000} s and was not read; set PI_STDIN_TIMEOUT_MS=0 to wait for it`;
+}
+
 /**
  * Read all of piped stdin. Undefined when stdin is a terminal or empty. With `firstDataTimeoutMs` above 0, stdin that
  * sends nothing within that time counts as empty and is no longer read: a parent that keeps the pipe open without
- * writing does not block `pi -p "prompt"` (upstream #10415). Once data arrives, it is read to the end.
+ * writing does not block `pi -p "prompt"` (upstream #10415). Once data arrives, it is read to the end. `onIgnored`
+ * runs when stdin is not read for that reason, so a slow producer's input is not dropped without a word.
  */
 export function readPipedStdin(
 	stdin: NodeJS.ReadableStream & { isTTY?: boolean; destroy?: () => void },
 	firstDataTimeoutMs = 0,
+	onIgnored?: () => void,
 ): Promise<string | undefined> {
 	if (stdin.isTTY) return Promise.resolve(undefined);
 
@@ -48,6 +55,7 @@ export function readPipedStdin(
 				// Stop reading, so the open pipe does not keep the process alive.
 				stdin.pause();
 				stdin.destroy?.();
+				onIgnored?.();
 				resolve(undefined);
 			}, firstDataTimeoutMs);
 		}

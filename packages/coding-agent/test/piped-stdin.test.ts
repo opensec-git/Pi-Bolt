@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { getStdinFirstDataTimeoutMs, readPipedStdin } from "../src/utils/piped-stdin.ts";
+import { formatStdinIgnoredNotice, getStdinFirstDataTimeoutMs, readPipedStdin } from "../src/utils/piped-stdin.ts";
 
 // upstream #10415: `pi -p "prompt"` waited for the end of piped stdin, so a parent that kept the pipe open without
 // writing blocked the run forever.
@@ -15,6 +15,32 @@ describe("readPipedStdin", () => {
 		expect(result).toBeUndefined();
 		expect(Date.now() - startedAt).toBeLessThan(1_000);
 		expect(stdin.destroyed).toBe(true);
+	});
+
+	// A slow producer's input must not be dropped without a word.
+	it("reports stdin it did not read, once", async () => {
+		const stdin = new PassThrough();
+		let notices = 0;
+		expect(await readPipedStdin(stdin, 50, () => notices++)).toBeUndefined();
+		expect(notices).toBe(1);
+		expect(formatStdinIgnoredNotice(2_000)).toBe(
+			"stdin sent nothing within 2 s and was not read; set PI_STDIN_TIMEOUT_MS=0 to wait for it",
+		);
+	});
+
+	it("reports nothing when stdin sent data or ended in time", async () => {
+		let notices = 0;
+		const withData = new PassThrough();
+		const reading = readPipedStdin(withData, 50, () => notices++);
+		withData.write("input");
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		withData.end();
+		expect(await reading).toBe("input");
+		const empty = new PassThrough();
+		const emptyReading = readPipedStdin(empty, 50, () => notices++);
+		empty.end();
+		expect(await emptyReading).toBeUndefined();
+		expect(notices).toBe(0);
 	});
 
 	it("reads to the end once data arrived, however long the rest takes", async () => {

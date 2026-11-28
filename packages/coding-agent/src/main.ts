@@ -64,7 +64,7 @@ import { PIBOLT } from "./pi-bolt.ts";
 import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
-import { getStdinFirstDataTimeoutMs, readPipedStdin } from "./utils/piped-stdin.ts";
+import { formatStdinIgnoredNotice, getStdinFirstDataTimeoutMs, readPipedStdin } from "./utils/piped-stdin.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
@@ -979,9 +979,11 @@ export async function main(cliArgs: string[], options?: MainOptions) {
 	let stdinContent: string | undefined;
 	if (appMode !== "rpc") {
 		// With a prompt argument, an open pipe that never sends data must not block the run (upstream #10415).
-		stdinContent = await readPipedStdin(
-			process.stdin,
-			parsed.messages.length > 0 || parsed.fileArgs.length > 0 ? getStdinFirstDataTimeoutMs() : 0,
+		const stdinTimeoutMs =
+			parsed.messages.length > 0 || parsed.fileArgs.length > 0 ? getStdinFirstDataTimeoutMs() : 0;
+		// On stderr, which print and JSON mode use for human-readable diagnostics; stdout stays clean.
+		stdinContent = await readPipedStdin(process.stdin, stdinTimeoutMs, () =>
+			console.error(chalk.yellow(`Warning: ${formatStdinIgnoredNotice(stdinTimeoutMs)}`)),
 		);
 		if (stdinContent !== undefined && appMode === "interactive") {
 			appMode = "print";
