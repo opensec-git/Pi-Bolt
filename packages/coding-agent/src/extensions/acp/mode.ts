@@ -1086,12 +1086,12 @@ class AcpSession {
 		const toolCall = running
 			? { toolCallId, title, ...content }
 			: { toolCallId, title, kind: "other" as const, status: "pending" as const, ...content };
-		const request = this.agent.connection.request<RequestPermissionResponse>("session/request_permission", {
-			sessionId: this.id,
-			toolCall,
-			options,
-		});
-		const response = await settleWithin(request, opts);
+		const params = { sessionId: this.id, toolCall, options };
+		const response = await settleWithin(
+			(signal) =>
+				this.agent.connection.request<RequestPermissionResponse>("session/request_permission", params, signal),
+			opts,
+		);
 		const selected = response && response.outcome.outcome === "selected" ? response.outcome.optionId : undefined;
 		// Clients keep what a permission request changes on the tool call: give a running tool its own title and output
 		// back, and end a dialog's own entry.
@@ -1126,7 +1126,7 @@ class AcpSession {
 	): Promise<string | undefined> {
 		if (!this.agent.capabilities.elicitation?.form || opts?.signal?.aborted) return undefined;
 		const running = [...this.runningTools.keys()].at(-1);
-		const request = this.agent.connection.request<CreateElicitationResponse>("elicitation/create", {
+		const params = {
 			sessionId: this.id,
 			...(running ? { toolCallId: running } : {}),
 			mode: "form",
@@ -1136,8 +1136,11 @@ class AcpSession {
 				properties: { value: { type: "string", title, ...field } },
 				required: ["value"],
 			},
-		});
-		const response = await settleWithin(request, opts);
+		};
+		const response = await settleWithin(
+			(signal) => this.agent.connection.request<CreateElicitationResponse>("elicitation/create", params, signal),
+			opts,
+		);
 		const value = response?.action === "accept" ? response.content?.value : undefined;
 		return typeof value === "string" ? value : undefined;
 	}

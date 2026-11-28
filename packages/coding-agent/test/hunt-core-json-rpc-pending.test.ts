@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { JsonRpcConnection } from "../src/extensions/json-rpc.ts";
 import { McpServer } from "../src/extensions/mcp-server/mode.ts";
 
 describe("MCP elicitation that times out", () => {
@@ -42,5 +43,34 @@ describe("MCP elicitation that times out", () => {
 		// No request stays pending on the connection after its caller stopped waiting.
 		const pending = (server.connection as unknown as { pending: Map<unknown, unknown> }).pending;
 		expect(pending.size).toBe(0);
+	});
+});
+
+describe("JsonRpcConnection requests that are dropped", () => {
+	it("drops a request whose signal aborts, ignores a late answer, and tells only a client that asks to be told", async () => {
+		const written: Array<Record<string, unknown>> = [];
+		const dropped: unknown[] = [];
+		const connection = new JsonRpcConnection({
+			write: (line) => written.push(JSON.parse(line) as Record<string, unknown>),
+			onRequest: async () => ({}),
+			onNotification: () => {},
+			onDrop: (id) => dropped.push(id),
+		});
+		const controller = new AbortController();
+		const request = connection.request("session/request_permission", {}, controller.signal);
+		controller.abort();
+		await expect(request).rejects.toBeDefined();
+		expect(dropped).toEqual([written[0].id]);
+		connection.receive(JSON.stringify({ jsonrpc: "2.0", id: written[0].id, result: { late: true } }));
+		const pending = (connection as unknown as { pending: Map<unknown, unknown> }).pending;
+		expect(pending.size).toBe(0);
+
+		// An answer that comes first settles the request, and a later abort changes nothing.
+		const answered = new AbortController();
+		const second = connection.request("session/request_permission", {}, answered.signal);
+		connection.receive(JSON.stringify({ jsonrpc: "2.0", id: written[1].id, result: { ok: true } }));
+		expect(await second).toEqual({ ok: true });
+		answered.abort();
+		expect(dropped).toHaveLength(1);
 	});
 });

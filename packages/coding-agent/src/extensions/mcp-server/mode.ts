@@ -117,6 +117,8 @@ export class McpServer {
 			write,
 			onRequest: (method, params, id) => this.handleRequest(method, params, id),
 			onNotification: (method, params) => this.handleNotification(method, params),
+			// As MCP asks of a sender that no longer waits for a request's result.
+			onDrop: (requestId) => this.connection.notify("notifications/cancelled", { requestId }),
 		});
 	}
 
@@ -350,19 +352,27 @@ export class McpServer {
 		return { content: [{ type: "text", text }], structuredContent: { sessions } };
 	}
 
-	/** Asks the client to fill in a form; undefined when it declines or cannot. */
+	/**
+	 * Asks the client to fill in a form; undefined when it declines or cannot, or when the dialog or `run` (the call
+	 * whose prompt asks) is cancelled first.
+	 */
 	async elicit(
 		message: string,
 		properties: Record<string, Record<string, unknown>>,
 		opts: ExtensionUIDialogOptions | undefined,
+		run?: AbortSignal,
 	): Promise<Record<string, unknown> | undefined> {
-		if (opts?.signal?.aborted) return undefined;
-		const request = this.connection.request<{ action?: string; content?: unknown }>("elicitation/create", {
+		const params = {
 			mode: "form",
 			message,
 			requestedSchema: { type: "object", properties, required: Object.keys(properties) },
-		});
-		const response = await settleWithin(request, opts);
+		};
+		const response = await settleWithin(
+			(signal) =>
+				this.connection.request<{ action?: string; content?: unknown }>("elicitation/create", params, signal),
+			opts,
+			run,
+		);
 		return response?.action === "accept" && isRecord(response.content) ? response.content : undefined;
 	}
 }
@@ -429,6 +439,8 @@ class PiSession {
 	private readonly runtime: AgentSessionRuntime;
 	private queue: Promise<unknown> = Promise.resolve();
 	private pending = 0;
+	/** The signal of the call whose prompt runs: its cancellation also ends the dialogs the prompt opened. */
+	private promptSignal: AbortSignal | undefined;
 	private disposed = false;
 
 	constructor(server: McpServer, runtime: AgentSessionRuntime) {
@@ -498,7 +510,14 @@ class PiSession {
 
 	prompt(args: PromptArgs, signal: AbortSignal, progress?: (message: string) => void): Promise<McpToolResult> {
 		this.pending++;
-		const run = this.queue.then(() => this.runPrompt(args, signal, progress));
+		const run = this.queue.then(async () => {
+			this.promptSignal = signal;
+			try {
+				return await this.runPrompt(args, signal, progress);
+			} finally {
+				this.promptSignal = undefined;
+			}
+		});
 		this.queue = run.catch(() => {});
 		return run.finally(() => {
 			this.pending--;
@@ -627,7 +646,8 @@ class PiSession {
 		const server = this.server;
 		return clientUIContext({
 			select: async (title, options, opts) => {
-				const answer = await server.elicit(title, { choice: { type: "string", title, enum: options } }, opts);
+				const choice = { type: "string", title, enum: options };
+				const answer = await server.elicit(title, { choice }, opts, this.promptSignal);
 				return typeof answer?.choice === "string" && options.includes(answer.choice) ? answer.choice : undefined;
 			},
 			confirm: async (title, message, opts) => {
@@ -635,17 +655,18 @@ class PiSession {
 					message ? `${title}\n\n${message}` : title,
 					{ confirm: { type: "boolean", title: "Yes", default: false } },
 					opts,
+					this.promptSignal,
 				);
 				return answer?.confirm === true;
 			},
 			input: async (title, placeholder, opts) => {
 				const field = { type: "string", title, ...(placeholder ? { description: placeholder } : {}) };
-				const answer = await server.elicit(title, { value: field }, opts);
+				const answer = await server.elicit(title, { value: field }, opts, this.promptSignal);
 				return typeof answer?.value === "string" ? answer.value : undefined;
 			},
 			editor: async (title, prefill) => {
 				const field = { type: "string", title, ...(prefill ? { default: prefill } : {}) };
-				const answer = await server.elicit(title, { value: field }, undefined);
+				const answer = await server.elicit(title, { value: field }, undefined, this.promptSignal);
 				return typeof answer?.value === "string" ? answer.value : undefined;
 			},
 			notify: (message, type) =>

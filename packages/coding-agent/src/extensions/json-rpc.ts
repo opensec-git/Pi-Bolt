@@ -33,13 +33,14 @@ export type JsonRpcNotificationHandler = (method: string, params: unknown) => vo
 
 interface PendingRequest {
 	resolve: (value: unknown) => void;
-	reject: (error: Error) => void;
+	reject: (error: unknown) => void;
 }
 
 export class JsonRpcConnection {
 	private readonly write: (line: string) => void;
 	private readonly onRequest: JsonRpcRequestHandler;
 	private readonly onNotification: JsonRpcNotificationHandler;
+	private readonly onDrop: ((id: JsonRpcId) => void) | undefined;
 	private readonly pending = new Map<JsonRpcId, PendingRequest>();
 	/** Requests the client gave up on, which get no response. */
 	private readonly abandoned = new Set<JsonRpcId>();
@@ -50,10 +51,13 @@ export class JsonRpcConnection {
 		write: (line: string) => void;
 		onRequest: JsonRpcRequestHandler;
 		onNotification: JsonRpcNotificationHandler;
+		/** Tells the client that Pi stopped waiting for the result of its request `id` (MCP's `notifications/cancelled`). */
+		onDrop?: (id: JsonRpcId) => void;
 	}) {
 		this.write = options.write;
 		this.onRequest = options.onRequest;
 		this.onNotification = options.onNotification;
+		this.onDrop = options.onDrop;
 	}
 
 	/** Handles one line received from the client. */
@@ -103,12 +107,32 @@ export class JsonRpcConnection {
 		}
 	}
 
-	/** Calls a client method and waits for its result. */
-	request<T>(method: string, params: unknown): Promise<T> {
+	/**
+	 * Calls a client method and waits for its result. When `signal` aborts first, the request is dropped: the promise
+	 * rejects with the signal's reason, the client is told (`onDrop`), and a late answer is ignored.
+	 */
+	request<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
 		if (this.closed) return Promise.reject(new Error("The connection is closed"));
+		if (signal?.aborted) return Promise.reject(signal.reason);
 		const id = this.nextId++;
 		return new Promise<T>((resolve, reject) => {
-			this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+			const onAbort = () => {
+				if (!this.pending.delete(id)) return;
+				reject(signal?.reason);
+				this.onDrop?.(id);
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+			const done = () => signal?.removeEventListener("abort", onAbort);
+			this.pending.set(id, {
+				resolve: (value) => {
+					done();
+					resolve(value as T);
+				},
+				reject: (error) => {
+					done();
+					reject(error);
+				},
+			});
 			this.send({ jsonrpc: "2.0", id, method, params });
 		});
 	}
