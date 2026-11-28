@@ -164,6 +164,7 @@ import { loadAllHighlightLanguagesOnDemand } from "../../utils/syntax-highlight.
 import { stripBom } from "../../utils/text.ts";
 import { ensureTool, type ToolStatus } from "../../utils/tools-manager.ts";
 import { checkForNewPiVersion, type LatestPiRelease } from "../../utils/version-check.ts";
+import { onUnhandledRejection } from "../uncaught-errors.ts";
 import { reportBug } from "./bug-report.ts";
 import { createChatViewport } from "./chat-viewport.ts";
 import { ArminComponent } from "./components/armin.ts";
@@ -5241,6 +5242,8 @@ export class InteractiveMode {
 		const uncaughtExceptionHandler = (error: Error) => this.uncaughtCrash(error);
 		process.prependListener("uncaughtException", uncaughtExceptionHandler);
 		this.signalCleanupHandlers.push(() => process.off("uncaughtException", uncaughtExceptionHandler));
+		// Node raises an unhandled rejection as an uncaught exception; Bun exits without calling the handler above.
+		this.signalCleanupHandlers.push(onUnhandledRejection((error) => this.uncaughtCrash(error)));
 	}
 
 	private unregisterSignalHandlers(): void {

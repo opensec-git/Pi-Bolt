@@ -13,6 +13,7 @@ import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "..
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 import { writeDiagnosticsToStderr } from "./diagnostics-stderr.ts";
 import { toJsonEvent } from "./json-event.ts";
+import { exitOnUncaughtErrors } from "./uncaught-errors.ts";
 
 /**
  * Options for print mode.
@@ -72,6 +73,8 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	registerSignalHandlers();
+	// (Kept after the run: main exits once it returns, and a rejection can surface in between.)
+	exitOnUncaughtErrors();
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();

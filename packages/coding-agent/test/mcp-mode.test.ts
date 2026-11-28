@@ -166,7 +166,9 @@ class McpTestClient {
 	private handle(message: Message): void {
 		if (message.method && message.id !== undefined) {
 			this.serverRequests.push(message);
-			this.write({ jsonrpc: "2.0", id: message.id, result: this.onRequest(message) });
+			const result = this.onRequest(message);
+			// (undefined: the client leaves the request unanswered.)
+			if (result !== undefined) this.write({ jsonrpc: "2.0", id: message.id, result });
 		} else if (message.method) {
 			this.notifications.push(message);
 		} else if (message.id !== undefined) {
@@ -520,6 +522,31 @@ describe("MCP mode", () => {
 		expect(client.responses.some((response) => response.id === call.id)).toBe(false);
 	});
 
+	it("stops a prompt whose call is cancelled while an input handler checks it", async () => {
+		const extensionPath = join(root, "slow-input-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.on("input", async () => {
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		return { action: "continue" };
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		const first = await client.call({ prompt: "[hello] start" });
+		const sessionId = first.structuredContent.sessionId;
+		const prompt = "[tools] cancelled while checked";
+		const call = client.send("tools/call", { name: "prompt", arguments: { prompt, sessionId } });
+		await new Promise((r) => setTimeout(r, 300));
+		client.notify("notifications/cancelled", { requestId: call.id });
+		const after = await client.call({ prompt: "[hello] after", sessionId });
+		expect(after.structuredContent.text).toBe("Hello from the fake model.");
+		// The model was never asked.
+		expect(requests.some((request) => request.users.at(-1) === prompt)).toBe(false);
+	});
+
 	it("asks the client through elicitation when an extension asks the user", async () => {
 		const extensionPath = join(root, "ask-extension.ts");
 		const answerPath = join(root, "answer.txt");
@@ -562,4 +589,34 @@ export default function (pi) {
 		expect(plain.client.serverRequests).toEqual([]);
 		expect(readFileSync(answerPath, "utf8")).toBe("false undefined undefined");
 	});
+
+	// hunt-e2e-4: a call cancelled while an extension's form waits for the client left the command waiting on the
+	// form forever, and every later prompt in that session queued behind it.
+	it("keeps the session usable after a call is cancelled while a form is unanswered", async () => {
+		const extensionPath = join(root, "pick-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.registerCommand("pick", {
+		description: "Pick a colour",
+		handler: async (_args, ctx) => {
+			await ctx.ui.select("Pick", ["red", "blue"]);
+		},
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath], { elicitation: { form: {} } });
+		client.onRequest = () => undefined;
+		const first = await client.call({ prompt: "[hello] start" });
+		const sessionId = first.structuredContent.sessionId;
+		const call = client.send("tools/call", { name: "prompt", arguments: { prompt: "/pick", sessionId } });
+		await client.waitFor(() => client.serverRequests.some((m) => m.method === "elicitation/create"));
+		client.notify("notifications/cancelled", { requestId: call.id, reason: "changed my mind" });
+		const after = await Promise.race([
+			client.call({ prompt: "[hello] after", sessionId }),
+			new Promise<undefined>((r) => setTimeout(() => r(undefined), 10_000)),
+		]);
+		expect(after?.structuredContent.text).toBe("Hello from the fake model.");
+	}, 20_000);
 });
