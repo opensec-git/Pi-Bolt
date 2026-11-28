@@ -421,7 +421,13 @@ class AcpSession {
 	private unsubscribeBackpressure?: () => void;
 	/** Prompts of this session, one after the other. */
 	private queue: Promise<unknown> = Promise.resolve();
-	private cancelled = false;
+	/**
+	 * Aborted by `session/cancel`, which cancels every prompt received before it (queued ones too, as ACP asks); each
+	 * prompt keeps the signal of its arrival.
+	 */
+	private cancelling = new AbortController();
+	/** The signal of the prompt that runs: its cancellation also ends the dialogs the prompt opened. */
+	private promptSignal: AbortSignal | undefined;
 	private messageCount = 0;
 	private messageId: string | undefined;
 	/** File contents before an edit or write, for its diff. */
@@ -545,36 +551,50 @@ class AcpSession {
 	}
 
 	cancel(): void {
-		this.cancelled = true;
+		this.cancelling.abort();
+		this.cancelling = new AbortController();
 		void this.session.abort();
 	}
 
 	prompt(blocks: ContentBlock[]): Promise<{ stopReason: StopReason }> {
-		const run = this.queue.then(() => this.runPrompt(blocks));
+		const signal = this.cancelling.signal;
+		const run = this.queue.then(async () => {
+			// (A cancel that came before the prompt started had nothing to abort.)
+			if (signal.aborted) return { stopReason: "cancelled" as const };
+			this.promptSignal = signal;
+			try {
+				return await this.runPrompt(blocks, signal);
+			} finally {
+				this.promptSignal = undefined;
+			}
+		});
 		this.queue = run.catch(() => {});
 		return run;
 	}
 
-	private async runPrompt(blocks: ContentBlock[]): Promise<{ stopReason: StopReason }> {
-		this.cancelled = false;
+	private async runPrompt(blocks: ContentBlock[], signal: AbortSignal): Promise<{ stopReason: StopReason }> {
 		// Tools registered since the mode was set (an MCP server that connected) are not offered in read-only mode.
 		this.applyMode();
 		const { text, images } = promptToPi(blocks);
 		const command = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
 		if (command && ACP_COMMAND_NAMES.has(command[1]) && images.length === 0) {
-			await this.runCommand(command[1], command[2]?.trim() ?? "");
-			return { stopReason: this.cancelled ? "cancelled" : "end_turn" };
+			await this.runCommand(command[1], command[2]?.trim() ?? "", signal);
+			return { stopReason: signal.aborted ? "cancelled" : "end_turn" };
 		}
 		const session = this.session;
 		if (!session.model) {
 			throw new JsonRpcError(AcpErrorCode.InternalError, `No models available. ${setupHelp()}`);
 		}
 		const start = session.messages.length;
+		// A cancel while the prompt is checked (input handlers, credentials) finds no run to abort: abort it as it starts.
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "agent_start" && signal.aborted) void session.abort();
+		});
 		try {
 			await session.prompt(text, { images: images.length > 0 ? images : undefined, source: "rpc" });
 			await session.waitForIdle();
 		} catch (error) {
-			if (this.cancelled) return { stopReason: "cancelled" };
+			if (signal.aborted) return { stopReason: "cancelled" };
 			// Pi's own message points to /login, which the editor does not have. (Not AuthRequired: Zed shows its own
 			// message for that, and ACP mode has no authentication methods to offer.)
 			const provider = session.model?.provider;
@@ -585,15 +605,16 @@ class AcpSession {
 			}
 			throw error;
 		} finally {
+			unsubscribe();
 			this.sendUsage();
 		}
 		const messages = session.messages.slice(start);
-		const error = this.cancelled ? undefined : runError(messages);
+		const error = signal.aborted ? undefined : runError(messages);
 		if (error) throw new JsonRpcError(AcpErrorCode.InternalError, error);
-		return { stopReason: stopReasonOf(messages, this.cancelled) };
+		return { stopReason: stopReasonOf(messages, signal.aborted) };
 	}
 
-	private async runCommand(name: string, argument: string): Promise<void> {
+	private async runCommand(name: string, argument: string, signal: AbortSignal): Promise<void> {
 		const reply = (text: string) =>
 			this.send({ sessionUpdate: "agent_message_chunk", messageId: randomUUID(), content: { type: "text", text } });
 		const session = this.session;
@@ -674,7 +695,7 @@ class AcpSession {
 			if (!this.agent.capabilities.session?.compaction)
 				reply(`Compacted the conversation (${result.tokensBefore.toLocaleString("en-US")} tokens before).`);
 		} catch (error) {
-			if (this.cancelled) return;
+			if (signal.aborted) return;
 			throw new JsonRpcError(AcpErrorCode.InternalError, errorText(error));
 		} finally {
 			this.sendUsage();
@@ -1079,7 +1100,7 @@ class AcpSession {
 		options: PermissionOption[],
 		opts: ExtensionUIDialogOptions | undefined,
 	): Promise<string | undefined> {
-		if (opts?.signal?.aborted) return undefined;
+		if (opts?.signal?.aborted || this.promptSignal?.aborted) return undefined;
 		const running = [...this.runningTools.keys()].at(-1);
 		const toolCallId = running ?? `dialog_${randomUUID()}`;
 		const content = message ? { content: [textContent(message)] } : {};
@@ -1091,6 +1112,7 @@ class AcpSession {
 			(signal) =>
 				this.agent.connection.request<RequestPermissionResponse>("session/request_permission", params, signal),
 			opts,
+			this.promptSignal,
 		);
 		const selected = response && response.outcome.outcome === "selected" ? response.outcome.optionId : undefined;
 		// Clients keep what a permission request changes on the tool call: give a running tool its own title and output
@@ -1124,7 +1146,8 @@ class AcpSession {
 		field: { description?: string; default?: string },
 		opts: ExtensionUIDialogOptions | undefined,
 	): Promise<string | undefined> {
-		if (!this.agent.capabilities.elicitation?.form || opts?.signal?.aborted) return undefined;
+		if (!this.agent.capabilities.elicitation?.form || opts?.signal?.aborted || this.promptSignal?.aborted)
+			return undefined;
 		const running = [...this.runningTools.keys()].at(-1);
 		const params = {
 			sessionId: this.id,
@@ -1140,6 +1163,7 @@ class AcpSession {
 		const response = await settleWithin(
 			(signal) => this.agent.connection.request<CreateElicitationResponse>("elicitation/create", params, signal),
 			opts,
+			this.promptSignal,
 		);
 		const value = response?.action === "accept" ? response.content?.value : undefined;
 		return typeof value === "string" ? value : undefined;

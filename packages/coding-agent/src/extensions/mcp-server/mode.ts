@@ -553,6 +553,10 @@ class PiSession {
 		const report = progress ? new ProgressReport(progress) : undefined;
 		const unsubscribe = session.subscribe((event) => {
 			switch (event.type) {
+				case "agent_start":
+					// A cancel while the prompt is checked (input handlers, credentials) found no run to abort.
+					if (signal.aborted) void session.abort();
+					break;
 				case "message_start":
 					if (event.message.role === "assistant") report?.doing("Thinking");
 					break;

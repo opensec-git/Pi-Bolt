@@ -522,6 +522,31 @@ describe("MCP mode", () => {
 		expect(client.responses.some((response) => response.id === call.id)).toBe(false);
 	});
 
+	it("stops a prompt whose call is cancelled while an input handler checks it", async () => {
+		const extensionPath = join(root, "slow-input-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`export default function (pi) {
+	pi.on("input", async () => {
+		await new Promise((resolve) => setTimeout(resolve, 1000));
+		return { action: "continue" };
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		const first = await client.call({ prompt: "[hello] start" });
+		const sessionId = first.structuredContent.sessionId;
+		const prompt = "[tools] cancelled while checked";
+		const call = client.send("tools/call", { name: "prompt", arguments: { prompt, sessionId } });
+		await new Promise((r) => setTimeout(r, 300));
+		client.notify("notifications/cancelled", { requestId: call.id });
+		const after = await client.call({ prompt: "[hello] after", sessionId });
+		expect(after.structuredContent.text).toBe("Hello from the fake model.");
+		// The model was never asked.
+		expect(requests.some((request) => request.users.at(-1) === prompt)).toBe(false);
+	});
+
 	it("asks the client through elicitation when an extension asks the user", async () => {
 		const extensionPath = join(root, "ask-extension.ts");
 		const answerPath = join(root, "answer.txt");
