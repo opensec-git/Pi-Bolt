@@ -9,7 +9,6 @@
  */
 
 import type {
-	AgentTool,
 	AgentToolCall,
 	AgentToolCallOutcome,
 	AgentToolResult,
@@ -129,10 +128,11 @@ export type NestedToolExecutionEvent =
 	  };
 
 export interface NestedToolCallHost {
-	/** Tools nested calls resolve against. */
-	getTools(): readonly AgentTool[];
-	/** Whether every nested call runs exclusively, as when the agent executes tool calls sequentially. */
-	isSequential(): boolean;
+	/**
+	 * Whether a nested call of the named tool runs exclusively: every call when the agent executes tool calls
+	 * sequentially, else calls of tools that must not run concurrently with other calls.
+	 */
+	isExclusive(name: string): boolean;
 	/** Run the call through the tool pipeline, with hooks that report `parentToolCallId`. */
 	runToolCall(
 		toolCall: AgentToolCall,
@@ -199,10 +199,7 @@ export class NestedToolCallRunner {
 			parentToolCallId: callerId,
 		});
 
-		const exclusive =
-			!scope.holdsQueue &&
-			(this.host.isSequential() ||
-				this.host.getTools().find((tool) => tool.name === name)?.executionMode === "sequential");
+		const exclusive = !scope.holdsQueue && this.host.isExclusive(name);
 		let release: (() => void) | undefined;
 		if (exclusive) {
 			const previous = this.queueTail;

@@ -235,6 +235,12 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
 const EARLY_TOOL_NAMES: ReadonlySet<string> = new Set(PIBOLT ? ["read", "ls", "grep", "find"] : ["read", "ls"]);
 
 /**
+ * Built-in tools that declare `executionMode: "sequential"` so that the calls of one assistant message see their
+ * effects (upstream #11950). Nested calls of a script do not need it: the script orders them.
+ */
+const MESSAGE_ORDERED_TOOL_NAMES: ReadonlySet<string> = new Set(["bash", "powershell", "write", "edit"]);
+
+/**
  * Extensions whose `tool_call` handlers let calls of the tools in EARLY_TOOL_NAMES through unchanged. The built-in MCP
  * extension's handler waits only for MCP servers that the called tool reaches (MCP tools, codemode, tool_search); ACP
  * mode's blocks only tools that read-only mode does not keep, and it keeps these.
@@ -590,6 +596,8 @@ export class AgentSession {
 	private _toolRegistry: Map<string, AgentTool> = new Map();
 	/** `execute` of the registered built-in tools whose calls may start before the model's message ends. */
 	private _earlyToolExecutes = new WeakSet<AgentTool["execute"]>();
+	/** `execute` of the registered built-in tools that are sequential only to order the calls of one message. */
+	private _messageOrderedExecutes = new WeakSet<AgentTool["execute"]>();
 	/** Created on the first `ctx.executeTool()` call. */
 	private _nestedToolCalls: NestedToolCallRunner | undefined;
 	/** Declared tools whose declarations requests leave out, from `prepareLoadout` hooks. */
@@ -900,8 +908,13 @@ export class AgentSession {
 		options: ExecuteToolOptions,
 	): Promise<AgentToolCallOutcome> {
 		this._nestedToolCalls ??= new NestedToolCallRunner({
-			getTools: () => this._getCallableTools(),
-			isSequential: () => this.agent.toolExecution === "sequential",
+			isExclusive: (name) => {
+				if (this.agent.toolExecution === "sequential") return true;
+				const tool = this._getCallableTools().find((candidate) => candidate.name === name);
+				// Built-in bash, write and edit are sequential to keep the order of one message's calls (upstream
+				// #11950). A script orders its nested calls itself, so they still run in parallel there.
+				return tool?.executionMode === "sequential" && !this._messageOrderedExecutes.has(tool.execute);
+			},
 			runToolCall: (toolCall, parentId, signal, onUpdate) => {
 				const assistantMessage = this._findLastAssistantMessage();
 				if (!assistantMessage) {
@@ -3996,13 +4009,16 @@ export class AgentSession {
 		}
 		this._toolRegistry = toolRegistry;
 		const earlyToolExecutes = new WeakSet<AgentTool["execute"]>();
+		const messageOrderedExecutes = new WeakSet<AgentTool["execute"]>();
 		if (!this._baseToolsOverride) {
 			for (const tool of wrappedBuiltInTools) {
-				if (EARLY_TOOL_NAMES.has(tool.name) && toolRegistry.get(tool.name) === tool)
-					earlyToolExecutes.add(tool.execute);
+				if (toolRegistry.get(tool.name) !== tool) continue;
+				if (EARLY_TOOL_NAMES.has(tool.name)) earlyToolExecutes.add(tool.execute);
+				if (MESSAGE_ORDERED_TOOL_NAMES.has(tool.name)) messageOrderedExecutes.add(tool.execute);
 			}
 		}
 		this._earlyToolExecutes = earlyToolExecutes;
+		this._messageOrderedExecutes = messageOrderedExecutes;
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]

@@ -526,7 +526,8 @@ export interface AgentTool<TParameters extends object = object, TDetails = any> 
 	replay?: "never" | "safe";
 	/**
 	 * Per-tool execution mode override.
-	 * - "sequential": this tool must execute one at a time with other tool calls.
+	 * - "sequential": this tool must execute alone. Calls before it finish first, and calls after it start once it
+	 *   has finished. Consecutive other calls between such calls still run in parallel.
 	 * - "parallel": this tool can execute concurrently with other tool calls.
 	 *
 	 * If omitted, the default execution mode applies.

@@ -32,6 +32,7 @@ import type {
 	EarlyToolExecution,
 	PrepareNextTurnContext,
 	StreamFn,
+	ToolExecutionMode,
 } from "./types.ts";
 
 export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
@@ -627,10 +628,7 @@ async function executeToolCalls(
 	earlyToolCalls: EarlyToolCalls | undefined,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-	const hasSequentialToolCall = toolCalls.some(
-		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
-	);
-	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
+	if (config.toolExecution === "sequential") {
 		return executeToolCallsSequential(
 			currentContext,
 			assistantMessage,
@@ -641,7 +639,49 @@ async function executeToolCalls(
 			earlyToolCalls,
 		);
 	}
-	return executeToolCallsParallel(currentContext, assistantMessage, toolCalls, config, signal, emit, earlyToolCalls);
+	// A call to a sequential tool is a barrier (upstream #11950): the calls before it finish first, it runs alone,
+	// and the calls after it start once it has finished. The calls between barriers still run in parallel, so
+	// `bash, read, read, bash` runs as bash, both reads together, then bash; a read sees what the bash before it wrote.
+	const messages: ToolResultMessage[] = [];
+	let terminate = toolCalls.length > 0;
+	for (const segment of splitAtSequentialToolCalls(currentContext, toolCalls)) {
+		const execute = segment.mode === "sequential" ? executeToolCallsSequential : executeToolCallsParallel;
+		const batch = await execute(
+			currentContext,
+			assistantMessage,
+			segment.toolCalls,
+			config,
+			signal,
+			emit,
+			earlyToolCalls,
+		);
+		// No early exit on abort: later segments record an "Operation aborted" result for each call, so every call
+		// keeps a result.
+		messages.push(...batch.messages);
+		terminate = terminate && batch.terminate;
+	}
+	return { messages, terminate };
+}
+
+type ToolCallSegment = {
+	mode: ToolExecutionMode;
+	toolCalls: AgentToolCall[];
+};
+
+/**
+ * Split a message's tool calls into segments that run one after another: each call to a tool with
+ * `executionMode: "sequential"` is a segment of its own, and each run of other calls between them is one parallel
+ * segment.
+ */
+function splitAtSequentialToolCalls(currentContext: AgentContext, toolCalls: AgentToolCall[]): ToolCallSegment[] {
+	const segments: ToolCallSegment[] = [];
+	for (const toolCall of toolCalls) {
+		const sequential = currentContext.tools?.find((t) => t.name === toolCall.name)?.executionMode === "sequential";
+		const last = segments.at(-1);
+		if (!sequential && last?.mode === "parallel") last.toolCalls.push(toolCall);
+		else segments.push({ mode: sequential ? "sequential" : "parallel", toolCalls: [toolCall] });
+	}
+	return segments;
 }
 
 type ExecutedToolCallBatch = {
