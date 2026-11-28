@@ -981,6 +981,18 @@ export async function runToolCall(toolCall: AgentToolCall, options: RunToolCallO
 	return finalizeExecutedToolCall(context, assistantMessage, preparation, executed, options, signal);
 }
 
+/**
+ * Deliver a progress update. A listener that fails must neither fail the tool call nor leave a rejection unhandled
+ * while the tool still runs: Node and Bun end the process on an unhandled rejection (claim A9).
+ */
+function deliverUpdate(onUpdate: ToolUpdateSink, partialResult: AgentToolResult<any>): Promise<void> {
+	try {
+		return Promise.resolve(onUpdate(partialResult)).catch(() => {});
+	} catch {
+		return Promise.resolve();
+	}
+}
+
 async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
@@ -998,7 +1010,7 @@ async function executePreparedToolCall(
 			signal,
 			(partialResult) => {
 				if (!acceptingUpdates) return;
-				updateEvents.push(Promise.resolve(onUpdate(partialResult)));
+				updateEvents.push(deliverUpdate(onUpdate, partialResult));
 			},
 		);
 		const durationMs = elapsed();
@@ -1239,7 +1251,7 @@ class EarlyToolCalls {
 			return undefined;
 		}
 		run.updates.sink = onUpdate;
-		const flushed = run.updates.buffered.map((partialResult) => Promise.resolve(onUpdate(partialResult)));
+		const flushed = run.updates.buffered.map((partialResult) => deliverUpdate(onUpdate, partialResult));
 		run.updates.buffered = [];
 		return flushed.length === 0
 			? run.outcome
