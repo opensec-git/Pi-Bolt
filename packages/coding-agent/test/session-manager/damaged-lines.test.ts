@@ -171,6 +171,53 @@ describe("SessionManager with damaged lines", () => {
 		).toEqual([first, second]);
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"cuts off a line whose last write failed, as the session rolls it back",
+		() => {
+			const session = SessionManager.create(dir, dir);
+			session.appendMessage(userMsg("first"));
+			const file = session.getSessionFile()!;
+			const before = readFileSync(file, "utf8");
+			const actual = vi.mocked(fs.writeSync).getMockImplementation()!;
+			// The record is written, all but its line feed; writing the rest fails.
+			vi.mocked(fs.writeSync)
+				.mockImplementationOnce((fd: number, data: unknown) => actual(fd, String(data).slice(0, -1)))
+				.mockImplementationOnce(() => {
+					throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+				});
+			expect(() => session.appendMessage(assistantMsg("not saved"))).toThrow("No space left");
+			expect(readFileSync(file, "utf8")).toBe(before);
+
+			session.appendMessage(assistantMsg("after the disk was freed"));
+			const expected = session.getEntries().map((entry) => entry.id);
+			expect(expected).toHaveLength(2);
+			expect(
+				SessionManager.open(file, dir)
+					.getEntries()
+					.map((entry) => entry.id),
+			).toEqual(expected);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"does not cut a line that another process appended after a failed write",
+		() => {
+			const session = SessionManager.create(dir, dir);
+			session.appendMessage(userMsg("first"));
+			const file = session.getSessionFile()!;
+			const actual = vi.mocked(fs.writeSync).getMockImplementation()!;
+			const other = '{"type":"custom","customType":"other","id":"other","parentId":null,"timestamp":"x"}\n';
+			vi.mocked(fs.writeSync)
+				.mockImplementationOnce((fd: number, data: unknown) => actual(fd, String(data).slice(0, 25)))
+				.mockImplementationOnce(() => {
+					fs.appendFileSync(file, other);
+					throw Object.assign(new Error("No space left on device"), { code: "ENOSPC" });
+				});
+			expect(() => session.appendMessage(assistantMsg("lost"))).toThrow("No space left");
+			expect(readFileSync(file, "utf8").endsWith(other)).toBe(true);
+		},
+	);
+
 	it("ends a partial line in a file that replaced the session file before appending to it", () => {
 		const session = SessionManager.create(dir, dir);
 		session.appendMessage(userMsg("first"));

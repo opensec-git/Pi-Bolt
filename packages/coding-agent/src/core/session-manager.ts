@@ -21,6 +21,7 @@ import {
 	fchmodSync,
 	constants as fsConstants,
 	fstatSync,
+	ftruncateSync,
 	linkSync,
 	mkdirSync,
 	openSync,
@@ -1511,6 +1512,40 @@ function endPartialLine(fd: number, size: number): void {
 }
 
 /**
+ * Appends `line`. A short write (a full disk) is continued like appendFileSync would. When a later write fails, the part
+ * already written is cut off again, so the file holds no entry that the session rolled back (_appendEntry()).
+ */
+function writeWholeLine(fd: number, line: string): void {
+	let written = writeSync(fd, line);
+	const length = Buffer.byteLength(line);
+	if (written === length) return;
+	const bytes = Buffer.from(line);
+	try {
+		while (written < length) written += writeSync(fd, bytes, written, length - written);
+	} catch (error) {
+		cutPartialLine(fd, bytes.subarray(0, written));
+		throw error;
+	}
+}
+
+/**
+ * Truncates the file by `part` when the file still ends with it: a line that another process appended after it is never
+ * cut. If the cut fails, the next open ends the partial line instead (endPartialLine()).
+ */
+function cutPartialLine(fd: number, part: Buffer): void {
+	try {
+		const size = fstatSync(fd).size;
+		if (size < part.length) return;
+		const tail = Buffer.alloc(part.length);
+		if (readSync(fd, tail, 0, part.length, size - part.length) === part.length && tail.equals(part)) {
+			ftruncateSync(fd, size - part.length);
+		}
+	} catch {
+		// Left for endPartialLine().
+	}
+}
+
+/**
  * A session file kept open for appends while they come in quick succession: opening and closing the file for every
  * entry cost 50-65 µs on macOS (APFS), a write on an open file 6 µs, and a turn appends an entry per message and tool
  * result. Each append still writes its whole line with write() before it returns, as before, so a crash loses no more.
@@ -1552,14 +1587,7 @@ class SessionAppendFile {
 	}
 
 	append(line: string): void {
-		const written = writeSync(this.fd, line);
-		if (written !== Buffer.byteLength(line)) {
-			// A short write (a full disk): write the rest like appendFileSync would.
-			const bytes = Buffer.from(line);
-			for (let offset = written; offset < bytes.length; ) {
-				offset += writeSync(this.fd, bytes, offset, bytes.length - offset);
-			}
-		}
+		writeWholeLine(this.fd, line);
 		this.lastAppend = performance.now();
 		if (!this.timer) this.scheduleClose(APPEND_FILE_IDLE_MS);
 	}
@@ -1857,7 +1885,7 @@ export class SessionManager {
 			const fd = openSync(path, "a+", SESSION_FILE_MODE);
 			try {
 				endPartialLine(fd, fstatSync(fd).size);
-				writeFileSync(fd, line);
+				writeWholeLine(fd, line);
 			} finally {
 				closeSync(fd);
 			}
