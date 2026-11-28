@@ -368,12 +368,15 @@ class Conversation {
 			]);
 			const name = pick(rng, ["read", "bash"]);
 			this.pendingCalls.push({ id, name });
+			const path = chance(rng, 0.5) ? `f${n}.ts` : undefined;
 			content.push({
 				type: "toolCall",
 				id,
 				name,
-				arguments: chance(rng, 0.5) ? { path: `f${n}.ts` } : { command: `echo ${text(rng, n).slice(0, 20)}`, n },
+				arguments: path ? { path } : { command: `echo ${text(rng, n).slice(0, 20)}`, n },
 				...(chance(rng, 0.2) ? { thoughtSignature: "dGhvdWdodA==" } : {}),
+				// The arguments text as an OpenAI Responses model streamed it (#12444).
+				...(path && chance(rng, 0.3) ? { rawArguments: `{ "path": "${path}" }` } : {}),
 			});
 		}
 		const stopReason = pick(rng, ["toolUse", "stop", "stop", "error", "aborted", "length"] as const);
