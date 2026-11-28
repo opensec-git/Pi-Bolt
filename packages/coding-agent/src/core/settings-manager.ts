@@ -178,7 +178,8 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
-		return timeoutMs;
+		// Clients time requests out with setTimeout(), which fires a longer timer after 1 ms: no timeout (0) instead.
+		return timeoutMs > MAX_TIMER_MS ? 0 : timeoutMs;
 	}
 	if (value !== undefined) {
 		throw new Error(`Invalid ${settingName} setting: ${String(value)}`);
@@ -1254,10 +1255,7 @@ export class SettingsManager {
 	}
 
 	getHttpIdleTimeoutMs(): number {
-		const timeoutMs =
-			parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
-		// Provider clients time requests out with setTimeout(), which fires a longer timer after 1 ms: no timeout instead.
-		return timeoutMs > MAX_TIMER_MS ? 0 : timeoutMs;
+		return parseTimeoutSetting(this.settings.httpIdleTimeoutMs, "httpIdleTimeoutMs") ?? DEFAULT_HTTP_IDLE_TIMEOUT_MS;
 	}
 
 	setHttpIdleTimeoutMs(timeoutMs: number): void {

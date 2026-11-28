@@ -320,4 +320,33 @@ describe("SessionManager with damaged lines", () => {
 			repeated: expect.objectContaining({ branch: ["b", "a"], messages: 2 }),
 		});
 	}, 30_000);
+
+	it("places a repeated id once in the tree, so stale links of its other occurrences make no cycle", () => {
+		// x first names y, y names x, and the last definition of x is a root: the index holds that one.
+		const message = (id: string, parentId: string | null) => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp: "2026-01-01T00:00:00.000Z",
+			message: userMsg(id),
+		});
+		const header = { type: "session", version: 3, id: "repeated", timestamp: "2026-01-01T00:00:00.000Z", cwd: dir };
+		const file = join(dir, "repeated.jsonl");
+		const entries = [message("x", "y"), message("y", "x"), message("x", null)];
+		writeFileSync(file, `${[header, ...entries].map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+		const session = SessionManager.open(file, dir);
+
+		// Walks the tree and fails on a node it has already seen, instead of recursing forever.
+		const seen = new Set<string>();
+		type Node = ReturnType<SessionManager["getTree"]>[number];
+		const shape = (nodes: Node[]): unknown[] =>
+			nodes.map((node) => {
+				if (seen.has(node.entry.id)) throw new Error(`${node.entry.id} appears twice in the tree`);
+				seen.add(node.entry.id);
+				return [node.entry.id, shape(node.children)];
+			});
+		expect(shape(session.getTree())).toEqual([["x", [["y", []]]]]);
+		expect(session.getBranch("y").map((entry) => entry.id)).toEqual(["x", "y"]);
+	});
 });
