@@ -1432,6 +1432,8 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderTimer: NodeJS.Timeout | undefined;
 	/** The timer of requestRenderWithin(), until a frame is drawn: that frame draws the changes it was set for. */
 	private deferredRenderTimer: NodeJS.Timeout | undefined;
+	/** When the deferredRenderTimer fires (renderClock()): a call with an earlier deadline starts a shorter timer. */
+	private deferredRenderDeadline = 0;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	/** How long the last frame took to draw (FRAME_SPACING_FACTOR). */
@@ -2056,7 +2058,14 @@ export abstract class TuiBase extends Container implements TUI {
 		// would otherwise reuse their output and drop the change. (A frame asked for already draws the change, and so does
 		// one asked for within the time already.)
 		this.contentChanged = true;
-		if (this.renderRequested || this.deferredRenderTimer) return;
+		if (this.renderRequested) return;
+		const deadline = renderClock() + delayMs;
+		if (this.deferredRenderTimer) {
+			// Claim T4: a pending longer timer must not hold back a change asked for within a shorter time.
+			if (deadline >= this.deferredRenderDeadline) return;
+			clearTimeout(this.deferredRenderTimer);
+		}
+		this.deferredRenderDeadline = deadline;
 		this.deferredRenderTimer = setTimeout(() => {
 			this.deferredRenderTimer = undefined;
 			this.requestRender();
