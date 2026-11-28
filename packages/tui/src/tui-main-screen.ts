@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ProcessTerminal } from "./terminal.ts";
-import { deleteKittyImage, isImageLine } from "./terminal-image.ts";
+import { deleteKittyImage, getMaxKittyImageRows, isImageLine } from "./terminal-image.ts";
 import { BoundedTerminalWriter } from "./terminal-writer.ts";
 import { type LiveLines, renderLiveLines, renderSharedLines, type TUI, TuiBase, type TuiStopOptions } from "./tui.ts";
 import { visibleWidth } from "./utils.ts";
@@ -293,7 +293,11 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		) {
 			rebuildFrom = Math.min(live.changedSince(before.revision), before.decoratedFrom, source.length);
 		}
-		const unchanged = Math.max(0, Math.min(rebuildFrom, source.length - height, shownLength - height));
+		// Claim T2: with an overlay open, hideImagesUnderOverlay() may strip an image line up to the tallest image's rows
+		// above the viewport. Those lines are indexed again on this frame and rebuilt on the next (decoratedFrom), so a
+		// stripped image is drawn again once the overlay closes.
+		const imageMargin = this.hasOverlayEntries ? getMaxKittyImageRows() : 0;
+		const unchanged = Math.max(0, Math.min(rebuildFrom, source.length - height - imageMargin, shownLength - height));
 		// Preserve just the old suffix for the diff. A full rebuild swaps arrays so the old frame
 		// stays readable without copying it. The mutable array returned by a component is never ours.
 		const shownRawTail = rebuildFrom > 0 ? shownRaw.slice(unchanged) : undefined;
@@ -319,7 +323,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		this.rawLines = raw;
 		const decoratedFrom = this.hasOverlayEntries
 			? standardOverlay
-				? Math.max(0, raw.length - height)
+				? Math.max(0, raw.length - height - imageMargin)
 				: 0
 			: (cursorPos?.row ?? source.length);
 		this.frameLive = live
