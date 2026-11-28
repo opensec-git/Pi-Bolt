@@ -1,5 +1,6 @@
 // What the in-process grep and find (native-search.ts) return where ripgrep and fd, which Pi runs, are the reference:
 // cases a differential test against them found to differ. Each test names its finding of the w132 hunt (hunt-tools-N).
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -229,5 +230,49 @@ describe("grep", () => {
 		expect(await grep("needle", { limit: 3, ...parts })).toEqual(["x1:1:needle", "x2:1:needle", "x3:1:needle"]);
 		// Within one part, as without parts: in path order.
 		expect(await nativeFind({ root: join(root, "ws"), pattern: "*x*", limit: 3 })).toEqual(["0/0x", "x1", "x2"]);
+	});
+
+	// hunt-tools-10: ripgrep searches a file named on its own even when it has NUL bytes, each one a line break (its lines
+	// numbered so); a file with one that the walk finds is passed over, as before.
+	test("a file named on its own with NUL bytes", async () => {
+		write("ws/bin.dat", Buffer.from("needle one\nabc\0def needle\nneedle two\nx\0\0y\nlast needle"));
+		const expected = ["1:needle one", "3:def needle", "4:needle two", "8:last needle"];
+		const named = {
+			root: join(root, "ws", "bin.dat"),
+			isDirectory: false,
+			pattern: "needle",
+			limit: 10,
+			keepChars: 100,
+		};
+		const lines = (result: Awaited<ReturnType<typeof nativeGrep>>) =>
+			result.matches.map((m) => `${m.lineNumber}:${m.lineText}`);
+		expect(lines(await nativeGrep(named))).toEqual(expected);
+		expect(lines(await nativeGrep({ ...named, wholeFileBytes: 8, pieceBytes: 16 }))).toEqual(expected);
+		expect(await grep("needle")).toEqual([]);
+		const withContext = await createGrepTool(join(root, "ws"), { native: true }).execute("t", {
+			pattern: "needle",
+			path: "bin.dat",
+			context: 1,
+		});
+		const text = (withContext.content[0] as { text: string }).text;
+		expect(text).toBe(
+			[
+				"bin.dat:1: needle one",
+				"bin.dat-2- abc",
+				"bin.dat:3: def needle",
+				"bin.dat:4: needle two",
+				"bin.dat-5- x",
+				"bin.dat-7- y",
+				"bin.dat:8: last needle",
+			].join("\n"),
+		);
+		if (spawnSync("rg", ["--version"], { stdio: "ignore" }).status === 0) {
+			const withRg = await createGrepTool(join(root, "ws"), { native: false }).execute("t", {
+				pattern: "needle",
+				path: "bin.dat",
+				context: 1,
+			});
+			expect((withRg.content[0] as { text: string }).text).toBe(text);
+		}
 	});
 });

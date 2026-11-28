@@ -1408,7 +1408,8 @@ const PIECE_BYTES = 1024 * 1024;
  * `matcher.search` over a file read a piece at a time, with the outcome of a search of the file read whole: each piece is
  * searched up to its last line break and the rest goes with the next, so a match is within a line as before; and a file with
  * a NUL byte anywhere (binary) has no matches, so it is read to its end, or to its first NUL byte. Undefined for a binary
- * file or one that could not be read. Memory: a piece, and the line a piece ends inside of.
+ * file or one that could not be read. With `binary: "nulIsLineBreak"` (a file named on its own) a NUL byte is a line break
+ * instead (`nulsToLineBreaks`). Memory: a piece, and the line a piece ends inside of.
  *
  * Its speed is that of a search of the file read whole: one buffer, read into again (the start of a line a piece ends inside
  * of is moved to its front); and line breaks are counted only up to the last piece that can have a match, as a file read
@@ -1423,6 +1424,7 @@ async function searchInPieces(
 	pieceBytes: number,
 	turns: Turns,
 	slow: SlowLine,
+	binary: Binary,
 ): Promise<NativeGrepMatch[] | undefined> {
 	let handle: FileHandle;
 	try {
@@ -1469,7 +1471,8 @@ async function searchInPieces(
 			}
 			readAt += bytesRead;
 			const filled = kept + bytesRead;
-			if (buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
+			if (binary === "skip" && buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
+			if (binary === "nulIsLineBreak") nulsToLineBreaks(buffer.subarray(kept, filled));
 			const end = bytesRead === 0;
 			// The lines this piece ends: up to its last line break; at the end of the file, the last line, if it has no break.
 			// (Looked for in the piece only: what was kept has none, and a long line would be searched again for each piece.)
@@ -1511,6 +1514,7 @@ async function searchInPieces(
 						return undefined;
 					}
 					if (count === 0) return undefined; // (Cut short since: as a file that could not be read.)
+					if (binary === "nulIsLineBreak") nulsToLineBreaks(again.subarray(0, count));
 					line += countLines(again, 0, count);
 					countedAt += count;
 				}
@@ -1579,7 +1583,8 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 	};
 	try {
 		if (!options.isDirectory) {
-			const limitReached = await searchFiles([options.root], matcher, matches, slow, options);
+			// A file named on its own is searched even with a NUL byte, as ripgrep searches it (nulsToLineBreaks).
+			const limitReached = await searchFiles([options.root], matcher, matches, slow, "nulIsLineBreak", options);
 			return { matches, limitReached, slowLines, slowLineCount };
 		}
 		// A part of the walk at a time, each in path order: the search ends at the limit without walking the rest.
@@ -1595,7 +1600,7 @@ export async function nativeGrep(options: NativeGrepOptions): Promise<NativeGrep
 		};
 		for await (const part of walkInParts(walkOptions, options.walkPartEntries)) {
 			const files = part.sort(byPath).map((entry) => entry.abs);
-			if (await searchFiles(files, matcher, matches, slow, options)) {
+			if (await searchFiles(files, matcher, matches, slow, "skip", options)) {
 				return { matches, limitReached: true, slowLines, slowLineCount };
 			}
 		}
@@ -1621,12 +1626,27 @@ export function withoutByteOrderMark(contents: Buffer): Buffer {
 	return contents;
 }
 
+/**
+ * What a search does with a file that has a NUL byte: passes it over as binary (a file found by the walk, as ripgrep), or
+ * searches it with each NUL byte as a line break (a file named on its own, as ripgrep: `nulsToLineBreaks`).
+ */
+type Binary = "skip" | "nulIsLineBreak";
+
+/**
+ * Each NUL byte of `bytes` made a line break, in place: ripgrep searches a file named on its own that has NUL bytes so,
+ * and numbers its lines so ("needle" after "abc\0def\n" is on line 3).
+ */
+export function nulsToLineBreaks(bytes: Buffer): void {
+	for (let at = bytes.indexOf(0); at !== -1; at = bytes.indexOf(0, at + 1)) bytes[at] = NEWLINE;
+}
+
 /** Searches `files` in order into `matches`; whether the limit stopped the search. */
 async function searchFiles(
 	files: string[],
 	matcher: Matcher,
 	matches: NativeGrepMatch[],
 	slow: SlowLine,
+	binary: Binary,
 	options: NativeGrepOptions,
 ): Promise<boolean> {
 	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
@@ -1661,13 +1681,25 @@ async function searchFiles(
 		if (typeof contents === "number") {
 			const budget = options.limit - matches.length;
 			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
-			const found = await searchInPieces(files[index], matcher, budget, options.keepChars, pieceBytes, turns, slow);
+			const found = await searchInPieces(
+				files[index],
+				matcher,
+				budget,
+				options.keepChars,
+				pieceBytes,
+				turns,
+				slow,
+				binary,
+			);
 			if (found) matches.push(...found);
 		} else {
 			if (!contents || contents.length === 0) continue;
 			contents = withoutByteOrderMark(contents);
 			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
-			if (contents.indexOf(0) !== -1) continue; // (Binary.)
+			if (contents.indexOf(0) !== -1) {
+				if (binary === "skip") continue; // (Binary.)
+				nulsToLineBreaks(contents);
+			}
 			const budget = options.limit - matches.length;
 			const rest = matcher.search(
 				contents,

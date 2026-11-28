@@ -11,6 +11,7 @@ import {
 	type NativeGrepMatch,
 	type NativeGrepResult,
 	nativeGrep,
+	nulsToLineBreaks,
 	ripgrepOnlySyntax,
 	withoutByteOrderMark,
 } from "./native-search.ts";
@@ -175,7 +176,8 @@ const CONTEXT_READ_BYTES = 64 * 1024;
  * (a 95 MB log with a match near its start is not read whole: #11705). Lines are split at `\n` only, as ripgrep does: a
  * lone CR is content. A line past the end of the file is missing from the result; undefined if the file cannot be read.
  * A byte order mark is handled as the search handles it (withoutByteOrderMark): a UTF-8 one left out, and a UTF-16 file, which
- * the search reads whole, decoded whole.
+ * the search reads whole, decoded whole. A NUL byte is a line break, as in the search of a file named on its own
+ * (nulsToLineBreaks); a file the walk found has none, or it would not have matched.
  */
 async function readLineRanges(
 	filePath: string,
@@ -247,6 +249,7 @@ async function readLineRanges(
 			}
 			position += bytesRead;
 			const piece = buffer.subarray(0, bytesRead);
+			nulsToLineBreaks(piece);
 			let start = 0;
 			for (let at = piece.indexOf(10); at !== -1; at = piece.indexOf(10, start)) {
 				if (isWanted) keep(piece.subarray(start, at));
