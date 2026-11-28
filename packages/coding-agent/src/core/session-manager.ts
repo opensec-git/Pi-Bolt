@@ -2702,12 +2702,15 @@ export class SessionManager {
 		// reading, canonicalizing and closing it. A malformed source cannot expose a partial branch.
 		const tempPath = join(dir, `.fork-${createSessionId()}.tmp`);
 		removeStaleForkFiles(dir);
-		const output: { writer?: SessionBatchWriter; path?: string } = {};
+		// `legacy`: an older source (no entry ids in version 1) is collected and migrated before it is written, as opening it
+		// would.
+		const output: { writer?: SessionBatchWriter; path?: string; legacy?: FileEntry[] } = {};
 		try {
 			try {
 				visitSessionEntries(resolvedSourcePath, (entry, line) => {
 					if (entry.type === "session") {
 						if (output.writer) return;
+						if ((entry.version ?? 1) < CURRENT_SESSION_VERSION) output.legacy = [entry];
 						if (options?.id !== undefined) assertValidSessionId(options.id);
 						const id = options?.id ?? createSessionId();
 						const timestamp = new Date().toISOString();
@@ -2726,6 +2729,10 @@ export class SessionManager {
 						entries.push(header);
 						return;
 					}
+					if (output.legacy) {
+						output.legacy.push(entry);
+						return;
+					}
 					const encoded = JSON.stringify(entry);
 					output.writer!.write(encoded);
 					// Canonical input already has exactly the value a reopen would return. Imported
@@ -2735,6 +2742,15 @@ export class SessionManager {
 				});
 				if (!output.writer || !output.path) {
 					throw new Error(`Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}`);
+				}
+				if (output.legacy) {
+					migrateToCurrentVersion(output.legacy);
+					for (const entry of output.legacy) {
+						if (entry.type === "session") continue;
+						const encoded = JSON.stringify(entry);
+						output.writer.write(encoded);
+						entries.push(JSON.parse(encoded));
+					}
 				}
 				output.writer.flush();
 			} finally {
