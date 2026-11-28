@@ -10,6 +10,7 @@ import {
 	type Edit,
 	generateEditDiff,
 	normalizeToLF,
+	releaseFuzzyMatchCache,
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
@@ -197,6 +198,7 @@ export function createEditToolDefinition(
 				const finalContent =
 					bom + (content === normalizedContent ? newContent : applyReplacementsToOriginal(content, replacements));
 				await ops.writeFile(absolutePath, finalContent);
+				releaseFuzzyMatchCache(normalizedContent);
 				throwIfAborted();
 
 				return {

@@ -126,17 +126,43 @@ export function normalizeForFuzzyMatch(text: string): string {
 
 let lastFuzzyInput: string | undefined;
 let lastFuzzyOutput = "";
+let fuzzyCacheExpiry: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * How long the last normalization is kept after it was made or used, unless the edit it was made for releases it first
+ * (releaseFuzzyMatchCache). It is the size of the file (up to four times that): 151 MiB on Bun for a 20 MB file. Long
+ * enough for a preview that ends after its edit, and for the retry of an edit that failed on an unchanged file.
+ */
+const FUZZY_CACHE_MS = 30_000;
 
 /**
  * normalizeForFuzzyMatch for whole file contents, remembering the last result. The edit preview and the
- * edit itself normalize the same file content one after the other.
+ * edit itself normalize the same file content one after the other: on a 20 MB file that saves 200-700 ms.
  */
 function normalizeContentForFuzzyMatch(content: string): string {
 	if (content !== lastFuzzyInput) {
 		lastFuzzyOutput = normalizeForFuzzyMatch(content);
 		lastFuzzyInput = content;
 	}
+	clearTimeout(fuzzyCacheExpiry);
+	fuzzyCacheExpiry = setTimeout(forgetFuzzyMatch, FUZZY_CACHE_MS);
+	fuzzyCacheExpiry.unref?.();
 	return lastFuzzyOutput;
+}
+
+function forgetFuzzyMatch(): void {
+	clearTimeout(fuzzyCacheExpiry);
+	fuzzyCacheExpiry = undefined;
+	lastFuzzyInput = undefined;
+	lastFuzzyOutput = "";
+}
+
+/**
+ * Lets go of the remembered normalization of `normalizedContent` (applyEditsToNormalizedContent's input), once the edit is
+ * written: the file has changed, so nothing normalizes that content again. That of another file is kept.
+ */
+export function releaseFuzzyMatchCache(normalizedContent: string): void {
+	if (normalizedContent === lastFuzzyInput) forgetFuzzyMatch();
 }
 
 interface MatchedEdit {
@@ -1163,6 +1189,9 @@ export function generateEditDiff(
 			hunks.push({ ...hunk, oldStart: hunk.oldStart + window.oldLine, newStart: hunk.newStart + window.newLine });
 		}
 	}
+	// The remembered line diff is of a window, a slice that keeps the whole old and new contents alive (both of a 20 MB
+	// file: 40 MiB); nothing diffs that window again.
+	lastLineDiff = undefined;
 	return { diff: output.join("\n"), patch: formatPatch(path, hunks), firstChangedLine };
 }
 
