@@ -1724,9 +1724,9 @@ export class Editor implements Component, Focusable {
 			const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
 			const isPastedSegmented = PASTE_MARKER_SINGLE.exec(lastGrapheme.segment);
 
-			if (isPastedSegmented) {
-				// This contains the id part e.g 4 from [paste #4 +123 lines]
-				const targetId = Number(isPastedSegmented[1]);
+			// This contains the id part e.g 4 from [paste #4 +123 lines]
+			const targetId = isPastedSegmented ? Number(isPastedSegmented[1]) : 0;
+			if (isPastedSegmented && this.canDropPasteAndRenumber(targetId)) {
 				this.pastes.delete(targetId);
 				this.pasteCounter--;
 
@@ -1790,6 +1790,29 @@ export class Editor implements Component, Focusable {
 				this.tryTriggerAutocomplete();
 			}
 		}
+	}
+
+	/**
+	 * Whether deleting the one marker for `pasteId` may drop its registry entry and renumber the higher ids.
+	 * Upstream #10351: a duplicated marker (a yank of a killed marker) or a marker in the kill ring still refers
+	 * to the entry, and renumbering would point kill-ring markers with higher ids at the wrong paste. In those
+	 * cases the registry stays as it is; it is cleared when the draft is submitted.
+	 */
+	private canDropPasteAndRenumber(pasteId: number): boolean {
+		let markersInText = 0;
+		for (const line of this.state.lines) {
+			if (!line.includes("[paste #")) continue;
+			for (const match of line.matchAll(PASTE_MARKER_REGEX)) {
+				if (Number(match[1]) === pasteId && ++markersInText > 1) return false;
+			}
+		}
+		return !this.killRing.some((entry) => {
+			if (!entry.includes("[paste #")) return false;
+			for (const match of entry.matchAll(PASTE_MARKER_REGEX)) {
+				if (Number(match[1]) >= pasteId) return true;
+			}
+			return false;
+		});
 	}
 
 	/**
