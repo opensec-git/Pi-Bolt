@@ -967,7 +967,8 @@ interface WebSocketLike {
 
 interface CachedWebSocketContinuationState {
 	head: string;
-	tail: string;
+	/** The settings after the input, without `max_output_tokens` (see prepareWebSocketFrame). */
+	tailKey: string;
 	/** Exactly the input already present on this connection, including the last assistant response. */
 	input: (ResponseInput[number] | SentJson)[];
 	lastResponseId: string;
@@ -1700,7 +1701,14 @@ function prepareWebSocketFrame(
 	}
 	const end = JSON.stringify(after).slice(1);
 	const tail = end === "}" ? end : "," + end;
-	if (matched?.tail !== tail) matched = undefined;
+	// The output limit is a setting of this response only, and the context clamp changes it from turn to turn once the
+	// input grows past about 125k tokens. Comparing it dropped the continuation on every such turn (#12444).
+	let tailKey = tail;
+	if (Object.hasOwn(after, "max_output_tokens")) {
+		const { max_output_tokens: _limit, ...rest } = after;
+		tailKey = JSON.stringify(rest);
+	}
+	if (matched?.tailKey !== tailKey) matched = undefined;
 	const from = matched ? priorCount : 0;
 	const suffix = from ? captured.slice(from) : captured;
 	const encoded = suffix.some((item) => item instanceof SentJson)
@@ -1713,7 +1721,7 @@ function prepareWebSocketFrame(
 		head +
 		encoded +
 		(previousId ? tail.slice(0, -1) + `,"previous_response_id":${JSON.stringify(previousId)}}` : tail);
-	return { wire, inputCount: count - from, previousId, next: { head, tail, input: captured } };
+	return { wire, inputCount: count - from, previousId, next: { head, tailKey, input: captured } };
 }
 
 async function* startWebSocketOutputOnFirstEvent(
