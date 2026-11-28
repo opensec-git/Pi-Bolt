@@ -483,6 +483,13 @@ describe("SettingsManager", () => {
 
 			expect(() => manager.getHttpIdleTimeoutMs()).toThrow("Invalid httpIdleTimeoutMs setting");
 		});
+
+		it("disables the timeout above the longest delay a timer holds", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 2 ** 31 - 1 }));
+			expect(SettingsManager.create(projectDir, agentDir).getHttpIdleTimeoutMs()).toBe(2 ** 31 - 1);
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ httpIdleTimeoutMs: 3_000_000_000 }));
+			expect(SettingsManager.create(projectDir, agentDir).getHttpIdleTimeoutMs()).toBe(0);
+		});
 	});
 
 	describe("cacheWarming", () => {
