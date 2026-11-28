@@ -19784,3 +19784,78 @@ index 332961e3..6ea1308d 100644
 -- 
 2.53.0
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sat, 28 Nov 2026 00:28:46 -0600
+Subject: [PATCH] fetch: a slice of a Blob made of Blobs is sent as the slice;
+ a builtin namespace used as a value stays an import
+
+- fetch() handed the parts of a Blob made of other Blobs to the HTTP client without looking at
+  the Blob's offset and size. `blob.slice()` keeps the parts (StoreSlot::dupe()), so a slice of
+  such a Blob (256 KiB or more) sent the whole parent Blob, with the parent's Content-Length.
+  The parts go out only when the Blob is all of them; a slice is joined and sliced, as every
+  other consumer does.
+- In an executable compiled ahead of time, `import * as ns from "<builtin>"` in a module wrapped
+  as ESM (one loaded with import()) became `var ns = require("<builtin>")`, a plain writable
+  object with the keys of the require() value, not a module namespace object. Such an import is
+  not deferred when `ns` itself is used as a value; `ns.name` reads (import items), default and
+  named imports are deferred as before.
+---
+ .../linker_context/scanImportsAndExports.rs        | 14 ++++++++++++--
+ src/runtime/webcore/fetch/FetchTasklet.rs          |  6 +++++-
+ 2 files changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/src/bundler/linker_context/scanImportsAndExports.rs b/src/bundler/linker_context/scanImportsAndExports.rs
+index 101b1afe..551660f2 100644
+--- a/src/bundler/linker_context/scanImportsAndExports.rs
++++ b/src/bundler/linker_context/scanImportsAndExports.rs
+@@ -1092,15 +1092,25 @@ pub(crate) fn scan_imports_and_exports(
+             let parts_len = col_ref!(parts_list)[id].len() as usize;
+             // The `import` statements of builtin modules that become a `require()` in this file's wrapper
+             // (`requires_builtin_in_wrapper`): said on the record, for what follows and for `convert_stmts_for_chunk`.
++            // Not `import * as ns` where `ns` is used as a value (`ns` itself, not only `ns.name`, which the parser turns into
++            // an import item and does not count as a use of `ns`): the `require()` value is not the module namespace object
++            // that `ns` must be (tagged "Module", not extensible, only the exports as keys), so that import stays an import.
+             if this.options.defer_builtin_imports && col_ref!(flags)[id].wrap == WrapKind::Esm {
++                let parts = col_ref!(parts_list)[id].as_slice();
++                let namespace_is_used = |import: &bun_ast::S::Import| {
++                    !import.star_name_loc.is_empty()
++                        && parts.iter().any(|part| {
++                            part.symbol_uses.get(&import.namespace_ref).is_some_and(|uses| uses.count_estimate() > 0)
++                        })
++                };
+                 for part_index in 0..parts_len {
+-                    for stmt in col_ref!(parts_list)[id].as_slice()[part_index].stmts.slice() {
++                    for stmt in parts[part_index].stmts.slice() {
+                         let bun_ast::StmtData::SImport(import) = stmt.data else { continue };
+                         let record_index = import.import_record_index as usize;
+                         let required = this.requires_builtin_in_wrapper(
+                             &col_ref!(import_records_list)[id].as_slice()[record_index],
+                             id as crate::IndexInt,
+-                        );
++                        ) && !namespace_is_used(&*import);
+                         if required {
+                             col!(import_records_list)[id].as_mut_slice()[record_index]
+                                 .flags
+diff --git a/src/runtime/webcore/fetch/FetchTasklet.rs b/src/runtime/webcore/fetch/FetchTasklet.rs
+index 0ed0e1c9..8a5a7c06 100644
+--- a/src/runtime/webcore/fetch/FetchTasklet.rs
++++ b/src/runtime/webcore/fetch/FetchTasklet.rs
+@@ -2144,9 +2144,13 @@ impl FetchTasklet {
+         let headers_buf: &'static [u8] =
+             unsafe { bun_ptr::Interned::assume(fetch_tasklet.request_headers.buf.as_slice()) }
+                 .as_bytes();
+-        // A Blob made of other Blobs goes out as its parts, not joined (the client joins them where it must).
++        // A Blob made of other Blobs goes out as its parts, not joined (the client joins them where it must). Only the whole of
++        // them: a slice of such a Blob (`blob.slice()` keeps the parts, with its own offset and size) is joined and sliced by
++        // `request_body.slice()` below, as any other consumer of it does.
+         if let HTTPRequestBody::AnyBlob(AnyBlob::Blob(blob)) = &fetch_tasklet.request_body
+             && let Some(parts) = blob.store.parts()
++            && blob.offset.get() == 0
++            && blob.size.get() as usize == parts.len
+         {
+             fetch_tasklet.request_body_parts = parts
+                 .parts
+-- 
+2.53.0
+
