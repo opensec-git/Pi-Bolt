@@ -28,6 +28,7 @@ import { flushRawStdout, takeOverStdout, writeRawStdout } from "../../core/outpu
 import { SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
+import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { resultText, toolCallInfo } from "../acp/translate.ts";
 import { clientUIContext, settleWithin } from "../client-ui.ts";
@@ -92,6 +93,7 @@ export async function runMcpMode(options: McpModeOptions): Promise<never> {
 			void shutdown(signal === "SIGHUP" ? 129 : 143, false);
 		});
 	}
+	exitOnUncaughtErrors();
 	const detach = server.attach(process.stdin, () => void shutdown(0, true));
 	return new Promise<never>(() => {});
 }

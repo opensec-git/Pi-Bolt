@@ -38,6 +38,7 @@ import {
 import { type SessionInfo as PiSessionInfo, SessionManager } from "../../core/session-manager.ts";
 import { SettingsManager } from "../../core/settings-manager.ts";
 import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
+import { exitOnUncaughtErrors } from "../../modes/uncaught-errors.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { clientUIContext, settleWithin } from "../client-ui.ts";
 import { errorText, isRecord, JsonRpcConnection, JsonRpcError } from "../json-rpc.ts";
@@ -145,6 +146,7 @@ export async function runAcpMode(options: AcpModeOptions): Promise<never> {
 			void shutdown(signal === "SIGHUP" ? 129 : 143, false);
 		});
 	}
+	exitOnUncaughtErrors();
 	const detach = agent.attach(process.stdin, () => void shutdown(0, true));
 	return new Promise<never>(() => {});
 }

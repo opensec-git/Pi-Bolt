@@ -31,6 +31,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { writeDiagnosticsToStderr } from "../diagnostics-stderr.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
+import { exitOnUncaughtErrors } from "../uncaught-errors.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
 import { describeProviders } from "./rpc-providers.ts";
 import {
@@ -437,6 +438,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	await rebindSession();
 	registerSignalHandlers();
+	exitOnUncaughtErrors();
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {

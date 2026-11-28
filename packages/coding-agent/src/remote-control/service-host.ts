@@ -39,6 +39,7 @@ import type { RemoteControlSettings } from "../core/settings-schema.ts";
 import { REMOTE_CONTROL_OFF_MESSAGE } from "../core/slash-commands.ts";
 import { clientUIContext } from "../extensions/client-ui.ts";
 import type { RpcExtensionUIResponse } from "../modes/rpc/rpc-types.ts";
+import { onUnhandledRejection } from "../modes/uncaught-errors.ts";
 import { PIBOLT } from "../pi-bolt.ts";
 import { pathsEqual } from "../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
@@ -1080,14 +1081,13 @@ export async function runServiceHost(options: RunServiceHostOptions): Promise<ne
 		});
 	}
 	// A crash exits non-zero, so the service manager starts the service again.
-	process.on("uncaughtException", (error) => {
+	const crash = (error: Error) => {
+		killTrackedDetachedChildren();
 		log.error(`Crashed: ${error.stack ?? error.message}`);
 		process.exit(1);
-	});
-	process.on("unhandledRejection", (reason) => {
-		log.error(`Crashed: ${reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)}`);
-		process.exit(1);
-	});
+	};
+	process.on("uncaughtException", crash);
+	onUnhandledRejection(crash);
 	log.info(
 		`Starting Pi-Bolt ${version} remote control service (pid ${process.pid}): port ${host.port}, tunnel ${describeTunnel(host.tunnelSetting)}`,
 	);
