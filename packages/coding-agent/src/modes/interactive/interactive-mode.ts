@@ -68,7 +68,6 @@ import {
 	getDebugLogPath,
 	getDocsPath,
 	PRODUCT_NAME,
-	usesDefaultAgentDir,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
@@ -115,6 +114,7 @@ import { findMatchingProviders } from "../../core/provider-matching.ts";
 import { RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import { planRadiusMcpServer } from "../../core/radius-mcp.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
+import { buildResumeArgv } from "../../core/resume-command.ts";
 import { isBuiltinOnlyInteractiveCli } from "../../core/sdk.ts";
 import {
 	formatMissingSessionCwdPrompt,
@@ -158,7 +158,7 @@ import { flushStdout } from "../../utils/flush-stdout.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoderOnFirstUse } from "../../utils/image-convert.ts";
 import { chalk } from "../../utils/lazy-packages.ts";
-import { getCwdRelativePath, pathsEqual, resolvePath, shortenHomePath } from "../../utils/paths.ts";
+import { getCwdRelativePath, shortenHomePath } from "../../utils/paths.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { loadAllHighlightLanguagesOnDemand } from "../../utils/syntax-highlight.ts";
 import { stripBom } from "../../utils/text.ts";
@@ -440,17 +440,14 @@ function quoteIfNeeded(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Arguments that open the session in a new process, or undefined while the session has no file to open. */
+/** Arguments that name the session for a new process, or undefined while the session has no file to open. */
 function getResumeArgs(sessionManager: SessionManager): string[] | undefined {
 	if (!sessionManager.isPersisted()) return undefined;
 
 	const sessionFile = sessionManager.getSessionFile();
 	if (!sessionFile || !fs.existsSync(sessionFile)) return undefined;
 
-	const args = [COMMAND_NAME];
-	if (!usesDefaultAgentDir()) {
-		args.push("--agent-dir", resolvePath(getAgentDir()));
-	}
+	const args: string[] = [];
 	if (!sessionManager.usesDefaultSessionDir()) {
 		args.push("--session-dir", sessionManager.getSessionDir());
 	}
@@ -461,7 +458,8 @@ function getResumeArgs(sessionManager: SessionManager): string[] | undefined {
 /** The resume command as shell text for the user to copy. */
 export function formatResumeCommand(sessionManager: SessionManager): string | undefined {
 	if (!process.stdout.isTTY) return undefined;
-	return getResumeArgs(sessionManager)?.map(quoteIfNeeded).join(" ");
+	const args = getResumeArgs(sessionManager);
+	return args && buildResumeArgv(args, sessionManager.getCwd(), [])?.map(quoteIfNeeded).join(" ");
 }
 
 /**
@@ -474,12 +472,11 @@ export function getProgramResumeCommand(
 	sessionManager: SessionManager,
 	resumeFlags: readonly string[],
 ): ProgramResumeCommand | undefined {
-	const argv = getResumeArgs(sessionManager);
-	if (!argv) return undefined;
+	const args = getResumeArgs(sessionManager);
+	if (!args) return undefined;
 	const cwd = sessionManager.getCwd();
-	// pi never changes its working directory, so it is still the one the flags were typed in.
-	if (resumeFlags.length > 0 && !pathsEqual(cwd, process.cwd())) return undefined;
-	return { argv: [...argv, ...resumeFlags], cwd };
+	const argv = buildResumeArgv(args, cwd, resumeFlags);
+	return argv && { argv, cwd };
 }
 
 function hasDefaultModelProvider(providerId: string): providerId is keyof typeof defaultModelPerProvider {

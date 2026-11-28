@@ -3,8 +3,9 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { COMMAND_NAME, PRODUCT_NAME } from "../src/config.ts";
+import { COMMAND_NAME, ENV_AGENT_DIR, PRODUCT_NAME } from "../src/config.ts";
 import type { ExtensionAPI } from "../src/core/extensions/types.ts";
+import { setProgramResumeFlags } from "../src/core/resume-command.ts";
 import {
 	createHerdrExtension,
 	quietOtherHerdrReporters,
@@ -403,6 +404,38 @@ describe("Herdr extension", () => {
 		expect(resumeArgv("/home/me/a\nb.jsonl")).toBeUndefined();
 		expect(resumeArgv("/home/me/a\u0085b.jsonl")).toBeUndefined();
 		expect(resumeArgv(`/${"a".repeat(8200)}`)).toBeUndefined();
+	});
+
+	test("resume commands keep the agent directory and the restriction flags, as the OSC 7577 one does", () => {
+		const savedAgentDir = process.env[ENV_AGENT_DIR];
+		cleanups.push(() => {
+			if (savedAgentDir === undefined) delete process.env[ENV_AGENT_DIR];
+			else process.env[ENV_AGENT_DIR] = savedAgentDir;
+			setProgramResumeFlags([]);
+		});
+		process.env[ENV_AGENT_DIR] = "/work/agent";
+		expect(resumeArgv("/work/s.jsonl")).toEqual([
+			COMMAND_NAME,
+			"--agent-dir",
+			"/work/agent",
+			"--session",
+			"/work/s.jsonl",
+		]);
+
+		delete process.env[ENV_AGENT_DIR];
+		setProgramResumeFlags(["--tools", "read,ls", "-ne"]);
+		expect(resumeArgv("/work/s.jsonl", true)).toEqual([
+			COMMAND_NAME,
+			"--herdr-pi",
+			"--session",
+			"/work/s.jsonl",
+			"--tools",
+			"read,ls",
+			"-ne",
+		]);
+		// Flags typed in another directory than the session's could point elsewhere: no command rather than one without them.
+		expect(resumeArgv("/work/s.jsonl", false, join(process.cwd(), "elsewhere"))).toBeUndefined();
+		expect(resumeArgv("/work/s.jsonl", false, process.cwd(), ["-e", "./it's.ts"])).toBeUndefined();
 	});
 });
 
