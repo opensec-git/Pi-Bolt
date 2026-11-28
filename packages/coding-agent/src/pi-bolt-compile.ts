@@ -1930,8 +1930,9 @@ async function compile(options: CompileOptions, record: CompileSelection | undef
 			bun = runtimeBun(localFile(options.runtime, work, "runtime"));
 		} else {
 			if (options.kit || options.runtime) throw new CompileError("--kit and --runtime go together");
+			// (An empty PIBOLT_DOWNLOAD_BASE is none, as the installers take it.)
 			const base =
-				process.env.PIBOLT_DOWNLOAD_BASE?.replace(/\/+$/, "") ??
+				process.env.PIBOLT_DOWNLOAD_BASE?.replace(/\/+$/, "") ||
 				`${PIBOLT_RELEASES_URL}/download/bolt-v${build.version}`;
 			// (The installation's cache, with --out too.)
 			const installDir = where?.installDir ?? piBoltInstallDir();

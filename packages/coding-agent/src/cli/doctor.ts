@@ -37,6 +37,7 @@ import {
 	PIBOLT_RELEASE_KEY,
 	PIBOLT_RELEASES_URL,
 	type PiBoltPackageManagerId,
+	piBoltCommandFolder,
 	piBoltInstallDir,
 	piBoltInstalledByInstaller,
 	piBoltInstallMethod,
@@ -213,7 +214,7 @@ export function analyzePiBoltOnPath(
 	method: SelfInfo["method"],
 ): PathAnalysis {
 	const isThis = (entry: PathEntry) =>
-		dirname(entry.real) === folder || (method === "npm" && isNpmLauncher(entry.real));
+		piBoltCommandFolder(entry.real) === folder || (method === "npm" && isNpmLauncher(entry.real));
 	const [first, ...others] = entries;
 	return { first, firstIsThis: first !== undefined && isThis(first), others };
 }

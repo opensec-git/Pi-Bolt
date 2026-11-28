@@ -109,7 +109,8 @@ pi-bolt update --channel beta   # take pre-releases too
 
 These update the installer's installations. To have Pi-Bolt install new releases in the background as a session starts (at
 most once a day; they start next time), turn on **Automatic updates** in `/settings`, which is off by default;
-`PIBOLT_NO_AUTO_UPDATE=1` turns it off for scripts and CI. For an npm install, `pi-bolt update` asks the npm registry for the latest version
+`PIBOLT_NO_AUTO_UPDATE=1` turns it off for scripts and CI. After `pi-bolt update --rollback`, automatic updates leave the
+release you went back from alone and install only a newer one; `pi-bolt update` installs the latest and ends that. For an npm install, `pi-bolt update` asks the npm registry for the latest version
 and prints the npm command that installs it; `pi-bolt update --rollback` says to install the version you want with
 `npm install -g --allow-scripts=pi-bolt pi-bolt@<version>`. Homebrew, Scoop and mise installs are updated with their own
 commands, which `pi-bolt update` prints.
@@ -228,7 +229,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
   load from their files until `pi-bolt compile` compiles them in again.
   [Plugins](docs/PLUGINS.md)
 - **Doctor:** `pi-bolt doctor` prints a plain-text report of your installation to paste into an issue. [Details](#pi-bolt-doctor)
-- **Updates:** `pi-bolt update` installs the latest release, and `--rollback` puts back the build it replaced.
+- **Updates:** `pi-bolt update` installs the latest release, and `--rollback` puts back the build it replaced; automatic
+  updates, when on, do not install the release rolled back from again.
 - **Herdr:** Pi-Bolt shows its state in a [Herdr](https://herdr.dev) pane, and a Herdr restart reopens the conversation.
   [Details](#herdr)
 - **Paseo:** [Paseo](https://paseo.sh) runs Pi-Bolt as a provider of its own next to Pi, or in place of it.

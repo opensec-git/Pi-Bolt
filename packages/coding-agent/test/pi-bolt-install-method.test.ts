@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	piBoltInstallDir,
+	piBoltInstalledByInstaller,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
 	piBoltUpdateEnvironment,
@@ -79,6 +80,38 @@ describe("piBoltUpdateEnvironment", () => {
 		delete process.env.PIBOLT_INSTALL;
 		expect(piBoltInstallDir()).toBeUndefined();
 		expect(piBoltUpdateEnvironment("0.8.0").PIBOLT_INSTALL).toBe(join(homedir(), ".pi-bolt"));
+	});
+});
+
+describe("piBoltInstalledByInstaller", () => {
+	const saved = { PATH: process.env.PATH, PIBOLT_INSTALL: process.env.PIBOLT_INSTALL };
+	afterEach(() => {
+		for (const [name, value] of Object.entries(saved)) {
+			if (value === undefined) delete process.env[name];
+			else process.env[name] = value;
+		}
+	});
+
+	// hunt-install-5: on Linux x86-64 the installer links `pi-bolt` to <install>/pi-bolt-linux-x64.start, which was not
+	// taken for the build it starts: an installation outside ~/.pi-bolt counted as unpacked by hand, and took no automatic
+	// updates.
+	it.skipIf(process.platform === "win32")("takes the Linux start command on PATH for the build it starts", () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-bolt-installed-")));
+		try {
+			const installDir = join(root, "opt", "pi-bolt");
+			const folder = join(installDir, "pi-bolt-linux-x64");
+			mkdirSync(folder, { recursive: true });
+			mkdirSync(join(root, "bin"));
+			writeFileSync(join(folder, "pi"), "", { mode: 0o755 });
+			writeFileSync(`${folder}.start`, "#!/bin/sh\n", { mode: 0o755 });
+			symlinkSync(`${folder}.start`, join(root, "bin", "pi-bolt"));
+			process.env.PATH = join(root, "bin");
+			delete process.env.PIBOLT_INSTALL;
+			expect(piBoltInstalledByInstaller(installDir, folder)).toBe(true);
+			expect(piBoltInstalledByInstaller(installDir, `${folder}-jit`)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

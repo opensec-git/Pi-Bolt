@@ -46,6 +46,11 @@ curl -fL --progress-bar -o "$TMP/$NAME" "$BASE/$NAME"
 curl -fsSL -o "$TMP/SHA256SUMS" "$BASE/SHA256SUMS"
 curl -fsSL -o "$TMP/SHA256SUMS.sig" "$BASE/SHA256SUMS.sig" || die "no signature at $BASE/SHA256SUMS.sig: the runtime is not used"
 verify_signature "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.sig" "$PIBOLT_ROOT/keys/release.pub"
+# The checksums' first line says which release they are, as the installers check: another release's, signed all the same,
+# would otherwise give its runtime (another engine) as the one asked for.
+if [ "$TAG" != latest ] && [ "$(head -n 1 "$TMP/SHA256SUMS")" != "# pi-bolt ${TAG#bolt-v}" ]; then
+	die "the checksums at $BASE are not those of $TAG (they begin \"$(head -n 1 "$TMP/SHA256SUMS")\")"
+fi
 check_sum "$TMP" "$NAME" || die "checksum mismatch for $NAME"
 tar -C "$TMP" -xzf "$TMP/$NAME"
 mkdir -p "$PIBOLT_WORK/runtime"

@@ -4,7 +4,9 @@
  * looks up the latest release on the installation's channel, and runs the same signed update as `pi-bolt update` (the
  * signature of SHA256SUMS, the version on its first line, the installer's checksum; on Windows the in-process update). Like
  * `pi-bolt update`, it compiles nothing: extensions `pi-bolt compile` compiled into the build it replaced load from their files
- * until `pi-bolt compile` compiles them in again. The session goes on; the new release starts next time. It reports one line when it is done, or one with the reason when it fails, and
+ * until `pi-bolt compile` compiles them in again. After `pi-bolt update --rollback` it does not install the release that was
+ * rolled back from again, only a newer one (<install>/auto-update.skip; `pi-bolt update` clears it). The session goes on; the
+ * new release starts next time. It reports one line when it is done, or one with the reason when it fails, and
  * nothing when there is nothing to install.
  *
  * Off by default. PIBOLT_NO_AUTO_UPDATE=1 turns it off whatever the setting says, and it never runs where the version check
@@ -12,7 +14,7 @@
  * run from anywhere else.
  */
 import { spawn } from "node:child_process";
-import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { accessSync, closeSync, constants, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -24,6 +26,7 @@ import {
 	piBoltInstalledByInstaller,
 	piBoltInstallMethod,
 } from "./pi-bolt.ts";
+import { isNewerPackageVersion } from "./utils/version-check.ts";
 
 /** The variable that turns automatic updates off whatever the setting says (for CI and scripts). */
 export const PIBOLT_NO_AUTO_UPDATE = "PIBOLT_NO_AUTO_UPDATE";
@@ -43,6 +46,8 @@ export const AUTO_UPDATE_ARGUMENT = "--background";
 /** What a background update ended with. */
 export type AutoUpdateResult =
 	| { kind: "current"; version: string }
+	/** A rollback went back from `version` (or a newer one): not installed again. */
+	| { kind: "skipped"; version: string }
 	| { kind: "installed"; version: string; extensionsFromFiles?: true }
 	| { kind: "failed"; reason: string; version?: string };
 
@@ -52,13 +57,38 @@ export interface AutoUpdateRecord {
 	result?: AutoUpdateResult;
 }
 
-/** Where the record, the lock (proper-lockfile's <path>.lock) and the last update's output are. */
-export function autoUpdatePaths(installDir: string): { record: string; lock: string; log: string } {
+/**
+ * Where the record, the lock (proper-lockfile's <path>.lock), the last update's output and the release a rollback went back
+ * from are.
+ */
+export function autoUpdatePaths(installDir: string): { record: string; lock: string; log: string; skip: string } {
 	return {
 		record: join(installDir, "auto-update.json"),
 		lock: join(installDir, "auto-update"),
 		log: join(installDir, "auto-update.log"),
+		skip: join(installDir, "auto-update.skip"),
 	};
+}
+
+/**
+ * Keeps `version`, the release `pi-bolt update --rollback` went back from, for automatic updates to leave alone; undefined
+ * forgets it (a rollback forward again, or `pi-bolt update`).
+ */
+export function setSkippedRelease(installDir: string, version: string | undefined): void {
+	const { skip } = autoUpdatePaths(installDir);
+	if (version === undefined) rmSync(skip, { force: true });
+	else writeFileSync(skip, `${version}\n`);
+}
+
+/** Whether an automatic update leaves release `version` alone: it is the one a rollback went back from, or older. */
+export function skipsRelease(installDir: string, version: string): boolean {
+	let skipped: string;
+	try {
+		skipped = readFileSync(autoUpdatePaths(installDir).skip, "utf8").trim();
+	} catch {
+		return false;
+	}
+	return skipped !== "" && !isNewerPackageVersion(version, skipped);
 }
 
 export function readAutoUpdateRecord(installDir: string): AutoUpdateRecord | undefined {
@@ -139,7 +169,7 @@ export const COMPILED_EXTENSIONS_NOTE =
 
 /** The line for how an update ended; none when there was nothing to install. */
 export function autoUpdateLine(result: AutoUpdateResult | undefined, log: string): AutoUpdateLine | undefined {
-	if (!result || result.kind === "current") return undefined;
+	if (!result || result.kind === "current" || result.kind === "skipped") return undefined;
 	if (result.kind === "installed") {
 		const note = result.extensionsFromFiles ? ` ${COMPILED_EXTENSIONS_NOTE}` : "";
 		return { kind: "info", text: `Pi-Bolt ${result.version} is installed; it starts next time.${note}` };
