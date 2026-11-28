@@ -168,6 +168,12 @@ static void work(int stream, int directory, int count, int* fds, const int32_t* 
         _exit(0);
     }
     umask((mode_t)params.umask);
+    // pi-spawn is watched from before the program's limits apply to the worker too: under a low RLIMIT_NOFILE a process can
+    // neither open a kqueue nor watch a descriptor above the limit.
+    int queue = kqueue();
+    struct kevent watch;
+    EV_SET(&watch, stream, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    int exited = queue < 0 || kevent(queue, &watch, 1, NULL, 0, NULL) < 0;
     for (int resource = 0; resource < PIBOLT_SPAWN_RLIMITS; resource++) {
         struct rlimit limit = { (rlim_t)params.rlimits[resource][0], (rlim_t)params.rlimits[resource][1] };
         setrlimit(resource, &limit);
@@ -190,16 +196,10 @@ static void work(int stream, int directory, int count, int* fds, const int32_t* 
     reply(stream, PIBOLT_SPAWN_STARTED, pid);
 
     // Until the program exits, or pi-spawn is gone (killed with SIGKILL, so the program is too).
-    int queue = kqueue();
-    struct kevent changes[2];
-    EV_SET(&changes[0], pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, NULL);
-    EV_SET(&changes[1], stream, EVFILT_READ, EV_ADD, 0, 0, NULL);
-    int exited = queue < 0;
     if (!exited) {
-        struct kevent receipts[2];
-        changes[0].flags |= EV_RECEIPT;
-        changes[1].flags |= EV_RECEIPT;
-        if (kevent(queue, changes, 2, receipts, 2, NULL) != 2 || receipts[0].data)
+        struct kevent change, receipt;
+        EV_SET(&change, pid, EVFILT_PROC, EV_ADD | EV_ONESHOT | EV_RECEIPT, NOTE_EXIT, 0, NULL);
+        if (kevent(queue, &change, 1, &receipt, 1, NULL) != 1 || receipt.data)
             exited = 1; // An exited child cannot be watched; anything else: wait for it below.
     }
     while (!exited) {
@@ -217,7 +217,7 @@ static void work(int stream, int directory, int count, int* fds, const int32_t* 
             _exit(0);
         }
     }
-    siginfo_t info;
+    siginfo_t info = { 0 };
     while (waitid(P_PID, (id_t)pid, &info, WEXITED | WNOWAIT) < 0 && errno == EINTR) { }
     int status = info.si_code == CLD_EXITED ? (info.si_status & 0xff) << 8 : (info.si_status & 0x7f) | (info.si_code == CLD_DUMPED ? 0x80 : 0);
     // (Read from the program's zombie, which WNOWAIT kept.)
@@ -256,9 +256,11 @@ static void closeDescriptors(int* fds, int count)
 static int serve(int socket_)
 {
     struct pibolt_spawn_request request;
+    // Room for more descriptors than a message can carry (about 254 on macOS): a control message cut short would still leave
+    // the ones that did not fit open here, unseen.
     union {
         struct cmsghdr header;
-        char space[CMSG_SPACE((PIBOLT_SPAWN_MAX_FDS + 2) * sizeof(int))];
+        char space[CMSG_SPACE(1024 * sizeof(int))];
     } control;
     struct iovec vector = { &request, sizeof(request) };
     struct msghdr message = { .msg_iov = &vector, .msg_iovlen = 1, .msg_control = &control, .msg_controllen = sizeof(control) };
@@ -268,15 +270,25 @@ static int serve(int socket_)
 
     int fds[PIBOLT_SPAWN_MAX_FDS + 2];
     int count = 0;
+    int excess = 0;
     for (struct cmsghdr* header = CMSG_FIRSTHDR(&message); header; header = CMSG_NXTHDR(&message, header)) {
         if (header->cmsg_level != SOL_SOCKET || header->cmsg_type != SCM_RIGHTS)
             continue;
         int n = (int)((header->cmsg_len - CMSG_LEN(0)) / sizeof(int));
-        for (int i = 0; i < n && count < PIBOLT_SPAWN_MAX_FDS + 2; i++)
-            memcpy(&fds[count++], CMSG_DATA(header) + i * sizeof(int), sizeof(int));
+        for (int i = 0; i < n; i++) {
+            int fd;
+            memcpy(&fd, CMSG_DATA(header) + i * sizeof(int), sizeof(int));
+            // More than a request can carry: not kept for the helper's lifetime, and the request is not valid.
+            if (count < PIBOLT_SPAWN_MAX_FDS + 2)
+                fds[count++] = fd;
+            else {
+                close(fd);
+                excess = 1;
+            }
+        }
     }
     size_t header = offsetof(struct pibolt_spawn_request, targets);
-    int valid = !(message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) && (size_t)size >= header && request.magic == PIBOLT_SPAWN_MAGIC
+    int valid = !excess && !(message.msg_flags & (MSG_CTRUNC | MSG_TRUNC)) && (size_t)size >= header && request.magic == PIBOLT_SPAWN_MAGIC
         && request.version == PIBOLT_SPAWN_VERSION && request.nfds >= 0 && request.nfds <= PIBOLT_SPAWN_MAX_FDS
         && (size_t)size == header + (size_t)request.nfds * sizeof(int32_t) && count == request.nfds + 2;
     for (int i = 0; valid && i < request.nfds; i++)
