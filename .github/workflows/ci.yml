@@ -338,6 +338,13 @@ jobs:
           # (Offline: the model catalog is the repository's, as in prepare-pi.sh.)
           npm run build:offline
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Windows shell tests
+        # (Pi's tests run on Linux in the unit job. These run the bash tool's Windows paths with the runner's Git Bash:
+        # how the command reaches Git Bash, which cuts a long command-line argument.)
+        working-directory: packages/coding-agent
+        run: |
+          npx vitest run --retry 2 test/windows-shell-config.test.ts test/bash-windows-long-command.test.ts
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Build
         run: |
           & scripts\build-pi.ps1 -Out out\pi-bolt

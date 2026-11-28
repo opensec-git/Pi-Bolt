@@ -109,13 +109,13 @@ export interface GenerateBranchSummaryOptions {
  *
  * @param session - Session manager (read-only access)
  * @param oldLeafId - Current position (where we're navigating from)
- * @param targetId - Target position (where we're navigating to)
+ * @param targetId - New leaf position (where we're navigating to), or null for the root
  * @returns Entries to summarize and the common ancestor
  */
 export function collectEntriesForBranchSummary(
 	session: ReadonlySessionManager,
 	oldLeafId: string | null,
-	targetId: string,
+	targetId: string | null,
 ): CollectEntriesResult {
 	// If no old position, nothing to summarize
 	if (!oldLeafId) {
@@ -125,7 +125,8 @@ export function collectEntriesForBranchSummary(
 	// Find common ancestor (deepest node that's on both paths)
 	const oldBranch = session.getBranch(oldLeafId);
 	const oldPath = new Set(oldBranch.map((e) => e.id));
-	const targetPath = session.getBranch(targetId);
+	// getBranch(undefined) would return the current branch, so the root has an empty path.
+	const targetPath = targetId === null ? [] : session.getBranch(targetId);
 
 	// targetPath is root-first, so iterate backwards to find deepest common ancestor
 	let commonAncestorId: string | null = null;

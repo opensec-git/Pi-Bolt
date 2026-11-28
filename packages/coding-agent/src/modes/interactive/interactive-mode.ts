@@ -7410,7 +7410,7 @@ export class InteractiveMode {
 		};
 
 		try {
-			await this.session.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
+			await this.runtimeHost.reload({ beforeSessionStart: restoreChatBeforeSessionStart });
 			restoreChatBeforeSessionStart();
 			this.keybindings.reload();
 			const activeHeader = this.customHeader ?? this.builtInHeader;
@@ -7432,6 +7432,7 @@ export class InteractiveMode {
 			if (modelsJsonError) {
 				this.showWarning(`models.json error: ${modelsJsonError}`);
 			}
+			this.showRuntimeDiagnostics(this.runtimeHost.takeUnreportedDiagnostics());
 			this.showStatus(
 				savedImplicitProjectTrust
 					? "Reloaded keybindings, extensions, skills, prompts, themes, and context files; saved project trust"

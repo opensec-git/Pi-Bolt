@@ -4,7 +4,7 @@
  */
 
 import { execSync, spawnSync } from "child_process";
-import { getDirectGitBash, getShellConfig, msysShellSpawn } from "../utils/shell.ts";
+import { getDirectGitBash, getShellConfig, msysShellSpawn, SHELL_COMMAND_ENV_VAR } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -153,15 +153,20 @@ export function resolveConfigValue(config: string, env?: Record<string, string>)
 function executeWithConfiguredShell(command: string): { executed: boolean; value: string | undefined } {
 	try {
 		const { shell, args, commandTransport } = getShellConfig();
-		const commandFromStdin = commandTransport === "stdin";
-		const shellArgs = commandFromStdin ? args : [...args, command];
+		const transport = commandTransport ?? "argv";
+		const commandFromStdin = transport === "stdin";
+		// Windows bash builds get the command in SHELL_COMMAND_ENV_VAR: their runtime cuts a long argument
+		// (see WINDOWS_ENV_COMMAND_RUNNER in utils/shell.ts).
+		const shellArgs = transport === "argv" ? [...args, command] : args;
 		// Windows, Git for Windows: its bash itself, without the launcher in front (see getDirectGitBash).
 		const direct = commandFromStdin ? undefined : getDirectGitBash(shell);
 		const shellExe = direct?.bash ?? shell;
 		// Windows, Git Bash: quoted for its own parser, which halves doubled backslashes otherwise (see msysShellSpawn).
 		const msysSpawn = commandFromStdin ? undefined : msysShellSpawn(shellExe, shellArgs);
+		const baseEnv = direct ? direct.environment(process.env) : undefined;
+		const env = transport === "env" ? { ...(baseEnv ?? process.env), [SHELL_COMMAND_ENV_VAR]: command } : baseEnv;
 		const result = spawnSync(shellExe, msysSpawn?.args ?? shellArgs, {
-			...(direct && { env: direct.environment(process.env) }),
+			...(env && { env }),
 			encoding: "utf-8",
 			input: commandFromStdin ? command : undefined,
 			timeout: 10000,
